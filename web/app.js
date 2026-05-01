@@ -573,7 +573,10 @@ function ddc(near, far) {
 function graphicsFor(layer, d) {
   switch (layer) {
     case 'planes': {
-      // Far: dot. Mid+: heading-rotated airplane silhouette billboard.
+      // LOD curve: small (0.4) at very-close zoom, growing to ~1.0 at LOD-edge.
+      // Cesium clamps NearFarScalar outside (near, far): closer than near stays
+      // at scaleAtNear, farther than far stays at scaleAtFar — so this gives us
+      // "shrink when zoomed in, grow toward the dot threshold".
       const lod = LOD.planes;
       const heading = (d.heading != null) ? -Cesium.Math.toRadians(d.heading) : 0;
       return {
@@ -586,7 +589,7 @@ function graphicsFor(layer, d) {
           image: ICON_URI.plane,
           rotation: heading,
           scale: 1.0,
-          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.5, 1.4, lod.far, 0.7),
+          scaleByDistance: new Cesium.NearFarScalar(20_000, 0.35, 1_500_000, 0.9),
           distanceDisplayCondition: ddc(0, lod.far),
         },
       };
@@ -606,13 +609,12 @@ function graphicsFor(layer, d) {
           image: shipIcon(d.type),
           rotation: heading,
           scale: 1.0,
-          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.5, 1.4, lod.far, 0.7),
+          scaleByDistance: new Cesium.NearFarScalar(15_000, 0.30, 800_000, 0.8),
           distanceDisplayCondition: ddc(0, lod.far),
         },
       };
     }
     case 'satellites': {
-      // Stations group (ISS, CSS, etc.) gets the dish-+-panels icon; rest get the small generic.
       const lod = LOD.satellites;
       const isStation = d.group === 'stations';
       return {
@@ -624,8 +626,8 @@ function graphicsFor(layer, d) {
         billboard: {
           image: isStation ? ICON_URI.iss : ICON_URI.satellite,
           rotation: 0,
-          scale: isStation ? 1.4 : 1.0,
-          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 1.6, lod.far, 0.6),
+          scale: isStation ? 1.0 : 0.8,
+          scaleByDistance: new Cesium.NearFarScalar(500_000, 0.4, 8_000_000, 0.9),
           distanceDisplayCondition: ddc(0, lod.far),
         },
       };
@@ -647,7 +649,7 @@ function graphicsFor(layer, d) {
         },
         billboard: {
           image: ICON_URI.hurricane,
-          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 2.4, lod.far, 1.2),
+          scaleByDistance: new Cesium.NearFarScalar(100_000, 0.7, 4_000_000, 1.4),
           distanceDisplayCondition: ddc(0, lod.far),
         },
         label: {
@@ -671,8 +673,8 @@ function graphicsFor(layer, d) {
         },
         billboard: {
           image: ICON_URI.volcano,
-          scale: 0.9,
-          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 1.4, lod.far, 0.6),
+          scale: 0.7,
+          scaleByDistance: new Cesium.NearFarScalar(15_000, 0.30, 1_500_000, 0.8),
           distanceDisplayCondition: ddc(0, lod.far),
         },
       };
@@ -699,8 +701,8 @@ function graphicsFor(layer, d) {
         },
         billboard: {
           image: ICON_URI.launch,
-          scale: 1.1,
-          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 1.8, lod.far, 0.9),
+          scale: 1.0,
+          scaleByDistance: new Cesium.NearFarScalar(50_000, 0.6, 5_000_000, 1.2),
           distanceDisplayCondition: ddc(0, lod.far),
         },
         ellipse: {
