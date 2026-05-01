@@ -76,9 +76,10 @@ async def snapshot() -> JSONResponse:
 async def config() -> JSONResponse:
     """Public-safe runtime config the front-end needs (e.g., Cesium token)."""
     return JSONResponse({
-        "cesium_ion_token": os.environ.get("CESIUM_ION_TOKEN") or "",
-        "fires_enabled":    bool(os.environ.get("FIRMS_MAP_KEY", "").strip()),
-        "ships_enabled":    bool(os.environ.get("AISSTREAM_KEY", "").strip()),
+        "cesium_ion_token":    os.environ.get("CESIUM_ION_TOKEN") or "",
+        "google_maps_api_key": os.environ.get("GOOGLE_MAPS_API_KEY") or "",
+        "fires_enabled":       bool(os.environ.get("FIRMS_MAP_KEY", "").strip()),
+        "ships_enabled":       bool(os.environ.get("AISSTREAM_KEY", "").strip()),
     })
 
 

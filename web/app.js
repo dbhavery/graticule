@@ -34,6 +34,104 @@ const KIND_LABEL = {
   tsunamis: 'TSUNAMI ALERT', launches: 'LAUNCH', news: 'NATURAL EVENT',
 };
 
+// ─────────  LOD: distance-aware billboard icons  ─────────
+// Top-down silhouette SVGs, north-up. Cesium rotates them by -toRadians(heading).
+// Stored as data: URIs so Cesium loads them without a network round-trip.
+const ICON_SVG = {
+  plane: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-12 -12 24 24'>
+    <path fill='%23ffd14a' stroke='black' stroke-width='0.6' stroke-linejoin='round'
+      d='M0,-10 L1.6,-2 L10,-1 L10,1.2 L1.6,1.2 L1.6,7 L4,8.5 L4,9.6 L0,9.2 L-4,9.6 L-4,8.5 L-1.6,7 L-1.6,1.2 L-10,1.2 L-10,-1 L-1.6,-2 Z'/>
+  </svg>`,
+  ship: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-7 -12 14 24'>
+    <path fill='%234dd2ff' stroke='black' stroke-width='0.6' stroke-linejoin='round'
+      d='M0,-10 L4,-3 L4,7 L2.5,9.5 L-2.5,9.5 L-4,7 L-4,-3 Z'/>
+    <rect x='-1.6' y='-1' width='3.2' height='3.5' fill='black' opacity='0.35'/>
+  </svg>`,
+  ship_cargo: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-7 -16 14 32'>
+    <path fill='%234dd2ff' stroke='black' stroke-width='0.6' stroke-linejoin='round'
+      d='M0,-14 L4,-8 L4,12 L2.5,14 L-2.5,14 L-4,12 L-4,-8 Z'/>
+    <g fill='black' opacity='0.3'>
+      <rect x='-3' y='-6' width='6' height='2'/>
+      <rect x='-3' y='-3' width='6' height='2'/>
+      <rect x='-3' y='0'  width='6' height='2'/>
+      <rect x='-3' y='3'  width='6' height='2'/>
+      <rect x='-3' y='6'  width='6' height='2'/>
+    </g>
+  </svg>`,
+  ship_tanker: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-6 -16 12 32'>
+    <path fill='%23a78bfa' stroke='black' stroke-width='0.6' stroke-linejoin='round'
+      d='M0,-14 L3.5,-8 L3.5,11 L2,14 L-2,14 L-3.5,11 L-3.5,-8 Z'/>
+    <circle cx='0' cy='-3' r='1.4' fill='black' opacity='0.35'/>
+    <circle cx='0' cy='2'  r='1.4' fill='black' opacity='0.35'/>
+    <circle cx='0' cy='7'  r='1.4' fill='black' opacity='0.35'/>
+  </svg>`,
+  ship_passenger: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-6 -14 12 28'>
+    <path fill='%23f0abfc' stroke='black' stroke-width='0.6' stroke-linejoin='round'
+      d='M0,-12 L3.5,-6 L3.5,10 L2,12 L-2,12 L-3.5,10 L-3.5,-6 Z'/>
+    <rect x='-2.4' y='-4' width='4.8' height='12' fill='white' opacity='0.4' rx='0.5'/>
+  </svg>`,
+  ship_fishing: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-5 -10 10 20'>
+    <path fill='%2334d399' stroke='black' stroke-width='0.6' stroke-linejoin='round'
+      d='M0,-9 L3,-4 L3,6 L1.5,8.5 L-1.5,8.5 L-3,6 L-3,-4 Z'/>
+  </svg>`,
+  satellite: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -10 20 20'>
+    <rect x='-2' y='-2' width='4' height='4' fill='%23c4b5fd' stroke='black' stroke-width='0.4'/>
+    <rect x='-9' y='-1.4' width='6' height='2.8' fill='%23c4b5fd' opacity='0.7' stroke='black' stroke-width='0.3'/>
+    <rect x='3'  y='-1.4' width='6' height='2.8' fill='%23c4b5fd' opacity='0.7' stroke='black' stroke-width='0.3'/>
+  </svg>`,
+  iss: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-12 -8 24 16'>
+    <rect x='-2.5' y='-2' width='5' height='4' fill='%23ffeb99' stroke='black' stroke-width='0.4'/>
+    <rect x='-11' y='-1' width='8' height='2' fill='%23ffeb99' stroke='black' stroke-width='0.3'/>
+    <rect x='3'   y='-1' width='8' height='2' fill='%23ffeb99' stroke='black' stroke-width='0.3'/>
+    <line x1='-7' y1='-3.5' x2='-7' y2='3.5' stroke='black' stroke-width='0.3'/>
+    <line x1='7'  y1='-3.5' x2='7'  y2='3.5' stroke='black' stroke-width='0.3'/>
+  </svg>`,
+  hurricane: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-15 -15 30 30'>
+    <g fill='none' stroke='%23f59e0b' stroke-width='2' stroke-linecap='round'>
+      <path d='M0,-12 C 8,-10 12,-4 8,2'/>
+      <path d='M0,12 C -8,10 -12,4 -8,-2'/>
+    </g>
+    <circle cx='0' cy='0' r='2.2' fill='%23f59e0b'/>
+  </svg>`,
+  volcano: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -12 20 24'>
+    <path fill='%23fb923c' stroke='black' stroke-width='0.5' stroke-linejoin='round'
+      d='M-9,10 L-3,-7 L-1.5,-8.5 L1.5,-8.5 L3,-7 L9,10 Z'/>
+    <path fill='%23ef4444' d='M-1.5,-8.5 L-2.5,-11 L0,-11.5 L2.5,-11 L1.5,-8.5 Z'/>
+  </svg>`,
+  launch: `<svg xmlns='http://www.w3.org/2000/svg' viewBox='-14 -14 28 28'>
+    <circle cx='0' cy='0' r='12' fill='none' stroke='%23fde047' stroke-width='0.8' opacity='0.45'/>
+    <circle cx='0' cy='0' r='8'  fill='none' stroke='%23fde047' stroke-width='1.2' opacity='0.7'/>
+    <path fill='%23fde047' stroke='black' stroke-width='0.4' stroke-linejoin='round'
+      d='M0,-7 L2,-1 L2.5,3 L1,5 L-1,5 L-2.5,3 L-2,-1 Z'/>
+  </svg>`,
+};
+
+// Convert SVG strings → data URIs once
+const ICON_URI = Object.fromEntries(
+  Object.entries(ICON_SVG).map(([k, svg]) => [k, 'data:image/svg+xml;utf8,' + svg.replace(/\n/g, '').replace(/\s{2,}/g, ' ')])
+);
+
+// AIS ship-type code → icon variant. ITU-R M.1371 type codes.
+function shipIcon(typeCode) {
+  if (typeCode == null) return ICON_URI.ship;
+  const t = Number(typeCode);
+  if (t >= 30 && t <= 39) return ICON_URI.ship_fishing;       // fishing/towing
+  if (t >= 60 && t <= 69) return ICON_URI.ship_passenger;     // passenger
+  if (t >= 70 && t <= 79) return ICON_URI.ship_cargo;         // cargo
+  if (t >= 80 && t <= 89) return ICON_URI.ship_tanker;        // tanker
+  return ICON_URI.ship;
+}
+
+// LOD distance bands (camera-to-entity distance in metres)
+const LOD = {
+  planes:     { far: 3_500_000, mid: 250_000 },
+  ships:      { far: 1_500_000, mid: 100_000 },
+  satellites: { far: 30_000_000, mid: 8_000_000 },  // sats live at high altitude
+  hurricanes: { far: 12_000_000, mid: 3_000_000 },
+  volcanoes: { far: 4_000_000, mid: 800_000 },
+  launches:  { far: 15_000_000, mid: 2_000_000 },
+};
+
 const FEEDS = [
   { id: 'planes',     label: 'ADS-B' },
   { id: 'ships',      label: 'AIS' },
@@ -98,9 +196,16 @@ async function initViewer() {
   viewer.scene.globe.enableLighting = true;
   viewer.scene.skyAtmosphere.show = true;
 
+  // 3D buildings — OSM Buildings (Cesium ion) and Google Photorealistic 3D Tiles
+  // are both gated on user-supplied free keys. They auto-attach when present.
+  await maybeAttachOsmBuildings(cfg);
+  await maybeAttachGoogle3DTiles(cfg);
+
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(-98.0, 38.0, 22000000),
   });
+  // Allow the camera to descend into the surface band where 3D buildings live
+  viewer.scene.screenSpaceCameraController.minimumZoomDistance = 50;
 
   // Click → panel
   const click = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -168,9 +273,11 @@ function bindUI() {
     cb.addEventListener('change', () => {
       const layer = cb.dataset.layer;
       const on = cb.checked;
-      if (layer === 'radar')        toggleRadar(on);
-      else if (layer === 'aurora')  toggleAurora(on);
-      else if (dataSources[layer])  dataSources[layer].show = on;
+      if (layer === 'radar')           toggleRadar(on);
+      else if (layer === 'aurora')     toggleAurora(on);
+      else if (layer === 'buildings')  toggleBuildings(on);
+      else if (layer === 'photoreal3d')togglePhotoreal3D(on);
+      else if (dataSources[layer])     dataSources[layer].show = on;
       updateCategoryCounts();
     });
   });
@@ -306,11 +413,78 @@ function resetLayer(layer, entries) {
   for (const [id, data] of Object.entries(entries)) upsertEntity(layer, id, data);
   setCount(layer, entitiesByLayer[layer].size);
 
-  // Push notable events into the ticker on bulk reset (newest first)
-  if (layer === 'quakes')    addToTickerFromQuakes(entries);
-  if (layer === 'launches')  addToTickerFromLaunches(entries);
-  if (layer === 'tsunamis')  addToTickerFromTsunamis(entries);
-  if (layer === 'hurricanes')addToTickerFromHurricanes(entries);
+  // Live ticker — only push entries that are NEW since last reset (delta-aware).
+  pushDeltasToTicker(layer, entries);
+}
+
+// Track the last-seen ID set per layer, so each refresh only emits truly new
+// events (not the same top-N over and over).
+const seenIds = {};
+function pushDeltasToTicker(layer, entries) {
+  const prev = seenIds[layer] || new Set();
+  const next = new Set(Object.keys(entries));
+  const added = [...next].filter(k => !prev.has(k));
+  seenIds[layer] = next;
+
+  if (layer === 'quakes') {
+    // Quakes feed always lists last 24h — first call has all 270, push only top 5 by mag.
+    // Subsequent calls push every new id with mag >= 3.
+    const isFirst = prev.size === 0;
+    let toPush = added.map(id => ({ id, q: entries[id] }));
+    if (isFirst) {
+      toPush = toPush
+        .filter(x => typeof x.q.mag === 'number')
+        .sort((a, b) => b.q.mag - a.q.mag)
+        .slice(0, 5);
+    } else {
+      toPush = toPush.filter(x => typeof x.q.mag === 'number' && x.q.mag >= 3.0);
+    }
+    for (const { q } of toPush) {
+      pushEvent('QUAKE', `M${q.mag.toFixed(1)} — ${q.place || 'unknown'}`, q.time || Date.now());
+    }
+  } else if (layer === 'launches') {
+    // First call: push next 2 upcoming. Subsequent: push genuinely new.
+    const isFirst = prev.size === 0;
+    let toPush = added.map(id => ({ id, L: entries[id] })).filter(x => x.L.net);
+    toPush.sort((a, b) => new Date(a.L.net) - new Date(b.L.net));
+    if (isFirst) toPush = toPush.slice(0, 2);
+    for (const { L } of toPush) {
+      pushEvent('LAUNCH', `${L.name || L.vehicle} — ${L.pad_location || ''}`, new Date(L.net).getTime());
+    }
+    startCountdownTicker();
+  } else if (layer === 'tsunamis') {
+    for (const id of added) {
+      const t = entries[id];
+      pushEvent('TSUNAMI', t.headline || t.event || 'alert', Date.now());
+    }
+  } else if (layer === 'hurricanes') {
+    for (const id of added) {
+      const h = entries[id];
+      pushEvent('STORM', `${h.classification || ''} ${h.name || ''} ${h.intensity ? '— '+h.intensity+' kt' : ''}`.trim(), Date.now());
+    }
+  } else if (layer === 'fires') {
+    // Fires reset wholesale every 30m; first call only push top 3 by FRP.
+    if (prev.size === 0) {
+      const top = Object.values(entries)
+        .filter(f => typeof f.frp === 'number')
+        .sort((a, b) => b.frp - a.frp)
+        .slice(0, 3);
+      for (const f of top) pushEvent('FIRE', `FRP ${f.frp.toFixed(0)} MW`, Date.now());
+    }
+  } else if (layer === 'news') {
+    // EONET — push top 3 newest categories on first call only
+    if (prev.size === 0) {
+      const items = Object.values(entries).slice(0, 3);
+      for (const e of items) {
+        pushEvent('EVENT', `${(e.categories || []).join(' · ')} — ${e.name || ''}`.trim(), Date.now());
+      }
+    } else if (added.length) {
+      for (const id of added.slice(0, 3)) {
+        const e = entries[id];
+        pushEvent('EVENT', `${(e.categories || []).join(' · ')} — ${e.name || ''}`.trim(), Date.now());
+      }
+    }
+  }
 }
 
 function upsertEntity(layer, id, data) {
@@ -331,9 +505,25 @@ function upsertEntity(layer, id, data) {
     });
     map.set(id, ent);
     setCount(layer, map.size);
+    // Live: stream new planes/ships into the ticker as they appear
+    if (layer === 'planes' && data.callsign) {
+      pushEvent('FLIGHT', `${data.callsign} ${data.country ? '· ' + data.country : ''}`, Date.now());
+    } else if (layer === 'ships' && data.name) {
+      pushEvent('VESSEL', `${data.name} ${data.destination ? '→ ' + data.destination : ''}`, Date.now());
+    }
   } else {
     ent.position = pos;
     Object.assign(ent.properties, props);
+    // Update heading-aware billboard rotation as the entity moves
+    if (ent.billboard) {
+      if (layer === 'planes' && data.heading != null) {
+        ent.billboard.rotation = -Cesium.Math.toRadians(data.heading);
+      } else if (layer === 'ships') {
+        const h = (data.heading != null && data.heading !== 511) ? data.heading
+                : (data.course != null ? data.course : null);
+        if (h != null) ent.billboard.rotation = -Cesium.Math.toRadians(h);
+      }
+    }
     const g = graphicsFor(layer, data);
     if (g.point && ent.point) {
       ent.point.pixelSize = g.point.pixelSize;
@@ -347,14 +537,72 @@ function positionFor(layer, d) {
   return Cesium.Cartesian3.fromDegrees(d.lon, d.lat, alt);
 }
 
+// Helper: build a DistanceDisplayCondition for "show only when camera is within
+// `near` to `far` metres of the entity". Cesium's near/far is inclusive.
+function ddc(near, far) {
+  return new Cesium.DistanceDisplayCondition(near, far);
+}
+
 function graphicsFor(layer, d) {
   switch (layer) {
-    case 'planes':
-      return { point: { pixelSize: 6, color: COLORS.planes,
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 1 } };
-    case 'ships':
-      return { point: { pixelSize: 5, color: COLORS.ships,
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 1 } };
+    case 'planes': {
+      // Far: dot. Mid+: heading-rotated airplane silhouette billboard.
+      const lod = LOD.planes;
+      const heading = (d.heading != null) ? -Cesium.Math.toRadians(d.heading) : 0;
+      return {
+        point: {
+          pixelSize: 6, color: COLORS.planes,
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
+          distanceDisplayCondition: ddc(lod.far, Infinity),
+        },
+        billboard: {
+          image: ICON_URI.plane,
+          rotation: heading,
+          scale: 1.0,
+          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.5, 1.4, lod.far, 0.7),
+          distanceDisplayCondition: ddc(0, lod.far),
+        },
+      };
+    }
+    case 'ships': {
+      const lod = LOD.ships;
+      const heading = (d.heading != null && d.heading !== 511)
+        ? -Cesium.Math.toRadians(d.heading)
+        : (d.course != null ? -Cesium.Math.toRadians(d.course) : 0);
+      return {
+        point: {
+          pixelSize: 5, color: COLORS.ships,
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
+          distanceDisplayCondition: ddc(lod.far, Infinity),
+        },
+        billboard: {
+          image: shipIcon(d.type),
+          rotation: heading,
+          scale: 1.0,
+          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.5, 1.4, lod.far, 0.7),
+          distanceDisplayCondition: ddc(0, lod.far),
+        },
+      };
+    }
+    case 'satellites': {
+      // Stations group (ISS, CSS, etc.) gets the dish-+-panels icon; rest get the small generic.
+      const lod = LOD.satellites;
+      const isStation = d.group === 'stations';
+      return {
+        point: {
+          pixelSize: 3, color: COLORS.satellites.withAlpha(0.9),
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5,
+          distanceDisplayCondition: ddc(lod.far, Infinity),
+        },
+        billboard: {
+          image: isStation ? ICON_URI.iss : ICON_URI.satellite,
+          rotation: 0,
+          scale: isStation ? 1.4 : 1.0,
+          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 1.6, lod.far, 0.6),
+          distanceDisplayCondition: ddc(0, lod.far),
+        },
+      };
+    }
     case 'quakes': {
       const mag = (typeof d.mag === 'number') ? d.mag : 1;
       const size = Math.max(4, Math.min(28, 4 + mag * 3));
@@ -362,20 +610,46 @@ function graphicsFor(layer, d) {
       return { point: { pixelSize: size, color: COLORS.quakes.withAlpha(alpha),
                         outlineColor: Cesium.Color.BLACK, outlineWidth: 1 } };
     }
-    case 'hurricanes':
+    case 'hurricanes': {
+      const lod = LOD.hurricanes;
       return {
-        point: { pixelSize: 14, color: COLORS.hurricanes,
-                 outlineColor: Cesium.Color.BLACK, outlineWidth: 2 },
-        label: { text: d.name || '', font: '11px Inter, sans-serif',
-                 fillColor: COLORS.hurricanes,
-                 outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-                 style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                 pixelOffset: new Cesium.Cartesian2(0, -18),
-                 distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.5e7) },
+        point: {
+          pixelSize: 14, color: COLORS.hurricanes,
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+          distanceDisplayCondition: ddc(lod.far, Infinity),
+        },
+        billboard: {
+          image: ICON_URI.hurricane,
+          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 2.4, lod.far, 1.2),
+          distanceDisplayCondition: ddc(0, lod.far),
+        },
+        label: {
+          text: d.name || '',
+          font: '11px Inter, sans-serif',
+          fillColor: COLORS.hurricanes,
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -22),
+          distanceDisplayCondition: ddc(0, 1.5e7),
+        },
       };
-    case 'volcanoes':
-      return { point: { pixelSize: 4, color: COLORS.volcanoes.withAlpha(0.7),
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 1 } };
+    }
+    case 'volcanoes': {
+      const lod = LOD.volcanoes;
+      return {
+        point: {
+          pixelSize: 4, color: COLORS.volcanoes.withAlpha(0.7),
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
+          distanceDisplayCondition: ddc(lod.far, Infinity),
+        },
+        billboard: {
+          image: ICON_URI.volcano,
+          scale: 0.9,
+          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 1.4, lod.far, 0.6),
+          distanceDisplayCondition: ddc(0, lod.far),
+        },
+      };
+    }
     case 'fires': {
       const frp = (typeof d.frp === 'number') ? d.frp : 0;
       const size = Math.max(3, Math.min(10, 3 + Math.log10(1 + frp) * 2));
@@ -385,22 +659,37 @@ function graphicsFor(layer, d) {
     case 'tsunamis':
       return { point: { pixelSize: 12, color: COLORS.tsunamis,
                         outlineColor: Cesium.Color.BLACK, outlineWidth: 2 } };
-    case 'launches':
-      // Pulsing yellow ring drawn via ellipse on the surface
+    case 'launches': {
+      const lod = LOD.launches;
       return {
-        point: { pixelSize: 9, color: COLORS.launches,
-                 outlineColor: Cesium.Color.BLACK, outlineWidth: 1.5 },
-        ellipse: { semiMajorAxis: 60000, semiMinorAxis: 60000,
-                   material: COLORS.launches.withAlpha(0.18),
-                   outline: true, outlineColor: COLORS.launches.withAlpha(0.9),
-                   height: 0 },
-        label: { text: countdownText(d.net), font: '10px JetBrains Mono, monospace',
-                 fillColor: COLORS.launches,
-                 outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-                 style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                 pixelOffset: new Cesium.Cartesian2(0, -16),
-                 distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.5e7) },
+        point: {
+          pixelSize: 9, color: COLORS.launches,
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 1.5,
+          distanceDisplayCondition: ddc(lod.far, Infinity),
+        },
+        billboard: {
+          image: ICON_URI.launch,
+          scale: 1.1,
+          scaleByDistance: new Cesium.NearFarScalar(lod.mid * 0.3, 1.8, lod.far, 0.9),
+          distanceDisplayCondition: ddc(0, lod.far),
+        },
+        ellipse: {
+          semiMajorAxis: 60000, semiMinorAxis: 60000,
+          material: COLORS.launches.withAlpha(0.16),
+          outline: true, outlineColor: COLORS.launches.withAlpha(0.85),
+          height: 0,
+        },
+        label: {
+          text: countdownText(d.net),
+          font: '10px JetBrains Mono, monospace',
+          fillColor: COLORS.launches,
+          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -18),
+          distanceDisplayCondition: ddc(0, 1.5e7),
+        },
       };
+    }
     case 'news':
       return { point: { pixelSize: 4, color: COLORS.news.withAlpha(0.8),
                         outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
@@ -596,49 +885,63 @@ function renderTicker() {
   }
 }
 
-function addToTickerFromQuakes(entries) {
-  // Top 3 by magnitude in last 6h
-  const now = Date.now();
-  const list = Object.values(entries)
-    .filter(q => q.time && (now - q.time) < 6 * 3600 * 1000 && typeof q.mag === 'number')
-    .sort((a, b) => b.mag - a.mag)
-    .slice(0, 3);
-  for (const q of list) {
-    pushEvent('QUAKE', `M${q.mag.toFixed(1)} — ${q.place || 'unknown'}`, q.time || now);
-  }
-}
-
-function addToTickerFromLaunches(entries) {
-  // Next 2 upcoming
-  const list = Object.values(entries)
-    .filter(L => L.net)
-    .sort((a, b) => new Date(a.net) - new Date(b.net))
-    .slice(0, 2);
-  for (const L of list) {
-    pushEvent('LAUNCH', `${L.name || L.vehicle} — ${L.pad_location || ''}`, new Date(L.net).getTime());
-  }
-  startCountdownTicker();
-}
-
-function addToTickerFromTsunamis(entries) {
-  const now = Date.now();
-  for (const t of Object.values(entries).slice(0, 2)) {
-    pushEvent('TSUNAMI', t.headline || t.event || 'alert', now);
-  }
-}
-
-function addToTickerFromHurricanes(entries) {
-  const now = Date.now();
-  for (const h of Object.values(entries).slice(0, 2)) {
-    pushEvent('STORM', `${h.classification || ''} ${h.name || ''} ${h.intensity ? '— '+h.intensity+' kt' : ''}`.trim(), now);
-  }
-}
+// Legacy ticker helpers replaced by pushDeltasToTicker (delta-aware).
 
 // ---------- HUD --------------------------------------------------------------
 
 function setStatus(klass, text) {
   document.getElementById('status-dot').className = klass;
   document.getElementById('status-text').textContent = text.toUpperCase();
+}
+
+// ---------- 3D buildings / 3D tiles -----------------------------------------
+
+let osmBuildingsTileset = null;
+let googleTileset = null;
+
+async function maybeAttachOsmBuildings(cfg) {
+  if (!cfg.cesium_ion_token) return;
+  try {
+    osmBuildingsTileset = await Cesium.createOsmBuildingsAsync();
+    osmBuildingsTileset.show = false;  // off by default; toggled in WEATHER/3D group
+    viewer.scene.primitives.add(osmBuildingsTileset);
+    console.log('OSM Buildings tileset attached');
+    enable3DLayer('buildings');
+  } catch (e) {
+    console.warn('OSM Buildings unavailable:', e);
+  }
+}
+
+async function maybeAttachGoogle3DTiles(cfg) {
+  if (!cfg.google_maps_api_key) return;
+  try {
+    googleTileset = await Cesium.Cesium3DTileset.fromUrl(
+      `https://tile.googleapis.com/v1/3dtiles/root.json?key=${cfg.google_maps_api_key}`,
+      { showCreditsOnScreen: true }
+    );
+    googleTileset.show = false;
+    viewer.scene.primitives.add(googleTileset);
+    console.log('Google 3D Tiles tileset attached');
+    enable3DLayer('photoreal3d');
+  } catch (e) {
+    console.warn('Google 3D Tiles unavailable:', e);
+  }
+}
+
+function enable3DLayer(layer) {
+  const cb = document.querySelector(`input[data-layer="${layer}"]`);
+  if (!cb) return;
+  cb.disabled = false;
+  cb.title = '';
+  const lbl = cb.closest('label');
+  if (lbl) lbl.classList.remove('disabled-feature');
+}
+
+function toggleBuildings(on) {
+  if (osmBuildingsTileset) osmBuildingsTileset.show = on;
+}
+function togglePhotoreal3D(on) {
+  if (googleTileset) googleTileset.show = on;
 }
 
 function showPanel(entity) {

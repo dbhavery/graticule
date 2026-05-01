@@ -28,6 +28,8 @@
   --c-news:       #94a3b8;
   --c-radar:      #38bdf8;
   --c-aurora:     #4ade80;
+  --c-buildings:  #94a3b8;
+  --c-photoreal3d: #67e8f9;
 
   --ok:   #22cc66;
   --warn: #d6802b;
@@ -269,6 +271,8 @@ html, body {
 .dot[data-color=news]       { background: var(--c-news);       box-shadow: 0 0 5px var(--c-news); }
 .dot[data-color=radar]      { background: var(--c-radar);      box-shadow: 0 0 5px var(--c-radar); }
 .dot[data-color=aurora]     { background: var(--c-aurora);     box-shadow: 0 0 5px var(--c-aurora); }
+.dot[data-color=buildings]  { background: var(--c-buildings);  box-shadow: 0 0 5px var(--c-buildings); }
+.dot[data-color=photoreal3d]{ background: var(--c-photoreal3d);box-shadow: 0 0 5px var(--c-photoreal3d); }
 
 #layers .count {
   color: var(--text-mute);
