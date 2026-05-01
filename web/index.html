@@ -6,6 +6,8 @@
   <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css">
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
+  <!-- satellite-js for client-side TLE propagation (Phase 2 — satellites layer) -->
+  <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
 </head>
 <body>
   <div id="cesiumContainer"></div>
@@ -13,8 +15,37 @@
   <div id="hud">
     <div id="title">VANTAGE</div>
     <div id="layers">
-      <label><input type="checkbox" id="layer-planes" checked> <span class="dot dot-plane"></span>Planes <span id="count-planes">0</span></label>
-      <label><input type="checkbox" id="layer-ships" checked> <span class="dot dot-ship"></span>Ships <span id="count-ships">0</span></label>
+
+      <details open class="cat" data-cat="air">
+        <summary><span class="cat-name">AIR</span><span class="cat-count" id="cat-count-air">0</span></summary>
+        <label><input type="checkbox" data-layer="planes" checked><span class="dot" data-color="planes"></span>Planes <span class="count" id="count-planes">0</span></label>
+        <label><input type="checkbox" data-layer="satellites" checked><span class="dot" data-color="satellites"></span>Satellites <span class="count" id="count-satellites">0</span></label>
+      </details>
+
+      <details open class="cat" data-cat="sea">
+        <summary><span class="cat-name">SEA</span><span class="cat-count" id="cat-count-sea">0</span></summary>
+        <label><input type="checkbox" data-layer="ships" checked><span class="dot" data-color="ships"></span>Ships <span class="count" id="count-ships">0</span></label>
+        <label><input type="checkbox" data-layer="hurricanes" checked><span class="dot" data-color="hurricanes"></span>Hurricanes <span class="count" id="count-hurricanes">0</span></label>
+      </details>
+
+      <details open class="cat" data-cat="earth">
+        <summary><span class="cat-name">EARTH</span><span class="cat-count" id="cat-count-earth">0</span></summary>
+        <label><input type="checkbox" data-layer="quakes" checked><span class="dot" data-color="quakes"></span>Earthquakes <span class="count" id="count-quakes">0</span></label>
+        <label><input type="checkbox" data-layer="volcanoes" checked><span class="dot" data-color="volcanoes"></span>Volcanoes <span class="count" id="count-volcanoes">0</span></label>
+        <label><input type="checkbox" data-layer="fires" checked><span class="dot" data-color="fires"></span>Wildfires <span class="count" id="count-fires">0</span></label>
+      </details>
+
+      <details open class="cat" data-cat="weather">
+        <summary><span class="cat-name">WEATHER</span><span class="cat-count" id="cat-count-weather">0</span></summary>
+        <label><input type="checkbox" data-layer="radar"><span class="dot" data-color="radar"></span>Radar <span class="count" id="count-radar">—</span></label>
+        <label><input type="checkbox" data-layer="aurora"><span class="dot" data-color="aurora"></span>Aurora <span class="count" id="count-aurora">—</span></label>
+      </details>
+
+      <details open class="cat" data-cat="alerts">
+        <summary><span class="cat-name">ALERTS</span><span class="cat-count" id="cat-count-alerts">0</span></summary>
+        <label><input type="checkbox" data-layer="tsunamis" checked><span class="dot" data-color="tsunamis"></span>Tsunami <span class="count" id="count-tsunamis">0</span></label>
+      </details>
+
     </div>
     <div id="status"><span id="status-dot"></span><span id="status-text">connecting…</span></div>
   </div>
