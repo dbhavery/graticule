@@ -1,0 +1,169 @@
+/* Vantage — dark, minimal, full-bleed globe with HUD overlays. */
+:root {
+  --bg: #000;
+  --hud-bg: rgba(15, 18, 24, 0.85);
+  --hud-border: rgba(255, 255, 255, 0.08);
+  --text: #e8edf2;
+  --text-dim: #8a94a3;
+  --accent: #4dd2ff;
+  --plane: #ffd14a;
+  --ship: #4dd2ff;
+  --ok: #22cc66;
+  --warn: #d6802b;
+  --bad: #cc3322;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+#cesiumContainer {
+  position: absolute;
+  inset: 0;
+}
+
+/* HUD — top-left card */
+#hud {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 10;
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  min-width: 180px;
+  backdrop-filter: blur(8px);
+}
+
+#title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+#layers label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#layers input[type=checkbox] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+#layers .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.dot-plane { background: var(--plane); box-shadow: 0 0 6px var(--plane); }
+.dot-ship  { background: var(--ship);  box-shadow: 0 0 6px var(--ship); }
+
+#layers span:not(.dot) {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+}
+
+#status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hud-border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+#status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 6px currentColor;
+}
+#status-dot.ok  { background: var(--ok);  }
+#status-dot.bad { background: var(--bad); }
+
+/* Detail panel — right side */
+#panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 360px;
+  z-index: 10;
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  backdrop-filter: blur(8px);
+  overflow-y: auto;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+#panel.hidden {
+  pointer-events: none;
+  transform: translateX(20px);
+  opacity: 0;
+}
+
+#panel-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+#panel-close:hover { color: var(--text); }
+
+#panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+#panel-subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+#panel-body {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Hide Cesium chrome we don't want */
+.cesium-viewer-bottom { display: none !important; }
+.cesium-credit-lightbox-overlay { display: none !important; }

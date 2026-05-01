@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vantage</title>
+  <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+
+  <div id="hud">
+    <div id="title">VANTAGE</div>
+    <div id="layers">
+      <label><input type="checkbox" id="layer-planes" checked> <span class="dot dot-plane"></span>Planes <span id="count-planes">0</span></label>
+      <label><input type="checkbox" id="layer-ships" checked> <span class="dot dot-ship"></span>Ships <span id="count-ships">0</span></label>
+    </div>
+    <div id="status"><span id="status-dot"></span><span id="status-text">connecting…</span></div>
+  </div>
+
+  <div id="panel" class="hidden">
+    <button id="panel-close" aria-label="Close">×</button>
+    <div id="panel-title">—</div>
+    <div id="panel-subtitle">—</div>
+    <pre id="panel-body"></pre>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
