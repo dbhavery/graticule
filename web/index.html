@@ -3,27 +3,138 @@
 <head>
   <meta charset="UTF-8">
   <title>Vantage</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css">
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
 </head>
 <body>
   <div id="cesiumContainer"></div>
 
-  <div id="hud">
-    <div id="title">VANTAGE</div>
-    <div id="layers">
-      <label><input type="checkbox" id="layer-planes" checked> <span class="dot dot-plane"></span>Planes <span id="count-planes">0</span></label>
-      <label><input type="checkbox" id="layer-ships" checked> <span class="dot dot-ship"></span>Ships <span id="count-ships">0</span></label>
-    </div>
-    <div id="status"><span id="status-dot"></span><span id="status-text">connecting…</span></div>
-  </div>
+  <!-- Vignette + scanline overlay (cosmetic) -->
+  <div id="overlay-vignette"></div>
 
+  <!-- ─────────  TOP TELEMETRY BAR  ───────── -->
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span class="brand-name">VANTAGE</span>
+      <span class="brand-sub">SITUATIONAL AWARENESS</span>
+    </div>
+    <div class="telemetry">
+      <div class="tm">
+        <span class="tm-label">UTC</span>
+        <span class="tm-val mono" id="tm-utc">— —</span>
+      </div>
+      <div class="tm">
+        <span class="tm-label">CURSOR</span>
+        <span class="tm-val mono" id="tm-cursor">—</span>
+      </div>
+      <div class="tm">
+        <span class="tm-label">ALT</span>
+        <span class="tm-val mono" id="tm-alt">—</span>
+      </div>
+      <div class="tm tm-sep"></div>
+      <div class="tm">
+        <span class="tm-label">KP</span>
+        <span class="tm-val mono" id="tm-kp">—</span>
+      </div>
+      <div class="tm">
+        <span class="tm-label">SOLAR WIND</span>
+        <span class="tm-val mono" id="tm-sw">—</span>
+      </div>
+      <div class="tm">
+        <span class="tm-label">X-RAY</span>
+        <span class="tm-val mono" id="tm-xray">—</span>
+      </div>
+      <div class="tm tm-sep"></div>
+      <div class="tm">
+        <span class="tm-label">TRACKED</span>
+        <span class="tm-val mono" id="tm-total">0</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ─────────  LEFT LAYER PANEL  ───────── -->
+  <aside id="hud">
+    <div class="hud-head">
+      <span class="hud-tag">LAYERS</span>
+      <span class="hud-rule"></span>
+    </div>
+
+    <div id="layers">
+
+      <details open class="cat" data-cat="air">
+        <summary><span class="cat-name">AIR</span><span class="cat-count" id="cat-count-air">0</span></summary>
+        <label><input type="checkbox" data-layer="planes" checked><span class="dot" data-color="planes"></span><span class="lbl">Planes</span><span class="count" id="count-planes">0</span></label>
+        <label><input type="checkbox" data-layer="satellites" checked><span class="dot" data-color="satellites"></span><span class="lbl">Satellites</span><span class="count" id="count-satellites">0</span></label>
+      </details>
+
+      <details open class="cat" data-cat="sea">
+        <summary><span class="cat-name">SEA</span><span class="cat-count" id="cat-count-sea">0</span></summary>
+        <label><input type="checkbox" data-layer="ships" checked><span class="dot" data-color="ships"></span><span class="lbl">Ships</span><span class="count" id="count-ships">0</span></label>
+        <label><input type="checkbox" data-layer="hurricanes" checked><span class="dot" data-color="hurricanes"></span><span class="lbl">Hurricanes</span><span class="count" id="count-hurricanes">0</span></label>
+      </details>
+
+      <details open class="cat" data-cat="earth">
+        <summary><span class="cat-name">EARTH</span><span class="cat-count" id="cat-count-earth">0</span></summary>
+        <label><input type="checkbox" data-layer="quakes" checked><span class="dot" data-color="quakes"></span><span class="lbl">Earthquakes</span><span class="count" id="count-quakes">0</span></label>
+        <label><input type="checkbox" data-layer="volcanoes" checked><span class="dot" data-color="volcanoes"></span><span class="lbl">Volcanoes</span><span class="count" id="count-volcanoes">0</span></label>
+        <label><input type="checkbox" data-layer="fires" checked><span class="dot" data-color="fires"></span><span class="lbl">Wildfires</span><span class="count" id="count-fires">0</span></label>
+      </details>
+
+      <details open class="cat" data-cat="weather">
+        <summary><span class="cat-name">WEATHER</span><span class="cat-count" id="cat-count-weather">0</span></summary>
+        <label><input type="checkbox" data-layer="radar"><span class="dot" data-color="radar"></span><span class="lbl">Radar</span><span class="count" id="count-radar">—</span></label>
+        <label><input type="checkbox" data-layer="aurora"><span class="dot" data-color="aurora"></span><span class="lbl">Aurora</span><span class="count" id="count-aurora">—</span></label>
+      </details>
+
+      <details open class="cat" data-cat="space">
+        <summary><span class="cat-name">SPACE</span><span class="cat-count" id="cat-count-space">0</span></summary>
+        <label><input type="checkbox" data-layer="launches" checked><span class="dot" data-color="launches"></span><span class="lbl">Launches</span><span class="count" id="count-launches">0</span></label>
+      </details>
+
+      <details open class="cat" data-cat="alerts">
+        <summary><span class="cat-name">ALERTS</span><span class="cat-count" id="cat-count-alerts">0</span></summary>
+        <label><input type="checkbox" data-layer="tsunamis" checked><span class="dot" data-color="tsunamis"></span><span class="lbl">Tsunami</span><span class="count" id="count-tsunamis">0</span></label>
+        <label><input type="checkbox" data-layer="news" checked><span class="dot" data-color="news"></span><span class="lbl">Events</span><span class="count" id="count-news">0</span></label>
+      </details>
+
+    </div>
+  </aside>
+
+  <!-- ─────────  RIGHT DETAIL PANEL  ───────── -->
   <div id="panel" class="hidden">
     <button id="panel-close" aria-label="Close">×</button>
-    <div id="panel-title">—</div>
-    <div id="panel-subtitle">—</div>
+    <div class="panel-head">
+      <div id="panel-kind" class="panel-kind">—</div>
+      <div id="panel-title">—</div>
+      <div id="panel-subtitle">—</div>
+    </div>
     <pre id="panel-body"></pre>
+  </div>
+
+  <!-- ─────────  BOTTOM-LEFT EVENT TICKER  ───────── -->
+  <div id="ticker">
+    <div class="ticker-head">
+      <span class="ticker-label">LIVE FEED</span>
+      <span class="ticker-rule"></span>
+    </div>
+    <ul id="ticker-list"></ul>
+  </div>
+
+  <!-- ─────────  BOTTOM-RIGHT FEED HEALTH STRIP  ───────── -->
+  <div id="feedstrip">
+    <div class="strip-head">
+      <span class="strip-label">FEEDS</span>
+      <span class="strip-rule"></span>
+      <span id="status-dot"></span>
+      <span id="status-text" class="mono">connecting…</span>
+    </div>
+    <div id="feedstrip-chips"></div>
   </div>
 
   <script src="/static/app.js"></script>
