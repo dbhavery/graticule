@@ -541,16 +541,6 @@ function upsertEntity(layer, id, data) {
   } else {
     ent.position = pos;
     Object.assign(ent.properties, props);
-    // Update heading-aware billboard rotation as the entity moves
-    if (ent.billboard) {
-      if (layer === 'planes' && data.heading != null) {
-        ent.billboard.rotation = -Cesium.Math.toRadians(data.heading);
-      } else if (layer === 'ships') {
-        const h = (data.heading != null && data.heading !== 511) ? data.heading
-                : (data.course != null ? data.course : null);
-        if (h != null) ent.billboard.rotation = -Cesium.Math.toRadians(h);
-      }
-    }
     const g = graphicsFor(layer, data);
     if (g.point && ent.point) {
       ent.point.pixelSize = g.point.pixelSize;
@@ -564,170 +554,97 @@ function positionFor(layer, d) {
   return Cesium.Cartesian3.fromDegrees(d.lon, d.lat, alt);
 }
 
-// Helper: build a DistanceDisplayCondition for "show only when camera is within
-// `near` to `far` metres of the entity". Cesium's near/far is inclusive.
-function ddc(near, far) {
-  return new Cesium.DistanceDisplayCondition(near, far);
-}
+// Tiny constant-size dots for everything — same pixel size regardless of zoom.
+// Per-layer pixelSize is the only differentiator. Magnitude/FRP can subtly
+// nudge size for quakes/fires (data-driven, not zoom-driven). When real type-
+// specific 3D models arrive (aircraft, ship classes, ISS), they'll replace
+// dots conditionally — until then, dots only.
+const DOT_PX = {
+  planes:     4,
+  ships:      3,
+  satellites: 2,
+  quakes:     4,   // base size; mag adds 0..4 px
+  hurricanes: 6,
+  volcanoes:  3,
+  fires:      3,   // base; FRP adds 0..3 px
+  tsunamis:   6,
+  severe:     5,
+  launches:   5,
+  news:       3,
+};
 
 function graphicsFor(layer, d) {
-  switch (layer) {
-    case 'planes': {
-      // LOD curve: small (0.4) at very-close zoom, growing to ~1.0 at LOD-edge.
-      // Cesium clamps NearFarScalar outside (near, far): closer than near stays
-      // at scaleAtNear, farther than far stays at scaleAtFar — so this gives us
-      // "shrink when zoomed in, grow toward the dot threshold".
-      const lod = LOD.planes;
-      const heading = (d.heading != null) ? -Cesium.Math.toRadians(d.heading) : 0;
-      return {
-        point: {
-          pixelSize: 6, color: COLORS.planes,
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
-          distanceDisplayCondition: ddc(lod.far, Infinity),
-        },
-        billboard: {
-          image: ICON_URI.plane,
-          rotation: heading,
-          scale: 1.0,
-          scaleByDistance: new Cesium.NearFarScalar(20_000, 0.35, 1_500_000, 0.9),
-          distanceDisplayCondition: ddc(0, lod.far),
-        },
-      };
-    }
-    case 'ships': {
-      const lod = LOD.ships;
-      const heading = (d.heading != null && d.heading !== 511)
-        ? -Cesium.Math.toRadians(d.heading)
-        : (d.course != null ? -Cesium.Math.toRadians(d.course) : 0);
-      return {
-        point: {
-          pixelSize: 5, color: COLORS.ships,
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
-          distanceDisplayCondition: ddc(lod.far, Infinity),
-        },
-        billboard: {
-          image: shipIcon(d.type),
-          rotation: heading,
-          scale: 1.0,
-          scaleByDistance: new Cesium.NearFarScalar(15_000, 0.30, 800_000, 0.8),
-          distanceDisplayCondition: ddc(0, lod.far),
-        },
-      };
-    }
-    case 'satellites': {
-      const lod = LOD.satellites;
-      const isStation = d.group === 'stations';
-      return {
-        point: {
-          pixelSize: 3, color: COLORS.satellites.withAlpha(0.9),
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5,
-          distanceDisplayCondition: ddc(lod.far, Infinity),
-        },
-        billboard: {
-          image: isStation ? ICON_URI.iss : ICON_URI.satellite,
-          rotation: 0,
-          scale: isStation ? 1.0 : 0.8,
-          scaleByDistance: new Cesium.NearFarScalar(500_000, 0.4, 8_000_000, 0.9),
-          distanceDisplayCondition: ddc(0, lod.far),
-        },
-      };
-    }
-    case 'quakes': {
-      const mag = (typeof d.mag === 'number') ? d.mag : 1;
-      const size = Math.max(4, Math.min(28, 4 + mag * 3));
-      const alpha = mag >= 5 ? 1.0 : (mag >= 3 ? 0.85 : 0.55);
-      return { point: { pixelSize: size, color: COLORS.quakes.withAlpha(alpha),
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 1 } };
-    }
-    case 'hurricanes': {
-      const lod = LOD.hurricanes;
-      return {
-        point: {
-          pixelSize: 14, color: COLORS.hurricanes,
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          distanceDisplayCondition: ddc(lod.far, Infinity),
-        },
-        billboard: {
-          image: ICON_URI.hurricane,
-          scaleByDistance: new Cesium.NearFarScalar(100_000, 0.7, 4_000_000, 1.4),
-          distanceDisplayCondition: ddc(0, lod.far),
-        },
-        label: {
-          text: d.name || '',
-          font: '11px Inter, sans-serif',
-          fillColor: COLORS.hurricanes,
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset: new Cesium.Cartesian2(0, -22),
-          distanceDisplayCondition: ddc(0, 1.5e7),
-        },
-      };
-    }
-    case 'volcanoes': {
-      const lod = LOD.volcanoes;
-      return {
-        point: {
-          pixelSize: 4, color: COLORS.volcanoes.withAlpha(0.7),
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
-          distanceDisplayCondition: ddc(lod.far, Infinity),
-        },
-        billboard: {
-          image: ICON_URI.volcano,
-          scale: 0.7,
-          scaleByDistance: new Cesium.NearFarScalar(15_000, 0.30, 1_500_000, 0.8),
-          distanceDisplayCondition: ddc(0, lod.far),
-        },
-      };
-    }
-    case 'fires': {
-      const frp = (typeof d.frp === 'number') ? d.frp : 0;
-      const size = Math.max(3, Math.min(10, 3 + Math.log10(1 + frp) * 2));
-      return { point: { pixelSize: size, color: COLORS.fires.withAlpha(0.85),
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
-    }
-    case 'tsunamis':
-      return { point: { pixelSize: 12, color: COLORS.tsunamis,
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 2 } };
-    case 'severe':
-      return { point: { pixelSize: 9, color: COLORS.severe.withAlpha(0.9),
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 1 } };
-    case 'launches': {
-      const lod = LOD.launches;
-      return {
-        point: {
-          pixelSize: 9, color: COLORS.launches,
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 1.5,
-          distanceDisplayCondition: ddc(lod.far, Infinity),
-        },
-        billboard: {
-          image: ICON_URI.launch,
-          scale: 1.0,
-          scaleByDistance: new Cesium.NearFarScalar(50_000, 0.6, 5_000_000, 1.2),
-          distanceDisplayCondition: ddc(0, lod.far),
-        },
-        ellipse: {
-          semiMajorAxis: 60000, semiMinorAxis: 60000,
-          material: COLORS.launches.withAlpha(0.16),
-          outline: true, outlineColor: COLORS.launches.withAlpha(0.85),
-          height: 0,
-        },
-        label: {
-          text: countdownText(d.net),
-          font: '10px JetBrains Mono, monospace',
-          fillColor: COLORS.launches,
-          outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset: new Cesium.Cartesian2(0, -18),
-          distanceDisplayCondition: ddc(0, 1.5e7),
-        },
-      };
-    }
-    case 'news':
-      return { point: { pixelSize: 4, color: COLORS.news.withAlpha(0.8),
-                        outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
-    default:
-      return { point: { pixelSize: 4, color: Cesium.Color.WHITE } };
+  const px = DOT_PX[layer] || 3;
+
+  // Mag-driven nudge for quakes (M2 = base 4, M7 = base 8). Tiny but visible.
+  if (layer === 'quakes') {
+    const mag = (typeof d.mag === 'number') ? d.mag : 1;
+    const size = Math.max(3, Math.min(8, px + Math.max(0, mag - 2) * 0.8));
+    const alpha = mag >= 5 ? 1.0 : (mag >= 3 ? 0.85 : 0.6);
+    return { point: { pixelSize: size, color: COLORS.quakes.withAlpha(alpha),
+                      outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
   }
+  // FRP nudge for fires (small fire = 3, megafire = 6).
+  if (layer === 'fires') {
+    const frp = (typeof d.frp === 'number') ? d.frp : 0;
+    const size = Math.max(2, Math.min(6, px + Math.log10(1 + frp) * 1.2));
+    return { point: { pixelSize: size, color: COLORS.fires.withAlpha(0.85),
+                      outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
+  }
+
+  // Launches keep the ground-rendered ring + countdown label (those are
+  // map features, not icons — they're spatially meaningful).
+  if (layer === 'launches') {
+    return {
+      point: { pixelSize: px, color: COLORS.launches,
+               outlineColor: Cesium.Color.BLACK, outlineWidth: 0.8 },
+      ellipse: {
+        semiMajorAxis: 60000, semiMinorAxis: 60000,
+        material: COLORS.launches.withAlpha(0.14),
+        outline: true, outlineColor: COLORS.launches.withAlpha(0.7),
+        height: 0,
+      },
+      label: {
+        text: countdownText(d.net),
+        font: '10px JetBrains Mono, monospace',
+        fillColor: COLORS.launches,
+        outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -14),
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.5e7),
+      },
+    };
+  }
+
+  // Hurricanes keep a name label (text, not an icon)
+  if (layer === 'hurricanes') {
+    return {
+      point: { pixelSize: px, color: COLORS.hurricanes,
+               outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+      label: {
+        text: d.name || '',
+        font: '11px Inter, sans-serif',
+        fillColor: COLORS.hurricanes,
+        outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -14),
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.5e7),
+      },
+    };
+  }
+
+  // Default: a colored dot
+  const alpha = (layer === 'volcanoes') ? 0.7 :
+                (layer === 'news')      ? 0.8 :
+                (layer === 'satellites')? 0.9 : 1.0;
+  return {
+    point: {
+      pixelSize: px,
+      color: (COLORS[layer] || Cesium.Color.WHITE).withAlpha(alpha),
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 0.5,
+    },
+  };
 }
 
 // ---------- Satellites (TLE → satellite-js) ---------------------------------
