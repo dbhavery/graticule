@@ -30,6 +30,10 @@
   --c-aurora:     #4ade80;
   --c-buildings:  #94a3b8;
   --c-photoreal3d: #67e8f9;
+  --c-severe:     #ec4899;
+  --c-cables:     #fbbf24;
+  --c-nightlights:#fef08a;
+  --c-terminator: #475569;
 
   --ok:   #22cc66;
   --warn: #d6802b;
@@ -273,6 +277,10 @@ html, body {
 .dot[data-color=aurora]     { background: var(--c-aurora);     box-shadow: 0 0 5px var(--c-aurora); }
 .dot[data-color=buildings]  { background: var(--c-buildings);  box-shadow: 0 0 5px var(--c-buildings); }
 .dot[data-color=photoreal3d]{ background: var(--c-photoreal3d);box-shadow: 0 0 5px var(--c-photoreal3d); }
+.dot[data-color=severe]     { background: var(--c-severe);     box-shadow: 0 0 5px var(--c-severe); }
+.dot[data-color=cables]     { background: var(--c-cables);     box-shadow: 0 0 5px var(--c-cables); }
+.dot[data-color=nightlights]{ background: var(--c-nightlights);box-shadow: 0 0 5px var(--c-nightlights); }
+.dot[data-color=terminator] { background: var(--c-terminator); box-shadow: 0 0 5px var(--c-terminator); }
 
 #layers .count {
   color: var(--text-mute);

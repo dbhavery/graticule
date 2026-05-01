@@ -16,6 +16,7 @@ from loguru import logger
 from vantage.feeds.adsb import opensky_loop
 from vantage.feeds.ais import aisstream_loop
 from vantage.feeds.aurora import ovation_loop
+from vantage.feeds.cables import cables_loop
 from vantage.feeds.fires import firms_loop
 from vantage.feeds.hurricanes import nhc_loop
 from vantage.feeds.launches import launches_loop
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
         ("launches",   launches_loop),
         ("gdelt",      gdelt_loop),
         ("swpc-sw",    space_weather_loop),
+        ("cables",     cables_loop),
     ]
     tasks = [asyncio.create_task(fn(state), name=n) for n, fn in feeds]
     tasks.append(asyncio.create_task(_expire_loop(), name="expire"))

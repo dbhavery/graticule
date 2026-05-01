@@ -1,7 +1,12 @@
-"""NWS tsunami alerts — active warnings, watches, advisories, info statements.
+"""NWS active alerts — tsunamis + severe weather (US).
 
-Source: https://api.weather.gov/alerts/active?event=Tsunami
+Source: https://api.weather.gov/alerts/active
 Refresh: 2 min. No key required.
+
+Splits the response into two layers:
+  - `tsunamis` — Tsunami Warning/Watch/Advisory/Information
+  - `severe`   — Tornado/Severe Thunderstorm/Flash Flood/Hurricane/Winter
+                 Storm/Blizzard/Ice Storm/Fire Weather/Extreme Heat warnings
 """
 from __future__ import annotations
 
@@ -12,14 +17,38 @@ from loguru import logger
 
 NWS_URL = "https://api.weather.gov/alerts/active"
 POLL_SEC = 120
-TIMEOUT_SEC = 20
+TIMEOUT_SEC = 30
 
-# NWS umbrella categories for tsunami events
 TSUNAMI_EVENTS = {
     "Tsunami Warning",
     "Tsunami Watch",
     "Tsunami Advisory",
     "Tsunami Information Statement",
+}
+
+SEVERE_EVENTS = {
+    "Tornado Warning",
+    "Tornado Watch",
+    "Severe Thunderstorm Warning",
+    "Severe Thunderstorm Watch",
+    "Flash Flood Warning",
+    "Flash Flood Watch",
+    "Flood Warning",
+    "Hurricane Warning",
+    "Hurricane Watch",
+    "Tropical Storm Warning",
+    "Tropical Storm Watch",
+    "Winter Storm Warning",
+    "Winter Storm Watch",
+    "Blizzard Warning",
+    "Ice Storm Warning",
+    "Fire Weather Watch",
+    "Red Flag Warning",
+    "Extreme Heat Warning",
+    "Extreme Cold Warning",
+    "High Wind Warning",
+    "Dust Storm Warning",
+    "Avalanche Warning",
 }
 
 
@@ -31,28 +60,28 @@ async def nws_tsunami_loop(state) -> None:
     async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers=headers) as client:
         while True:
             try:
-                r = await client.get(NWS_URL, params={"event": list(TSUNAMI_EVENTS)})
+                r = await client.get(NWS_URL, params={"status": "actual"})
                 r.raise_for_status()
                 data = r.json()
                 features = data.get("features") or []
-                entries: dict[str, dict] = {}
+                tsu: dict[str, dict] = {}
+                sev: dict[str, dict] = {}
                 for f in features:
                     props = f.get("properties") or {}
-                    if props.get("event") not in TSUNAMI_EVENTS:
+                    event = props.get("event")
+                    if event not in TSUNAMI_EVENTS and event not in SEVERE_EVENTS:
                         continue
                     fid = f.get("id") or props.get("id")
                     if not fid:
                         continue
-                    geom = f.get("geometry") or {}
-                    centroid = _centroid(geom)
+                    centroid = _centroid(f.get("geometry") or {})
                     if not centroid:
-                        # No geometry — try parameter SAME centroid; otherwise skip
                         continue
                     lon, lat = centroid
-                    entries[str(fid)] = {
+                    entry = {
                         "lat": lat,
                         "lon": lon,
-                        "event": props.get("event"),
+                        "event": event,
                         "severity": props.get("severity"),
                         "urgency": props.get("urgency"),
                         "headline": props.get("headline"),
@@ -61,14 +90,19 @@ async def nws_tsunami_loop(state) -> None:
                         "sent": props.get("sent"),
                         "expires": props.get("expires"),
                     }
-                state.replace_layer("tsunamis", entries)
-                logger.info(f"NWS tsunami: {len(entries)} active alerts")
+                    if event in TSUNAMI_EVENTS:
+                        tsu[str(fid)] = entry
+                    else:
+                        sev[str(fid)] = entry
+                state.replace_layer("tsunamis", tsu)
+                state.replace_layer("severe", sev)
+                logger.info(f"NWS: {len(tsu)} tsunami / {len(sev)} severe-wx alerts")
             except httpx.HTTPStatusError as e:
-                logger.warning(f"NWS tsunami http {e.response.status_code} — backing off 10m")
+                logger.warning(f"NWS alerts http {e.response.status_code} — backing off 10m")
                 await asyncio.sleep(600)
                 continue
             except Exception as e:
-                logger.warning(f"NWS tsunami poll failed: {e}")
+                logger.warning(f"NWS alerts poll failed: {e}")
             await asyncio.sleep(POLL_SEC)
 
 

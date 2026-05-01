@@ -16,15 +16,18 @@ const COLORS = {
   tsunamis:   Cesium.Color.fromCssColorString('#f0abfc'),
   launches:   Cesium.Color.fromCssColorString('#fde047'),
   news:       Cesium.Color.fromCssColorString('#94a3b8'),
+  severe:     Cesium.Color.fromCssColorString('#ec4899'),
+  cables:     Cesium.Color.fromCssColorString('#fbbf24'),
 };
 
 const CATEGORY = {
   planes: 'air', satellites: 'air',
   ships: 'sea', hurricanes: 'sea',
   quakes: 'earth', volcanoes: 'earth', fires: 'earth',
-  radar: 'weather', aurora: 'weather',
+  radar: 'weather', aurora: 'weather', nightlights: 'weather', terminator: 'weather',
   launches: 'space',
-  tsunamis: 'alerts', news: 'alerts',
+  tsunamis: 'alerts', severe: 'alerts', news: 'alerts',
+  cables: 'reference',
 };
 
 const KIND_LABEL = {
@@ -32,6 +35,7 @@ const KIND_LABEL = {
   quakes: 'EARTHQUAKE', hurricanes: 'TROPICAL CYCLONE',
   volcanoes: 'VOLCANO', fires: 'FIRE DETECTION',
   tsunamis: 'TSUNAMI ALERT', launches: 'LAUNCH', news: 'NATURAL EVENT',
+  severe: 'SEVERE WX',
 };
 
 // ─────────  LOD: distance-aware billboard icons  ─────────
@@ -141,8 +145,10 @@ const FEEDS = [
   { id: 'volcanoes',  label: 'GVP' },
   { id: 'fires',      label: 'FIRMS' },
   { id: 'tsunamis',   label: 'NWS' },
+  { id: 'severe',     label: 'NWS-WX' },
   { id: 'launches',   label: 'LL2' },
   { id: 'news',       label: 'EONET' },
+  { id: 'cables',     label: 'CABLES', meta: true },
   { id: 'radar',      label: 'RADAR',  meta: true },
   { id: 'aurora',     label: 'AURORA', meta: true },
   { id: 'space_weather', label: 'SWPC', meta: true, hideFromChips: false },
@@ -230,13 +236,29 @@ async function initViewer() {
 }
 
 function initDataSources() {
-  for (const layer of ['planes','ships','satellites','quakes','volcanoes','fires','hurricanes','tsunamis','launches','news']) {
+  for (const layer of ['planes','ships','satellites','quakes','volcanoes','fires','hurricanes','tsunamis','severe','launches','news']) {
     const ds = new Cesium.CustomDataSource(layer);
     viewer.dataSources.add(ds);
     dataSources[layer] = ds;
     entitiesByLayer[layer] = new Map();
   }
+  // Cables — separate static-overlay data source for polylines
+  cablesDS = new Cesium.CustomDataSource('cables');
+  viewer.dataSources.add(cablesDS);
+  cablesDS.show = false;
+  // Subsolar / terminator marker
+  terminatorDS = new Cesium.CustomDataSource('terminator');
+  viewer.dataSources.add(terminatorDS);
+  initTerminator();
 }
+
+let cablesDS = null;
+let cablesGeoJson = null;
+let cablesBuilt = false;
+let terminatorDS = null;
+let sunEntity = null;
+let terminatorEntity = null;
+let nightLightsLayer = null;
 
 function initFeedChips() {
   const host = document.getElementById('feedstrip-chips');
@@ -277,6 +299,9 @@ function bindUI() {
       else if (layer === 'aurora')     toggleAurora(on);
       else if (layer === 'buildings')  toggleBuildings(on);
       else if (layer === 'photoreal3d')togglePhotoreal3D(on);
+      else if (layer === 'cables')     toggleCables(on);
+      else if (layer === 'nightlights')toggleNightLights(on);
+      else if (layer === 'terminator') toggleTerminator(on);
       else if (dataSources[layer])     dataSources[layer].show = on;
       updateCategoryCounts();
     });
@@ -378,6 +403,7 @@ function handleMessage(msg) {
     if (meta.radar)         { radarMeta = meta.radar;   noteFeed('radar');  if (isLayerOn('radar'))  toggleRadar(true); }
     if (meta.aurora)        { auroraMeta = meta.aurora; noteFeed('aurora'); if (isLayerOn('aurora')) toggleAurora(true); }
     if (meta.space_weather) { applySpaceWeather(meta.space_weather); noteFeed('space_weather'); }
+    if (meta.cables)        { cablesGeoJson = meta.cables.geojson; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
   } else if (msg.type === 'planes' || msg.type === 'ships') {
     upsertEntity(msg.type, msg.id, msg.data);
     noteFeed(msg.type);
@@ -389,6 +415,7 @@ function handleMessage(msg) {
     if      (msg.key === 'radar')         { radarMeta = msg.data;  noteFeed('radar');  if (isLayerOn('radar'))  toggleRadar(true); }
     else if (msg.key === 'aurora')        { auroraMeta = msg.data; noteFeed('aurora'); if (isLayerOn('aurora')) toggleAurora(true); }
     else if (msg.key === 'space_weather') { applySpaceWeather(msg.data); noteFeed('space_weather'); }
+    else if (msg.key === 'cables')        { cablesGeoJson = msg.data.geojson; cablesBuilt = false; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
   }
   updateCategoryCounts();
 }
@@ -659,6 +686,9 @@ function graphicsFor(layer, d) {
     case 'tsunamis':
       return { point: { pixelSize: 12, color: COLORS.tsunamis,
                         outlineColor: Cesium.Color.BLACK, outlineWidth: 2 } };
+    case 'severe':
+      return { point: { pixelSize: 9, color: COLORS.severe.withAlpha(0.9),
+                        outlineColor: Cesium.Color.BLACK, outlineWidth: 1 } };
     case 'launches': {
       const lod = LOD.launches;
       return {
@@ -942,6 +972,170 @@ function toggleBuildings(on) {
 }
 function togglePhotoreal3D(on) {
   if (googleTileset) googleTileset.show = on;
+}
+
+// ---------- Night Lights (NASA Black Marble via GIBS) -----------------------
+
+function toggleNightLights(on) {
+  if (!on) {
+    if (nightLightsLayer) {
+      viewer.imageryLayers.remove(nightLightsLayer);
+      nightLightsLayer = null;
+    }
+    return;
+  }
+  if (nightLightsLayer) return;
+  // VIIRS Black Marble — annual composite, free, no key, no rate limit.
+  // GIBS WMTS in EPSG:4326 ("best/VIIRS_Black_Marble") with a baked-in date
+  // because Black Marble is a yearly product.
+  const url = 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_Black_Marble/default/2016-01-01/500m/{TileMatrix}/{TileRow}/{TileCol}.jpg';
+  nightLightsLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+    url: url
+      .replace('{TileMatrix}', '{z}')
+      .replace('{TileRow}', '{y}')
+      .replace('{TileCol}', '{x}'),
+    tilingScheme: new Cesium.GeographicTilingScheme(),
+    maximumLevel: 8,
+    credit: 'NASA Earthdata · VIIRS Black Marble',
+  }));
+  // Show only on the night side using Cesium's day/night alpha — Cesium 1.98+
+  // supports per-imagery dayAlpha/nightAlpha when the globe has lighting.
+  nightLightsLayer.dayAlpha   = 0.0;
+  nightLightsLayer.nightAlpha = 1.0;
+  nightLightsLayer.alpha      = 1.0;
+}
+
+// ---------- Subsolar point + day/night terminator ---------------------------
+
+function initTerminator() {
+  // Persistent entities; we just move them in updateTerminator()
+  sunEntity = terminatorDS.entities.add({
+    id: 'sun-marker',
+    position: Cesium.Cartesian3.fromDegrees(0, 0, 1000),
+    point: {
+      pixelSize: 16,
+      color: Cesium.Color.fromCssColorString('#fde68a'),
+      outlineColor: Cesium.Color.fromCssColorString('#f59e0b'),
+      outlineWidth: 2,
+    },
+    label: {
+      text: '☀',
+      font: '18px sans-serif',
+      fillColor: Cesium.Color.fromCssColorString('#fde047'),
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 2,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      pixelOffset: new Cesium.Cartesian2(0, 0),
+    },
+  });
+
+  terminatorEntity = terminatorDS.entities.add({
+    id: 'terminator-line',
+    polyline: {
+      positions: [],
+      width: 1.6,
+      material: new Cesium.PolylineDashMaterialProperty({
+        color: Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.6),
+        dashLength: 12,
+      }),
+      clampToGround: true,
+    },
+  });
+
+  setInterval(updateTerminator, 30_000);
+  updateTerminator();
+}
+
+function toggleTerminator(on) {
+  if (terminatorDS) terminatorDS.show = on;
+}
+
+// Subsolar point (lat, lon) for given Date — simple low-precision algorithm.
+// Equation-of-time + declination good to ~1° which is fine for a dashed line.
+function subsolarLatLon(d) {
+  const dayOfYear = Math.floor((d - new Date(Date.UTC(d.getUTCFullYear(), 0, 0))) / 86400000);
+  const decl = 23.44 * Math.sin(2 * Math.PI * (dayOfYear - 81) / 365); // °
+  const utc_h = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+  const lon = -(utc_h - 12) * 15; // °, +east
+  const lat = decl;
+  return [lat, ((lon + 540) % 360) - 180];
+}
+
+function updateTerminator() {
+  if (!terminatorDS || !sunEntity || !terminatorEntity) return;
+  const now = new Date();
+  const [lat, lon] = subsolarLatLon(now);
+  // Move sun marker (~700 km up so it floats above the surface a little)
+  sunEntity.position = Cesium.Cartesian3.fromDegrees(lon, lat, 700_000);
+
+  // Build the terminator: great circle perpendicular to the sun direction.
+  // Parameterise as a circle on the sphere centred at the antipode of the sun
+  // direction with angular radius 90°. We march longitudes 0..360 sampling
+  // the corresponding terminator latitude.
+  const decl = lat * Math.PI / 180;
+  const points = [];
+  for (let i = 0; i <= 360; i += 2) {
+    const az = i * Math.PI / 180; // angle around the great circle
+    // Standard solar-terminator formula:
+    //   tanφ = -cosH / tan(δ)   where H = sidereal hour angle from sun-meridian
+    // We instead parameterise via spherical rotation for stability at poles.
+    const sinPhi = -Math.cos(az) * Math.cos(decl);
+    const cosPhi = Math.sqrt(Math.max(0, 1 - sinPhi * sinPhi));
+    const phi = Math.asin(sinPhi);
+    const dlon = Math.atan2(Math.sin(az), Math.cos(az) * Math.sin(decl));
+    const sampleLon = ((lon * Math.PI / 180) + dlon + Math.PI * 3) % (2 * Math.PI) - Math.PI;
+    points.push(Cesium.Cartesian3.fromDegrees(
+      sampleLon * 180 / Math.PI,
+      phi * 180 / Math.PI,
+      0
+    ));
+    void cosPhi;
+  }
+  terminatorEntity.polyline.positions = points;
+}
+
+// ---------- Submarine cables -----------------------------------------------
+
+function toggleCables(on) {
+  if (!cablesDS) return;
+  cablesDS.show = on;
+  if (on && !cablesBuilt && cablesGeoJson) buildCables();
+}
+
+function buildCables() {
+  if (!cablesGeoJson || cablesBuilt) return;
+  const features = cablesGeoJson.features || [];
+  const mat = COLORS.cables.withAlpha(0.55);
+  for (const f of features) {
+    const geom = f.geometry || {};
+    const props = f.properties || {};
+    const lines = [];
+    if (geom.type === 'LineString') lines.push(geom.coordinates);
+    else if (geom.type === 'MultiLineString') for (const c of geom.coordinates) lines.push(c);
+    else continue;
+    for (const coords of lines) {
+      const positions = [];
+      for (const [lon, lat] of coords) {
+        if (typeof lon === 'number' && typeof lat === 'number') {
+          positions.push(Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+        }
+      }
+      if (positions.length < 2) continue;
+      cablesDS.entities.add({
+        polyline: {
+          positions,
+          width: 1.0,
+          material: mat,
+          clampToGround: true,
+        },
+        properties: { kind: 'cable', name: props.name, slug: props.slug,
+                      rfs: props.rfs, owners: props.owners, length: props.length },
+      });
+    }
+  }
+  cablesBuilt = true;
+  setCount('cables', features.length);
+  console.log(`Built ${features.length} submarine-cable polylines`);
 }
 
 function showPanel(entity) {

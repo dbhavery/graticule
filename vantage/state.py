@@ -31,6 +31,7 @@ EXPIRE_SEC: dict[str, int] = {
     "fires":      86400,  # 24 h — FIRMS daily cadence
     "launches":   7200,   # 2 h — feed-side full replace each refresh anyway
     "news":       7200,   # 2 h — likewise
+    "severe":     3600,   # 1 h — NWS active alerts
 }
 
 
@@ -48,6 +49,7 @@ class StateStore:
         "satellites": {},  # holds {id: {name, tle1, tle2}} — propagated client-side
         "launches":   {},
         "news":       {},
+        "severe":     {},
     })
     # Singleton metadata blobs (radar tile manifest, aurora grid, etc.)
     meta: dict[str, Any] = field(default_factory=dict)
