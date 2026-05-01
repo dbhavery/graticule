@@ -15,19 +15,38 @@ import asyncio
 import httpx
 from loguru import logger
 
-URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
+UPCOMING_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
+PREVIOUS_URL = "https://ll.thespacedevs.com/2.2.0/launch/previous/"
 POLL_SEC = 1800  # 30 min
 TIMEOUT_SEC = 30
+WINDOW_HOURS = 72  # show recent T+0..T+72h alongside upcoming
 
 
 async def launches_loop(state) -> None:
     async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "vantage/0.1"}) as client:
         while True:
             try:
-                r = await client.get(URL, params={"limit": 20})
-                r.raise_for_status()
-                data = r.json()
-                results = data.get("results") or []
+                # Upcoming: next ~10 launches
+                up = await client.get(UPCOMING_URL, params={"limit": 10})
+                up.raise_for_status()
+                # Previous: last 10 within the window
+                prev = await client.get(PREVIOUS_URL, params={"limit": 10})
+                prev.raise_for_status()
+                results = list((up.json().get("results") or []))
+                # Append recent previous launches that are still within the window
+                import time as _time
+                from datetime import datetime, timezone
+                cutoff = _time.time() - WINDOW_HOURS * 3600
+                for L in (prev.json().get("results") or []):
+                    net_iso = L.get("net")
+                    if not net_iso:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(net_iso.replace("Z", "+00:00")).replace(tzinfo=timezone.utc).timestamp()
+                    except ValueError:
+                        continue
+                    if ts >= cutoff:
+                        results.append(L)
                 entries: dict[str, dict] = {}
                 for L in results:
                     lid = L.get("id") or L.get("slug")

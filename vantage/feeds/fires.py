@@ -24,8 +24,9 @@ async def firms_loop(state) -> None:
         logger.warning("FIRMS_MAP_KEY not set — wildfires layer disabled. Get a free key at https://firms.modaps.eosdis.nasa.gov/api/")
         return
 
-    # VIIRS NOAA-20 = best resolution, 24h global window. CSV format.
-    url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{map_key}/VIIRS_NOAA20_NRT/world/1"
+    # VIIRS NOAA-20 = best resolution, 3-day rolling global window. CSV format.
+    # Front-end fades dots by age so 72h-old detections render dim.
+    url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{map_key}/VIIRS_NOAA20_NRT/world/3"
     async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "vantage/0.1"}) as client:
         while True:
             try:

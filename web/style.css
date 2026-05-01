@@ -34,6 +34,8 @@
   --c-cables:     #fbbf24;
   --c-nightlights:#fef08a;
   --c-terminator: #475569;
+  --c-airports:   #60a5fa;
+  --c-tfrs:       #f43f5e;
 
   --ok:   #22cc66;
   --warn: #d6802b;
@@ -281,6 +283,8 @@ html, body {
 .dot[data-color=cables]     { background: var(--c-cables);     box-shadow: 0 0 5px var(--c-cables); }
 .dot[data-color=nightlights]{ background: var(--c-nightlights);box-shadow: 0 0 5px var(--c-nightlights); }
 .dot[data-color=terminator] { background: var(--c-terminator); box-shadow: 0 0 5px var(--c-terminator); }
+.dot[data-color=airports]   { background: var(--c-airports);   box-shadow: 0 0 5px var(--c-airports); }
+.dot[data-color=tfrs]       { background: var(--c-tfrs);       box-shadow: 0 0 5px var(--c-tfrs); }
 
 #layers .count {
   color: var(--text-mute);

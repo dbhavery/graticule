@@ -25,13 +25,14 @@ from loguru import logger
 EXPIRE_SEC: dict[str, int] = {
     "planes":     300,    # 5 min
     "ships":      900,    # 15 min — AIS positions can be sparse
-    "quakes":     86400,  # 24 h — USGS feed is rolling 24h, refreshed every minute
+    "quakes":     7 * 86400,  # 7d — match USGS all_week feed; client filters by age
     "hurricanes": 21600,  # 6 h — NHC publishes ~3-6 hourly
     "tsunamis":   3600,   # 1 h — alerts are short-lived
-    "fires":      86400,  # 24 h — FIRMS daily cadence
+    "fires":      4 * 86400,  # 4d — FIRMS rolling 3d feed; small slack
     "launches":   7200,   # 2 h — feed-side full replace each refresh anyway
     "news":       7200,   # 2 h — likewise
     "severe":     3600,   # 1 h — NWS active alerts
+    "tfrs":       3600,   # 1 h
 }
 
 
@@ -50,6 +51,8 @@ class StateStore:
         "launches":   {},
         "news":       {},
         "severe":     {},
+        "airports":   {},
+        "tfrs":       {},
     })
     # Singleton metadata blobs (radar tile manifest, aurora grid, etc.)
     meta: dict[str, Any] = field(default_factory=dict)

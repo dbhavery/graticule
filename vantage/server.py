@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from vantage.feeds.adsb import opensky_loop
+from vantage.feeds.airports import airports_loop
 from vantage.feeds.ais import aisstream_loop
 from vantage.feeds.aurora import ovation_loop
 from vantage.feeds.cables import cables_loop
@@ -25,6 +26,7 @@ from vantage.feeds.quakes import usgs_loop
 from vantage.feeds.radar import rainviewer_loop
 from vantage.feeds.satellites import celestrak_loop
 from vantage.feeds.space_weather import space_weather_loop
+from vantage.feeds.tfrs import tfr_loop
 from vantage.feeds.tsunamis import nws_tsunami_loop
 from vantage.feeds.volcanoes import gvp_loop
 from vantage.state import state
@@ -49,6 +51,8 @@ async def lifespan(app: FastAPI):
         ("gdelt",      gdelt_loop),
         ("swpc-sw",    space_weather_loop),
         ("cables",     cables_loop),
+        ("airports",   airports_loop),
+        ("tfrs",       tfr_loop),
     ]
     tasks = [asyncio.create_task(fn(state), name=n) for n, fn in feeds]
     tasks.append(asyncio.create_task(_expire_loop(), name="expire"))

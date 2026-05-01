@@ -18,10 +18,12 @@ const COLORS = {
   news:       Cesium.Color.fromCssColorString('#94a3b8'),
   severe:     Cesium.Color.fromCssColorString('#ec4899'),
   cables:     Cesium.Color.fromCssColorString('#fbbf24'),
+  airports:   Cesium.Color.fromCssColorString('#60a5fa'),
+  tfrs:       Cesium.Color.fromCssColorString('#f43f5e'),
 };
 
 const CATEGORY = {
-  planes: 'air', satellites: 'air',
+  planes: 'air', satellites: 'air', airports: 'air', tfrs: 'air',
   ships: 'sea', hurricanes: 'sea',
   quakes: 'earth', volcanoes: 'earth', fires: 'earth',
   radar: 'weather', aurora: 'weather', nightlights: 'weather', terminator: 'weather',
@@ -36,6 +38,7 @@ const KIND_LABEL = {
   volcanoes: 'VOLCANO', fires: 'FIRE DETECTION',
   tsunamis: 'TSUNAMI ALERT', launches: 'LAUNCH', news: 'NATURAL EVENT',
   severe: 'SEVERE WX',
+  airports: 'AIRPORT', tfrs: 'FLIGHT RESTRICTION',
 };
 
 // ─────────  LOD: distance-aware billboard icons  ─────────
@@ -140,6 +143,8 @@ const FEEDS = [
   { id: 'planes',     label: 'ADS-B' },
   { id: 'ships',      label: 'AIS' },
   { id: 'satellites', label: 'TLE' },
+  { id: 'airports',   label: 'AIRPORTS' },
+  { id: 'tfrs',       label: 'TFR' },
   { id: 'quakes',     label: 'USGS' },
   { id: 'hurricanes', label: 'NHC' },
   { id: 'volcanoes',  label: 'GVP' },
@@ -236,7 +241,7 @@ async function initViewer() {
 }
 
 function initDataSources() {
-  for (const layer of ['planes','ships','satellites','quakes','volcanoes','fires','hurricanes','tsunamis','severe','launches','news']) {
+  for (const layer of ['planes','ships','satellites','airports','tfrs','quakes','volcanoes','fires','hurricanes','tsunamis','severe','launches','news']) {
     const ds = new Cesium.CustomDataSource(layer);
     viewer.dataSources.add(ds);
     dataSources[layer] = ds;
@@ -555,17 +560,15 @@ function positionFor(layer, d) {
 }
 
 // Tiny constant-size dots for everything — same pixel size regardless of zoom.
-// Per-layer pixelSize is the only differentiator. Magnitude/FRP can subtly
-// nudge size for quakes/fires (data-driven, not zoom-driven). When real type-
-// specific 3D models arrive (aircraft, ship classes, ISS), they'll replace
-// dots conditionally — until then, dots only.
 const DOT_PX = {
   planes:     4,
   ships:      3,
   satellites: 2,
+  airports:   3,
+  tfrs:       6,
   quakes:     4,   // base size; mag adds 0..4 px
   hurricanes: 6,
-  volcanoes:  3,
+  volcanoes:  4,
   fires:      3,   // base; FRP adds 0..3 px
   tsunamis:   6,
   severe:     5,
@@ -573,45 +576,123 @@ const DOT_PX = {
   news:       3,
 };
 
+// Age-based fade so 72h-old events render dim while fresh events pop.
+// Returns alpha 0.25..1.0 over the [0, windowH] window.
+function ageAlpha(ageHours, windowH) {
+  if (ageHours == null || !isFinite(ageHours)) return 0.85;
+  if (ageHours < 0)              return 1.0;       // future event (e.g. upcoming launch)
+  if (ageHours < 1)              return 1.0;       // just happened
+  if (ageHours < 6)              return 0.92;
+  if (ageHours < 24)             return 0.78;
+  if (ageHours < windowH)        return 0.4 + 0.2 * (1 - (ageHours - 24) / Math.max(1, windowH - 24));
+  return 0.25;
+}
+
 function graphicsFor(layer, d) {
   const px = DOT_PX[layer] || 3;
 
-  // Mag-driven nudge for quakes (M2 = base 4, M7 = base 8). Tiny but visible.
+  // Mag- + age-driven for quakes. Last 1h of M3+ glows white-hot; older fades.
   if (layer === 'quakes') {
     const mag = (typeof d.mag === 'number') ? d.mag : 1;
     const size = Math.max(3, Math.min(8, px + Math.max(0, mag - 2) * 0.8));
-    const alpha = mag >= 5 ? 1.0 : (mag >= 3 ? 0.85 : 0.6);
-    return { point: { pixelSize: size, color: COLORS.quakes.withAlpha(alpha),
+    const ageH = (Date.now() - (d.time || Date.now())) / 3.6e6;
+    let color = COLORS.quakes.withAlpha(ageAlpha(ageH, 72));
+    if (ageH < 1 && mag >= 3) {
+      // Active aftershock zone: shift toward warm white
+      color = Cesium.Color.fromCssColorString('#fef3c7');
+    }
+    return { point: { pixelSize: size, color,
                       outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
   }
-  // FRP nudge for fires (small fire = 3, megafire = 6).
+  // FRP + age for fires. Hot recent detections in bright orange-red, old ones fade.
   if (layer === 'fires') {
     const frp = (typeof d.frp === 'number') ? d.frp : 0;
     const size = Math.max(2, Math.min(6, px + Math.log10(1 + frp) * 1.2));
-    return { point: { pixelSize: size, color: COLORS.fires.withAlpha(0.85),
+    // Best-effort age from acq_date + acq_time (e.g. "2026-04-30" + "1430")
+    let ageH = null;
+    if (d.acq_date && d.acq_time) {
+      const t = String(d.acq_time).padStart(4, '0');
+      const iso = `${d.acq_date}T${t.slice(0,2)}:${t.slice(2,4)}:00Z`;
+      const ms = Date.parse(iso);
+      if (isFinite(ms)) ageH = (Date.now() - ms) / 3.6e6;
+    }
+    return { point: { pixelSize: size, color: COLORS.fires.withAlpha(ageAlpha(ageH, 72)),
                       outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
   }
 
-  // Launches keep the ground-rendered ring + countdown label (those are
-  // map features, not icons — they're spatially meaningful).
+  // Launches: status-aware coloring. Ring on the ground, label, dot.
+  //   Active   (within ±1h of net): bright lime/green
+  //   Upcoming (future): yellow
+  //   Recent   (post-launch): faded gray-yellow
   if (layer === 'launches') {
+    const netMs = d.net ? Date.parse(d.net) : null;
+    const dt = (netMs != null) ? (netMs - Date.now()) / 3.6e6 : null;  // hours; +ve = future
+    let color = COLORS.launches;
+    let alpha = 1.0;
+    if (dt != null) {
+      if (Math.abs(dt) < 1)         { color = Cesium.Color.fromCssColorString('#84cc16'); alpha = 1.0; }   // active
+      else if (dt > 0)              { color = COLORS.launches; alpha = 1.0; }                              // upcoming
+      else                          { color = COLORS.launches; alpha = ageAlpha(-dt, 72); }                // recent
+    }
     return {
-      point: { pixelSize: px, color: COLORS.launches,
+      point: { pixelSize: px, color: color.withAlpha(alpha),
                outlineColor: Cesium.Color.BLACK, outlineWidth: 0.8 },
       ellipse: {
         semiMajorAxis: 60000, semiMinorAxis: 60000,
-        material: COLORS.launches.withAlpha(0.14),
-        outline: true, outlineColor: COLORS.launches.withAlpha(0.7),
+        material: color.withAlpha(0.14 * alpha),
+        outline: true, outlineColor: color.withAlpha(0.7 * alpha),
         height: 0,
       },
       label: {
         text: countdownText(d.net),
         font: '10px JetBrains Mono, monospace',
-        fillColor: COLORS.launches,
+        fillColor: color,
         outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
         pixelOffset: new Cesium.Cartesian2(0, -14),
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.5e7),
+      },
+    };
+  }
+
+  // Volcanoes — bright orange when actively erupting (active=true), dim grey otherwise
+  if (layer === 'volcanoes') {
+    const active = d.active === true;
+    return {
+      point: {
+        pixelSize: active ? px + 1 : px,
+        color: active
+          ? Cesium.Color.fromCssColorString('#ef4444')
+          : COLORS.volcanoes.withAlpha(0.55),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 0.5,
+      },
+    };
+  }
+
+  // TFRs — pulse-like outline ring
+  if (layer === 'tfrs') {
+    return {
+      point: { pixelSize: px, color: COLORS.tfrs,
+               outlineColor: Cesium.Color.BLACK, outlineWidth: 1.5 },
+      ellipse: {
+        semiMajorAxis: 9260, semiMinorAxis: 9260,  // ~5 nm typical TFR radius
+        material: COLORS.tfrs.withAlpha(0.10),
+        outline: true, outlineColor: COLORS.tfrs.withAlpha(0.7),
+        height: 0,
+      },
+    };
+  }
+
+  // Airports — small dot, scheduled service slightly brighter
+  if (layer === 'airports') {
+    const isLarge = d.type === 'large_airport';
+    return {
+      point: {
+        pixelSize: isLarge ? px + 1 : px,
+        color: COLORS.airports.withAlpha(isLarge ? 0.95 : 0.55),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 0.5,
       },
     };
   }
