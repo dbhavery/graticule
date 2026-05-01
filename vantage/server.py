@@ -18,9 +18,12 @@ from vantage.feeds.ais import aisstream_loop
 from vantage.feeds.aurora import ovation_loop
 from vantage.feeds.fires import firms_loop
 from vantage.feeds.hurricanes import nhc_loop
+from vantage.feeds.launches import launches_loop
+from vantage.feeds.news import gdelt_loop
 from vantage.feeds.quakes import usgs_loop
 from vantage.feeds.radar import rainviewer_loop
 from vantage.feeds.satellites import celestrak_loop
+from vantage.feeds.space_weather import space_weather_loop
 from vantage.feeds.tsunamis import nws_tsunami_loop
 from vantage.feeds.volcanoes import gvp_loop
 from vantage.state import state
@@ -41,6 +44,9 @@ async def lifespan(app: FastAPI):
         ("celestrak",  celestrak_loop),
         ("rainviewer", rainviewer_loop),
         ("ovation",    ovation_loop),
+        ("launches",   launches_loop),
+        ("gdelt",      gdelt_loop),
+        ("swpc-sw",    space_weather_loop),
     ]
     tasks = [asyncio.create_task(fn(state), name=n) for n, fn in feeds]
     tasks.append(asyncio.create_task(_expire_loop(), name="expire"))

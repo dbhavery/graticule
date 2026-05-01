@@ -29,6 +29,8 @@ EXPIRE_SEC: dict[str, int] = {
     "hurricanes": 21600,  # 6 h — NHC publishes ~3-6 hourly
     "tsunamis":   3600,   # 1 h — alerts are short-lived
     "fires":      86400,  # 24 h — FIRMS daily cadence
+    "launches":   7200,   # 2 h — feed-side full replace each refresh anyway
+    "news":       7200,   # 2 h — likewise
 }
 
 
@@ -44,6 +46,8 @@ class StateStore:
         "fires":      {},
         "volcanoes":  {},  # one-shot static, but uses the same per-id dict shape
         "satellites": {},  # holds {id: {name, tle1, tle2}} — propagated client-side
+        "launches":   {},
+        "news":       {},
     })
     # Singleton metadata blobs (radar tile manifest, aurora grid, etc.)
     meta: dict[str, Any] = field(default_factory=dict)
