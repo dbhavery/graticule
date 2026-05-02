@@ -454,14 +454,12 @@ function bindUI() {
     cb.addEventListener('change', refreshAlerts);
   });
 
-  // Monitoring window toggles (sidebar + settings mirror)
-  document.querySelectorAll('input[data-monitor]').forEach((cb) => {
-    cb.addEventListener('change', () => applyMonitor(cb.dataset.monitor, cb.checked));
-  });
-  document.querySelectorAll('input[data-monitor-mirror]').forEach((cb) => {
-    cb.addEventListener('change', () => {
-      const sidebar = document.querySelector(`input[data-monitor="${cb.dataset.monitorMirror}"]`);
-      if (sidebar) { sidebar.checked = cb.checked; sidebar.dispatchEvent(new Event('change')); }
+  // Monitoring window toggles — header buttons
+  document.querySelectorAll('button.hdr-toggle[data-monitor]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const on = btn.getAttribute('aria-pressed') !== 'true';
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      applyMonitor(btn.dataset.monitor, on);
     });
   });
 
@@ -756,6 +754,12 @@ function doRefreshAlerts() {
   const cEl = document.getElementById('ap-count');
   cEl.textContent = filtered.length;
   cEl.dataset.zero = (filtered.length === 0) ? 'true' : 'false';
+  // Mirror unfiltered total into the header ALERTS chip
+  const hdrN = document.getElementById('hdr-n-alerts');
+  if (hdrN) {
+    hdrN.textContent = all.length;
+    hdrN.dataset.zero = (all.length === 0) ? 'true' : 'false';
+  }
 }
 
 function escapeHtml(s) {
@@ -769,8 +773,8 @@ function flyToEntity(entity) {
   } catch (e) { /* ignore */ }
 }
 
-// Monitoring windows — sidebar toggles show/hide the docked alerts panel and
-// the bottom-left live-feed ticker. Both default off.
+// Monitoring windows — header buttons toggle the docked alerts panel and the
+// bottom-left live-feed ticker. Both default off.
 function applyMonitor(name, on) {
   if (name === 'alerts_panel') {
     const ap = document.getElementById('alerts-panel');
@@ -783,9 +787,9 @@ function applyMonitor(name, on) {
     tk.classList.toggle('hidden', !on);
     document.body.classList.toggle('live-feed-on', on);
   }
-  // Mirror to settings-modal monitor checkboxes if open
-  const mirror = document.querySelector(`input[data-monitor-mirror="${name}"]`);
-  if (mirror) mirror.checked = on;
+  // Sync the matching header button if state was changed elsewhere
+  const btn = document.querySelector(`button.hdr-toggle[data-monitor="${name}"]`);
+  if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
 }
 
 // ---------- Clocks / telemetry ticker ---------------------------------------
@@ -1871,11 +1875,6 @@ function initSettings() {
       if (r.checked) { settings.units = r.value; saveSettings(); applyUnits(); }
     });
   });
-  document.querySelectorAll('input[name=view]').forEach((r) => {
-    r.addEventListener('change', () => {
-      if (r.checked) { settings.view = r.value; saveSettings(); applyView(); }
-    });
-  });
 
   // Open / close
   const overlay = document.getElementById('settings-overlay');
@@ -1889,7 +1888,6 @@ function initSettings() {
 
   // Apply on boot so first paint matches persisted state
   applyUnits();
-  applyView();
 }
 
 function applyUnits() {
@@ -1897,15 +1895,6 @@ function applyUnits() {
   if (lbl) lbl.textContent = settings.units === 'us' ? 'ALT (US)' : 'ALT';
   // formatAltitude reads settings.units directly on every tick, so the header
   // value catches up within ~1s on its own.
-}
-
-function applyView() {
-  if (!viewer || !viewer.scene) return;
-  try {
-    if      (settings.view === 'map')      viewer.scene.morphTo2D(0.4);
-    else if (settings.view === 'columbus') viewer.scene.morphToColumbusView(0.4);
-    else                                    viewer.scene.morphTo3D(0.4);
-  } catch (e) { console.warn('view morph failed', e); }
 }
 
 function drawParcelsWA(features) {

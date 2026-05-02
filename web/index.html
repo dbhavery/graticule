@@ -51,6 +51,14 @@
         <span class="tm-label">TRACKED</span>
         <span class="tm-val mono" id="tm-total">0</span>
       </div>
+      <div class="hdr-toggles">
+        <button class="hdr-toggle" data-monitor="alerts_panel" aria-pressed="false" title="Alerts &amp; Warnings">
+          <span class="hdr-dot" data-color="mon_alerts"></span><span>ALERTS</span><span class="hdr-n mono" id="hdr-n-alerts">0</span>
+        </button>
+        <button class="hdr-toggle" data-monitor="live_feed" aria-pressed="false" title="Live Feed">
+          <span class="hdr-dot" data-color="mon_feed"></span><span>FEED</span>
+        </button>
+      </div>
       <button id="settings-btn" class="settings-btn" aria-label="Settings">⚙</button>
     </div>
   </header>
@@ -120,12 +128,6 @@
         <label><input type="checkbox" data-layer="tsunamis"><span class="dot" data-color="tsunamis"></span><span class="lbl">Tsunami</span><span class="count" id="count-tsunamis">0</span></label>
         <label><input type="checkbox" data-layer="severe"><span class="dot" data-color="severe"></span><span class="lbl">Severe Wx</span><span class="count" id="count-severe">0</span></label>
         <label><input type="checkbox" data-layer="news"><span class="dot" data-color="news"></span><span class="lbl">Events</span><span class="count" id="count-news">0</span></label>
-      </details>
-
-      <details open class="cat" data-cat="monitoring">
-        <summary><span class="cat-name">MONITORING</span><span class="cat-count" id="cat-count-monitoring">0</span></summary>
-        <label><input type="checkbox" data-monitor="alerts_panel"><span class="dot" data-color="mon_alerts"></span><span class="lbl">Alerts &amp; Warnings</span><span class="count" id="count-mon-alerts">0</span></label>
-        <label><input type="checkbox" data-monitor="live_feed"><span class="dot" data-color="mon_feed"></span><span class="lbl">Live Feed</span><span class="count" id="count-mon-feed">0</span></label>
       </details>
 
     </div>
@@ -208,24 +210,6 @@
             <label class="sm-radio"><input type="radio" name="units" value="metric" checked><span>Metric</span><span class="sm-hint">km · m · °C</span></label>
             <label class="sm-radio"><input type="radio" name="units" value="us"><span>US Customary</span><span class="sm-hint">mi · ft · °F</span></label>
           </div>
-        </section>
-
-        <section class="sm-section">
-          <div class="sm-section-label">VIEW</div>
-          <div class="sm-radiogroup">
-            <label class="sm-radio"><input type="radio" name="view" value="globe" checked><span>Globe</span><span class="sm-hint">3D Earth</span></label>
-            <label class="sm-radio"><input type="radio" name="view" value="map"><span>Map</span><span class="sm-hint">Flat 2D</span></label>
-            <label class="sm-radio"><input type="radio" name="view" value="columbus"><span>Columbus</span><span class="sm-hint">2.5D</span></label>
-          </div>
-        </section>
-
-        <section class="sm-section">
-          <div class="sm-section-label">MONITORING WINDOWS</div>
-          <div class="sm-checkgroup">
-            <label class="sm-check"><input type="checkbox" data-monitor-mirror="alerts_panel"><span>Alerts &amp; Warnings</span></label>
-            <label class="sm-check"><input type="checkbox" data-monitor-mirror="live_feed"><span>Live Feed</span></label>
-          </div>
-          <div class="sm-hint sm-hint-block">Also available in the LAYERS sidebar under MONITORING.</div>
         </section>
 
         <section class="sm-section">
