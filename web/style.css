@@ -65,13 +65,24 @@ html, body {
   user-select: none;
 }
 
-#cesiumContainer { position: absolute; inset: 0; }
+/* Crosshair reticle cursor over the globe canvas. SVG, 24x24, anchored at
+ * center so the click point is exactly under the cross.
+ */
+#cesiumContainer {
+  position: absolute; inset: 0;
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><g fill='none' stroke='%234dd2ff' stroke-width='1.2' opacity='0.85'><circle cx='12' cy='12' r='5'/><line x1='12' y1='2'  x2='12' y2='8'/><line x1='12' y1='16' x2='12' y2='22'/><line x1='2'  y1='12' x2='8'  y2='12'/><line x1='16' y1='12' x2='22' y2='12'/></g></svg>") 12 12, crosshair;
+}
 
-/* Subtle vignette + faint scanline for cinematic feel */
+/* Subtle vignette + faint scanline. Translates by a few px in response to
+ * mouse movement (driven by --vx / --vy CSS variables set in app.js) for a
+ * micro-parallax effect that keeps the chrome feeling alive.
+ */
 #overlay-vignette {
   position: absolute; inset: 0;
   pointer-events: none;
   z-index: 5;
+  transform: translate3d(calc(var(--vx, 0) * -4px), calc(var(--vy, 0) * -4px), 0);
+  transition: transform 250ms ease-out;
   background:
     radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%),
     repeating-linear-gradient(
@@ -81,6 +92,34 @@ html, body {
       transparent 1px,
       transparent 3px
     );
+}
+
+/* ──────────  GLOBAL ANIMATIONS  ────────── */
+@keyframes brand-reveal {
+  from { letter-spacing: 0.5px; opacity: 0; }
+  to   { letter-spacing: 4px;   opacity: 1; }
+}
+@keyframes brand-sub-reveal {
+  0%   { opacity: 0; transform: translateX(-4px); }
+  60%  { opacity: 0; }
+  100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes globe-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes chip-flicker {
+  0%   { background: rgba(34, 204, 102, 0.22); box-shadow: 0 0 8px rgba(34, 204, 102, 0.45); }
+  100% { background: rgba(255,255,255,0.04); box-shadow: none; }
+}
+@keyframes digit-roll {
+  0%   { transform: translateY(-30%); opacity: 0; }
+  50%  { opacity: 1; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes hist-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
 }
 
 .mono { font-family: var(--mono); font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
@@ -116,6 +155,7 @@ html, body {
   font-size: 13px;
   letter-spacing: 4px;
   color: var(--text);
+  animation: brand-reveal 700ms ease-out 100ms both;
 }
 .brand-sub {
   font-size: 9px;
@@ -124,7 +164,9 @@ html, body {
   padding-left: 8px;
   border-left: 1px solid var(--panel-rule);
   margin-left: 4px;
+  animation: brand-sub-reveal 1000ms ease-out 250ms both;
 }
+#cesiumContainer { animation: globe-fade 900ms ease-out both; }
 
 .telemetry {
   display: flex;
@@ -529,6 +571,133 @@ html, body {
 .chip[data-state=bad]  .chip-dot { background: var(--bad);  box-shadow: 0 0 4px var(--bad); }
 .chip[data-state=off]  { opacity: 0.45; }
 .chip[data-state=off]  .chip-dot { background: var(--text-mute); }
+/* Brief flicker when a feed receives fresh data */
+.chip.flicker { animation: chip-flicker 700ms ease-out; }
+
+/* ──────────  COMPASS / TILT INDICATOR  ────────── */
+#compass {
+  position: absolute;
+  right: 16px;
+  bottom: 92px;
+  z-index: 10;
+  width: 72px;
+  height: 72px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 50%;
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+}
+#compass svg { width: 60px; height: 60px; display: block; }
+.cmp-rose {
+  transform-origin: 50% 50%;
+  transition: transform 140ms ease-out;
+}
+.cmp-tilt {
+  transform-origin: 50% 50%;
+  transition: transform 140ms ease-out;
+}
+.cmp-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  fill: var(--text);
+  text-anchor: middle;
+  dominant-baseline: middle;
+  paint-order: stroke;
+  stroke: black;
+  stroke-width: 2px;
+}
+
+/* ──────────  RECENT-CLICK HISTORY STRIP  ────────── */
+#history-strip {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  backdrop-filter: blur(8px);
+  max-width: 60vw;
+  pointer-events: auto;
+}
+#history-strip:empty { display: none; }
+.hist-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--panel-rule);
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: hist-pop-in 220ms ease-out both;
+}
+.hist-item:hover { color: var(--text); border-color: var(--panel-border); background: rgba(255,255,255,0.06); }
+.hist-item .hist-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+/* ──────────  RIGHT-CLICK CONTEXT MENU  ────────── */
+#ctx-menu {
+  position: absolute;
+  z-index: 60;
+  min-width: 160px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 4px 0;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font-size: 11.5px;
+}
+#ctx-menu.hidden { display: none; }
+.ctx-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--text-dim);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ctx-item:hover { background: rgba(77, 210, 255, 0.10); color: var(--text); }
+.ctx-item .ctx-meta { color: var(--text-mute); font-family: var(--mono); font-size: 10px; }
+.ctx-sep { height: 1px; margin: 4px 8px; background: var(--panel-rule); }
+
+/* ──────────  CAMERA PRESETS LIST  ────────── */
+#presets-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.preset-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--panel-rule);
+  border-radius: 3px;
+  background: rgba(255,255,255,0.03);
+  font-size: 11.5px;
+}
+.preset-row .preset-name { flex: 1; cursor: pointer; }
+.preset-row .preset-name:hover { color: var(--accent); }
+.preset-row .preset-del {
+  background: none; border: 0; color: var(--text-mute); cursor: pointer;
+  font-size: 14px; line-height: 1;
+}
+.preset-row .preset-del:hover { color: var(--bad); }
+#presets-empty { font-size: 10.5px; color: var(--text-mute); margin-top: 4px; }
+
+/* ──────────  TELEMETRY DIGIT ROLL  ────────── */
+.tm-val.rolling {
+  display: inline-block;
+  animation: digit-roll 240ms ease-out;
+}
 
 /* ──────────  HOVER TOOLTIP  ────────── */
 #hover-tip {

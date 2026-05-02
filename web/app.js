@@ -197,6 +197,8 @@ const TICKER_MAX = 6;
   await applyServerCapabilities();
   bindUI();
   applyInitialLayerState();
+  initContextMenu();
+  renderPresetsList();
   startClocks();
   connectWebSocket();
 })();
@@ -237,6 +239,13 @@ async function initViewer() {
   viewer.scene.backgroundColor = Cesium.Color.BLACK;
   viewer.scene.globe.enableLighting = true;
   viewer.scene.skyAtmosphere.show = true;
+  // Richer atmospheric scattering — deepens the limb, cools the daylight band
+  viewer.scene.skyAtmosphere.hueShift        = -0.04;
+  viewer.scene.skyAtmosphere.saturationShift =  0.18;
+  viewer.scene.skyAtmosphere.brightnessShift = -0.06;
+  // Ground atmosphere too — softens day/night terminator with a warm bleed
+  viewer.scene.globe.showGroundAtmosphere = true;
+  viewer.scene.globe.atmosphereLightIntensity = 12.0;
 
   // 3D buildings — OSM Buildings (Cesium ion) and Google Photorealistic 3D Tiles
   // are both gated on user-supplied free keys. They auto-attach when present.
@@ -249,16 +258,44 @@ async function initViewer() {
   // Allow the camera to descend into the surface band where 3D buildings live
   viewer.scene.screenSpaceCameraController.minimumZoomDistance = 50;
 
-  // Click → panel
+  // Click → panel + ripple + history push
   const click = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   click.setInputAction((c) => {
     const picked = viewer.scene.pick(c.position);
-    if (Cesium.defined(picked) && picked.id) showPanel(picked.id);
+    if (Cesium.defined(picked) && picked.id) {
+      showPanel(picked.id);
+      pushHistory(picked.id);
+    }
+    spawnClickRipple(c.position);
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-  // Mouse move → cursor lat/lon readout + hover tooltip
+  // Right-click → context menu (Center camera here / Save preset)
+  click.setInputAction((c) => {
+    const ray = viewer.camera.getPickRay(c.position);
+    if (!ray) return;
+    const cart = viewer.scene.globe.pick(ray, viewer.scene);
+    if (!cart) return;
+    const carto = Cesium.Cartographic.fromCartesian(cart);
+    const lat = Cesium.Math.toDegrees(carto.latitude);
+    const lon = Cesium.Math.toDegrees(carto.longitude);
+    showContextMenu(c.position.x, c.position.y, { lat, lon });
+  }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
+
+  // Camera changed → drive compass rose + tilt indicator
+  viewer.scene.preRender.addEventListener(updateCompass);
+
+  // Mouse move → cursor lat/lon readout + hover tooltip + vignette parallax
   const move = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   move.setInputAction((m) => {
+    // Vignette parallax: normalize cursor pos to -1..+1 across the canvas and
+    // hand it to CSS as --vx/--vy. The overlay translates a few pixels for
+    // a subtle "the screen moves with you" effect.
+    const cv = viewer.scene.canvas;
+    const vx = ((m.endPosition.x / cv.clientWidth)  * 2 - 1);
+    const vy = ((m.endPosition.y / cv.clientHeight) * 2 - 1);
+    document.documentElement.style.setProperty('--vx', vx.toFixed(3));
+    document.documentElement.style.setProperty('--vy', vy.toFixed(3));
+
     const ray = viewer.camera.getPickRay(m.endPosition);
     const el = document.getElementById('tm-cursor');
     if (ray) {
@@ -499,9 +536,38 @@ function scheduleHoverTip(entity, screenPos) {
   }, delay);
 }
 
+// Hover-scale state — we restore the entity's original pixelSize on leave.
+let hoverScaledEntity = null;
+let hoverScaledOrig = null;
+
+function applyHoverScale(entity) {
+  // Restore previous if any
+  if (hoverScaledEntity && hoverScaledEntity !== entity && hoverScaledOrig != null) {
+    if (hoverScaledEntity.point) hoverScaledEntity.point.pixelSize = hoverScaledOrig;
+  }
+  hoverScaledEntity = null;
+  hoverScaledOrig = null;
+  if (!entity || !entity.point) return;
+  const cur = entity.point.pixelSize;
+  const v = (cur && cur.getValue) ? cur.getValue() : cur;
+  if (typeof v !== 'number') return;
+  hoverScaledOrig = v;
+  hoverScaledEntity = entity;
+  entity.point.pixelSize = Math.min(20, v * 1.7);
+}
+
+function clearHoverScale() {
+  if (hoverScaledEntity && hoverScaledOrig != null && hoverScaledEntity.point) {
+    hoverScaledEntity.point.pixelSize = hoverScaledOrig;
+  }
+  hoverScaledEntity = null;
+  hoverScaledOrig = null;
+}
+
 function showHoverTip(entity, screenPos) {
   const props = entity.properties.getValue ? entity.properties.getValue() : entity.properties;
   if (!props || !props.kind) { hideHoverTip(); return; }
+  applyHoverScale(entity);
   const tip = document.getElementById('hover-tip');
   const summary = summarizeEntity(props);
   document.getElementById('ht-kind').textContent  = KIND_LABEL[props.kind] || (props.kind || '').toUpperCase();
@@ -529,6 +595,7 @@ function showHoverTip(entity, screenPos) {
 function hideHoverTip() {
   const tip = document.getElementById('hover-tip');
   if (tip && !tip.classList.contains('hidden')) tip.classList.add('hidden');
+  clearHoverScale();
 }
 
 function summarizeEntity(p) {
@@ -760,6 +827,11 @@ function doRefreshAlerts() {
     hdrN.textContent = all.length;
     hdrN.dataset.zero = (all.length === 0) ? 'true' : 'false';
   }
+  // Pulse-attach any new critical alert markers
+  attachPulseToAlertEntities();
+  // Optional sound on genuinely new tsunamis / active launches
+  if (window.__prevAlertSet) maybeBeepForNewAlerts(window.__prevAlertSet, all);
+  window.__prevAlertSet = new Set(all.map(a => a.kind + ':' + a.id));
 }
 
 function escapeHtml(s) {
@@ -795,20 +867,29 @@ function applyMonitor(name, on) {
 // ---------- Clocks / telemetry ticker ---------------------------------------
 
 function startClocks() {
+  let prevSecond = null;
   setInterval(() => {
     const now = new Date();
     const utc = now.toISOString().slice(11, 19);
-    document.getElementById('tm-utc').textContent = utc;
+    const utcEl = document.getElementById('tm-utc');
+    if (prevSecond !== utc) {
+      rollText(utcEl, utc);
+      prevSecond = utc;
+    }
 
-    // Camera altitude (units-aware)
+    // Camera altitude (units-aware) — only roll on actual change
     const altEl = document.getElementById('tm-alt');
     if (viewer && viewer.camera) {
       const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
-      if (carto) altEl.textContent = formatAltitude(carto.height);
+      if (carto) {
+        const txt = formatAltitude(carto.height);
+        if (altEl.textContent !== txt) rollText(altEl, txt);
+      }
     }
 
     // Feed-chip aging — chips that haven't updated in 5x their poll go warn
     refreshFeedChips();
+    refreshPlaneStatus();
   }, 1000);
 
   // Recompute alerts every 30s so age-windowed items (quakes 24h, launches ±3h)
@@ -856,6 +937,13 @@ function refreshFeedChips() {
 function noteFeed(layer) {
   feedActivity[layer] = Date.now();
   refreshFeedChips();
+  // Brief flicker on the matching chip to signal fresh data
+  const chip = document.querySelector(`.chip[data-feed="${layer}"]`);
+  if (chip) {
+    chip.classList.remove('flicker');
+    void chip.offsetWidth;       // restart the keyframe
+    chip.classList.add('flicker');
+  }
 }
 
 // ---------- Counts / category roll-up --------------------------------------
@@ -1020,6 +1108,21 @@ function pushDeltasToTicker(layer, entries) {
   }
 }
 
+// Cesium's reference plane glTF — public sample asset hosted by CesiumGS on
+// GitHub. Used at very-close zoom (<50 km) so dots become recognizable
+// silhouettes when you fly down to a city. Falls back to dot if it fails.
+const PLANE_MODEL_URL = 'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/models/CesiumAir/Cesium_Air.glb';
+const MODEL_SWAP_DISTANCE_M = 50_000;
+
+function planeOrientation(pos, headingDeg) {
+  if (headingDeg == null || !isFinite(headingDeg)) return undefined;
+  const hpr = new Cesium.HeadingPitchRoll(
+    Cesium.Math.toRadians(headingDeg - 90),  // model nose along +X; subtract 90° to align with heading=0=N
+    0, 0
+  );
+  return Cesium.Transforms.headingPitchRollQuaternion(pos, hpr);
+}
+
 function upsertEntity(layer, id, data) {
   if (data.lat == null || data.lon == null) return;
   const ds = dataSources[layer];
@@ -1030,12 +1133,30 @@ function upsertEntity(layer, id, data) {
   const props = { kind: layer, id, ...data };
 
   if (!ent) {
-    ent = ds.entities.add({
+    const g = graphicsFor(layer, data);
+    if (layer === 'planes') {
+      // Far-zoom dot, near-zoom 3D model — DDCs are complementary so only one
+      // shows at a time.
+      g.model = {
+        uri: PLANE_MODEL_URL,
+        minimumPixelSize: 28,
+        maximumScale: 80000,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, MODEL_SWAP_DISTANCE_M),
+        runAnimations: false,
+      };
+      if (g.point) g.point.distanceDisplayCondition = new Cesium.DistanceDisplayCondition(MODEL_SWAP_DISTANCE_M, ALWAYS_VISIBLE_FAR_M);
+    }
+    const opts = {
       id: `${layer}:${id}`,
       position: pos,
-      ...graphicsFor(layer, data),
+      ...g,
       properties: props,
-    });
+    };
+    if (layer === 'planes') {
+      const ori = planeOrientation(pos, data.heading);
+      if (ori) opts.orientation = ori;
+    }
+    ent = ds.entities.add(opts);
     map.set(id, ent);
     setCount(layer, map.size);
     // Live: stream new planes/ships into the ticker as they appear
@@ -1047,6 +1168,10 @@ function upsertEntity(layer, id, data) {
   } else {
     ent.position = pos;
     Object.assign(ent.properties, props);
+    if (layer === 'planes') {
+      const ori = planeOrientation(pos, data.heading);
+      if (ori) ent.orientation = ori;
+    }
     const g = graphicsFor(layer, data);
     if (g.point && ent.point) {
       ent.point.pixelSize = g.point.pixelSize;
@@ -1956,4 +2081,338 @@ function drawParcelsWA(features) {
   }
   setCount('parcels_wa', features.length);
   updateCategoryCounts();
+}
+
+// ---------- Compass + tilt indicator ----------------------------------------
+
+function updateCompass() {
+  const rose = document.getElementById('cmp-rose');
+  const tilt = document.getElementById('cmp-tilt');
+  if (!rose || !tilt || !viewer) return;
+  const headingDeg = -Cesium.Math.toDegrees(viewer.camera.heading);
+  const pitchDeg   =  Cesium.Math.toDegrees(viewer.camera.pitch);
+  rose.style.transform = `rotate(${headingDeg}deg)`;
+  // Pitch: -90 (looking straight down) → tilt line is flat;
+  //          0 (looking at horizon)   → tilt line rotates fully
+  const tiltAngle = (pitchDeg + 90);  // 0..90 typically
+  tilt.style.transform = `rotate(${(tiltAngle * 0.4).toFixed(1)}deg)`;
+}
+
+// ---------- Click ripple ----------------------------------------------------
+//
+// On every left-click, plant a ground-clamped ring at the picked position and
+// animate its radius outward + alpha down over ~900 ms, then remove it.
+
+let rippleDS = null;
+function spawnClickRipple(screenPos) {
+  if (!rippleDS) {
+    rippleDS = new Cesium.CustomDataSource('ripple');
+    viewer.dataSources.add(rippleDS);
+  }
+  const ray = viewer.camera.getPickRay(screenPos);
+  if (!ray) return;
+  const cart = viewer.scene.globe.pick(ray, viewer.scene);
+  if (!cart) return;
+
+  const start = Date.now();
+  const DUR = 900;
+  const camDist = Cesium.Cartesian3.distance(viewer.camera.position, cart);
+  const peakRadius = Math.min(2_000_000, Math.max(2000, camDist * 0.04));
+
+  const radiusProp = new Cesium.CallbackProperty(() => {
+    const t = Math.min(1, (Date.now() - start) / DUR);
+    return peakRadius * (0.2 + 0.8 * t);
+  }, false);
+  const colorProp = new Cesium.CallbackProperty(() => {
+    const t = Math.min(1, (Date.now() - start) / DUR);
+    return Cesium.Color.fromCssColorString('#4dd2ff').withAlpha(0.7 * (1 - t));
+  }, false);
+
+  const ent = rippleDS.entities.add({
+    position: cart,
+    ellipse: {
+      semiMajorAxis: radiusProp,
+      semiMinorAxis: radiusProp,
+      material: Cesium.Color.TRANSPARENT,
+      outline: true,
+      outlineColor: colorProp,
+      outlineWidth: 2.0,
+      height: 0,
+    },
+  });
+  setTimeout(() => { try { rippleDS.entities.remove(ent); } catch {} }, DUR + 60);
+}
+
+// ---------- Pulse animation on critical alert markers -----------------------
+//
+// Cesium can't keyframe directly, but a CallbackProperty re-evaluated each
+// frame gives us a sine-driven pulse. We walk the active alert markers each
+// time alerts refresh and (re)wire their pixelSize to a pulsing function.
+
+const PULSE_ATTACHED = new WeakSet();
+function attachPulseToAlertEntities() {
+  const want = new Set();
+  // Tsunamis — every entity
+  if (entitiesByLayer.tsunamis) for (const e of entitiesByLayer.tsunamis.values()) want.add(e);
+  // Severe Wx with high-severity events
+  if (entitiesByLayer.severe) for (const e of entitiesByLayer.severe.values()) {
+    const p = e.properties.getValue ? e.properties.getValue() : e.properties;
+    const ev = (p.event || '').toLowerCase();
+    if (ev.includes('tornado') || ev.includes('flash flood') || ev.includes('hurricane')) want.add(e);
+  }
+  // Fresh quakes M5+
+  if (entitiesByLayer.quakes) for (const e of entitiesByLayer.quakes.values()) {
+    const p = e.properties.getValue ? e.properties.getValue() : e.properties;
+    if (typeof p.mag === 'number' && p.mag >= 5) want.add(e);
+  }
+  // Active launches (within ±1 h of net)
+  if (entitiesByLayer.launches) for (const e of entitiesByLayer.launches.values()) {
+    const p = e.properties.getValue ? e.properties.getValue() : e.properties;
+    const dt = p.net ? (Date.parse(p.net) - Date.now()) / 3.6e6 : null;
+    if (dt != null && Math.abs(dt) < 1) want.add(e);
+  }
+  // Active volcanoes
+  if (entitiesByLayer.volcanoes) for (const e of entitiesByLayer.volcanoes.values()) {
+    const p = e.properties.getValue ? e.properties.getValue() : e.properties;
+    if (p.active === true) want.add(e);
+  }
+
+  for (const ent of want) {
+    if (PULSE_ATTACHED.has(ent) || !ent.point) continue;
+    const orig = (ent.point.pixelSize && ent.point.pixelSize.getValue)
+                 ? ent.point.pixelSize.getValue() : ent.point.pixelSize;
+    if (typeof orig !== 'number') continue;
+    ent.point.pixelSize = new Cesium.CallbackProperty(() => {
+      // 0.7 Hz breathing; +30% peak amplitude
+      const t = Date.now() / 1000;
+      return orig + Math.sin(t * 4.4) * orig * 0.30;
+    }, false);
+    PULSE_ATTACHED.add(ent);
+  }
+}
+
+// ---------- Right-click context menu ----------------------------------------
+
+let ctxLatLon = null;
+function showContextMenu(x, y, latLon) {
+  const m = document.getElementById('ctx-menu');
+  if (!m) return;
+  ctxLatLon = latLon;
+  document.getElementById('ctx-coord').textContent =
+    `${latLon.lat.toFixed(2)}, ${latLon.lon.toFixed(2)}`;
+  m.style.left = `${x + 4}px`;
+  m.style.top  = `${y + 4}px`;
+  m.classList.remove('hidden');
+}
+function hideContextMenu() {
+  const m = document.getElementById('ctx-menu');
+  if (m) m.classList.add('hidden');
+  ctxLatLon = null;
+}
+function initContextMenu() {
+  const m = document.getElementById('ctx-menu');
+  if (!m) return;
+  m.addEventListener('click', (e) => {
+    const it = e.target.closest('.ctx-item');
+    if (!it) return;
+    const act = it.dataset.act;
+    if (act === 'center' && ctxLatLon) {
+      const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
+      const alt = carto ? carto.height : 1.5e6;
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(ctxLatLon.lon, ctxLatLon.lat, alt),
+        duration: 1.0,
+      });
+    } else if (act === 'preset' && ctxLatLon) {
+      const name = prompt('Preset name?');
+      if (name) saveCameraPreset(name);
+    }
+    hideContextMenu();
+  });
+  // Click anywhere else closes
+  document.addEventListener('mousedown', (e) => {
+    if (!m.contains(e.target)) hideContextMenu();
+  });
+}
+
+// ---------- Camera presets --------------------------------------------------
+
+const PRESETS_KEY = 'overwatch.presets.v1';
+
+function loadPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '[]'); } catch { return []; }
+}
+function persistPresets(list) {
+  try { localStorage.setItem(PRESETS_KEY, JSON.stringify(list)); } catch {}
+}
+
+function saveCameraPreset(name) {
+  const c = viewer.camera;
+  const carto = Cesium.Cartographic.fromCartesian(c.position);
+  if (!carto) return;
+  const list = loadPresets();
+  list.push({
+    name,
+    lat: Cesium.Math.toDegrees(carto.latitude),
+    lon: Cesium.Math.toDegrees(carto.longitude),
+    alt: carto.height,
+    heading: c.heading,
+    pitch: c.pitch,
+    roll: c.roll,
+  });
+  persistPresets(list);
+  renderPresetsList();
+}
+
+function flyToPreset(p) {
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
+    orientation: { heading: p.heading, pitch: p.pitch, roll: p.roll },
+    duration: 1.4,
+  });
+}
+
+function renderPresetsList() {
+  const host = document.getElementById('presets-list');
+  const empty = document.getElementById('presets-empty');
+  if (!host || !empty) return;
+  const list = loadPresets();
+  host.innerHTML = '';
+  empty.style.display = list.length ? 'none' : '';
+  list.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'preset-row';
+    row.innerHTML = `<span class="preset-name">${escapeHtml(p.name)}</span>
+      <span class="ctx-meta">${p.lat.toFixed(1)}, ${p.lon.toFixed(1)}</span>
+      <button class="preset-del" aria-label="Delete">×</button>`;
+    row.querySelector('.preset-name').addEventListener('click', () => flyToPreset(p));
+    row.querySelector('.preset-del').addEventListener('click', () => {
+      const cur = loadPresets();
+      cur.splice(i, 1);
+      persistPresets(cur);
+      renderPresetsList();
+    });
+    host.appendChild(row);
+  });
+}
+
+// ---------- Recent-clicked history strip -----------------------------------
+
+const HISTORY_MAX = 5;
+const history = [];
+
+function pushHistory(entity) {
+  const props = entity.properties.getValue ? entity.properties.getValue() : entity.properties;
+  if (!props || !props.kind) return;
+  const summary = summarizeEntity(props);
+  const item = {
+    eid: entity.id,
+    label: summary.title || props.id || 'Object',
+    kind: props.kind,
+    pos: entity.position && entity.position.getValue ? entity.position.getValue(Cesium.JulianDate.now()) : null,
+  };
+  // Dedup by entity id
+  const existing = history.findIndex(h => h.eid === item.eid);
+  if (existing >= 0) history.splice(existing, 1);
+  history.unshift(item);
+  if (history.length > HISTORY_MAX) history.length = HISTORY_MAX;
+  renderHistoryStrip();
+}
+
+function renderHistoryStrip() {
+  const host = document.getElementById('history-strip');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const h of history) {
+    const el = document.createElement('div');
+    el.className = 'hist-item';
+    el.innerHTML = `<span class="hist-dot" style="background:${dotColorFor(h.kind)}"></span><span>${escapeHtml(h.label)}</span>`;
+    el.title = `${h.kind} · ${h.label}`;
+    el.addEventListener('click', () => {
+      if (!h.pos) return;
+      viewer.camera.flyTo({
+        destination: h.pos,
+        duration: 1.0,
+        offset: new Cesium.HeadingPitchRange(0, -Math.PI / 3, 800_000),
+      });
+      // Try to re-open the panel for that entity
+      const ds = dataSources[h.kind];
+      if (ds) {
+        const matches = ds.entities.values.filter(e => e.id === h.eid);
+        if (matches[0]) showPanel(matches[0]);
+      }
+    });
+    host.appendChild(el);
+  }
+}
+
+function dotColorFor(kind) {
+  const v = (COLORS[kind] && COLORS[kind].toCssColorString) ? COLORS[kind].toCssColorString() : '#94a3b8';
+  return v;
+}
+
+// ---------- Sound effects ---------------------------------------------------
+
+let audioCtx = null;
+function ensureAudio() {
+  if (audioCtx) return audioCtx;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch { audioCtx = null; }
+  return audioCtx;
+}
+
+function beep({ freq = 660, dur = 0.18, gain = 0.08 } = {}) {
+  if (!soundOn()) return;
+  const ctx = ensureAudio(); if (!ctx) return;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = 'sine';
+  o.frequency.value = freq;
+  g.gain.value = 0;
+  o.connect(g); g.connect(ctx.destination);
+  const now = ctx.currentTime;
+  g.gain.linearRampToValueAtTime(gain, now + 0.01);
+  g.gain.linearRampToValueAtTime(0,    now + dur);
+  o.start(now);
+  o.stop(now + dur);
+}
+
+function soundOn() {
+  const cb = document.getElementById('sound-alerts');
+  return !!(cb && cb.checked);
+}
+
+function maybeBeepForNewAlerts(prevSet, newAlerts) {
+  if (!soundOn()) return;
+  for (const a of newAlerts) {
+    if (prevSet.has(a.kind + ':' + a.id)) continue;
+    if (a.kind === 'tsunamis') beep({ freq: 880, dur: 0.32, gain: 0.10 });
+    else if (a.kind === 'launches' && a.sev === 'active') beep({ freq: 990, dur: 0.18 });
+  }
+}
+
+// ---------- Telemetry digit-roll on text change -----------------------------
+
+function rollText(el, newText) {
+  if (!el) return;
+  if (el.textContent === newText) return;
+  el.textContent = newText;
+  el.classList.remove('rolling'); void el.offsetWidth; el.classList.add('rolling');
+}
+
+// ---------- Plane feed status surfacing ------------------------------------
+// (OpenSky anonymous tier 429s often. Acknowledge in the layer label so Don
+// can tell at a glance whether it's a feed problem vs nothing-there.)
+
+function refreshPlaneStatus() {
+  const layer = document.querySelector('input[data-layer="planes"]');
+  if (!layer) return;
+  const last = feedActivity['planes'];
+  const ageSec = last ? (Date.now() - last) / 1000 : null;
+  const lbl = layer.parentElement.querySelector('.lbl');
+  if (!lbl) return;
+  if (ageSec == null)         lbl.textContent = 'Planes';
+  else if (ageSec > 90)       lbl.textContent = 'Planes (rate-limited)';
+  else                        lbl.textContent = 'Planes';
 }

@@ -184,6 +184,34 @@
     <ul id="ticker-list"></ul>
   </div>
 
+  <!-- ─────────  RECENT-CLICK HISTORY STRIP  ───────── -->
+  <div id="history-strip"></div>
+
+  <!-- ─────────  COMPASS / TILT  ───────── -->
+  <div id="compass">
+    <svg viewBox="0 0 60 60" aria-label="compass">
+      <!-- Outer ring -->
+      <circle cx="30" cy="30" r="27" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+      <!-- Tilt horizon disk (rotates with camera pitch) -->
+      <g class="cmp-tilt" id="cmp-tilt">
+        <line x1="6" y1="30" x2="54" y2="30" stroke="rgba(77,210,255,0.35)" stroke-width="1"/>
+      </g>
+      <!-- Compass rose (rotates with camera heading) -->
+      <g class="cmp-rose" id="cmp-rose">
+        <path d="M30 6 L34 30 L30 34 L26 30 Z" fill="#ef4444"/>
+        <path d="M30 54 L34 30 L30 26 L26 30 Z" fill="#94a3b8"/>
+      </g>
+      <text class="cmp-label" x="30" y="14">N</text>
+    </svg>
+  </div>
+
+  <!-- ─────────  RIGHT-CLICK CONTEXT MENU  ───────── -->
+  <div id="ctx-menu" class="hidden">
+    <div class="ctx-item" data-act="center">Center camera here<span class="ctx-meta" id="ctx-coord">—</span></div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item" data-act="preset">Save as preset…</div>
+  </div>
+
   <!-- ─────────  BOTTOM-RIGHT FEED HEALTH STRIP  ───────── -->
   <div id="feedstrip">
     <div class="strip-head">
@@ -219,6 +247,19 @@
             <input type="range" id="hover-delay" min="0" max="2000" step="100" value="500">
             <span id="hover-delay-val" class="mono">500 ms</span>
           </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">SOUND</div>
+          <div class="sm-checkgroup">
+            <label class="sm-check"><input type="checkbox" id="sound-alerts"><span>Alert beep on new tsunami / launch</span></label>
+          </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">CAMERA PRESETS</div>
+          <div id="presets-list"></div>
+          <div id="presets-empty">No presets saved. Right-click the globe → "Save as preset" to capture the current camera.</div>
         </section>
 
       </div>
