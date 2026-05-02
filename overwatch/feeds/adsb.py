@@ -1,4 +1,8 @@
-"""OpenSky Network ADS-B poll — anonymous, ~15s cadence.
+"""OpenSky Network ADS-B poll.
+
+Anonymous tier rate-limits hard (~5–10 req/min) so by default planes appear
+in bursts. Setting OPENSKY_USER / OPENSKY_PASS in .env enables HTTP Basic
+auth which lifts the limit to ~4000 req/day — much smoother.
 
 State vector schema (per OpenSky API):
   [icao24, callsign, origin_country, time_position, last_contact, longitude,
@@ -8,17 +12,30 @@ State vector schema (per OpenSky API):
 from __future__ import annotations
 
 import asyncio
+import os
 
 import httpx
 from loguru import logger
 
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
-POLL_SEC = 15  # be polite to the anonymous endpoint
 TIMEOUT_SEC = 25
 
 
 async def opensky_loop(state) -> None:
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "overwatch/0.1"}) as client:
+    user = os.getenv("OPENSKY_USER")
+    pw = os.getenv("OPENSKY_PASS")
+    auth = (user, pw) if (user and pw) else None
+    poll_sec = 6 if auth else 15  # authenticated quota is generous; anon must crawl
+    if auth:
+        logger.info(f"ADS-B: authenticated as {user!r}, polling every {poll_sec}s")
+    else:
+        logger.info(f"ADS-B: anonymous tier (set OPENSKY_USER/PASS in .env to lift rate limit)")
+
+    async with httpx.AsyncClient(
+        timeout=TIMEOUT_SEC,
+        headers={"User-Agent": "overwatch/0.1"},
+        auth=auth,
+    ) as client:
         while True:
             try:
                 r = await client.get(OPENSKY_URL)
@@ -44,9 +61,12 @@ async def opensky_loop(state) -> None:
                     kept += 1
                 logger.info(f"ADS-B: poll returned {len(states)} states, {kept} positioned, {len(state.planes)} tracked")
             except httpx.HTTPStatusError as e:
-                logger.warning(f"ADS-B http {e.response.status_code} — backing off 60s")
-                await asyncio.sleep(60)
+                code = e.response.status_code
+                # Authenticated tier should rarely hit 429; anon hits it constantly
+                backoff = 30 if auth else 60
+                logger.warning(f"ADS-B http {code} — backing off {backoff}s")
+                await asyncio.sleep(backoff)
                 continue
             except Exception as e:
                 logger.warning(f"ADS-B poll failed: {e}")
-            await asyncio.sleep(POLL_SEC)
+            await asyncio.sleep(poll_sec)

@@ -230,11 +230,31 @@ async function initViewer() {
   });
 
   viewer.imageryLayers.removeAll();
-  viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    maximumLevel: 19,
-    credit: 'Tiles © Esri',
-  }));
+  // Prefer Cesium ion World Imagery (Bing-backed, 19+ levels) when a token is
+  // configured — significantly higher detail at city/block scale. Fall back
+  // to ESRI for token-less use.
+  if (cfg.cesium_ion_token) {
+    try {
+      const layer = await Cesium.IonImageryProvider.fromAssetId(2);
+      viewer.imageryLayers.addImageryProvider(layer);
+    } catch (e) {
+      console.warn('Cesium ion imagery failed, falling back to ESRI:', e);
+      viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 19,
+        credit: 'Tiles © Esri',
+      }));
+    }
+  } else {
+    viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      maximumLevel: 19,
+      credit: 'Tiles © Esri',
+    }));
+  }
+  // Allow Cesium to over-zoom past native level (interpolated, lossy but the
+  // user sees something instead of a black tile).
+  viewer.scene.maximumScreenSpaceError = 1.5;
 
   viewer.scene.backgroundColor = Cesium.Color.BLACK;
   viewer.scene.globe.enableLighting = true;
@@ -281,20 +301,29 @@ async function initViewer() {
     showContextMenu(c.position.x, c.position.y, { lat, lon });
   }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
 
-  // Camera changed → drive compass rose + tilt indicator
-  viewer.scene.preRender.addEventListener(updateCompass);
+  // Camera changed → drive compass rose + tilt indicator. camera.changed
+  // fires only when the camera actually moves (configurable threshold), not
+  // every frame, so this is cheap.
+  viewer.camera.percentageChanged = 0.001;  // very sensitive
+  viewer.camera.changed.addEventListener(updateCompass);
+  // Initial draw
+  updateCompass();
 
   // Mouse move → cursor lat/lon readout + hover tooltip + vignette parallax
   const move = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  let parallaxRaf = 0, parallaxX = 0, parallaxY = 0;
   move.setInputAction((m) => {
-    // Vignette parallax: normalize cursor pos to -1..+1 across the canvas and
-    // hand it to CSS as --vx/--vy. The overlay translates a few pixels for
-    // a subtle "the screen moves with you" effect.
+    // Vignette parallax — store latest pos, schedule one DOM write per frame.
     const cv = viewer.scene.canvas;
-    const vx = ((m.endPosition.x / cv.clientWidth)  * 2 - 1);
-    const vy = ((m.endPosition.y / cv.clientHeight) * 2 - 1);
-    document.documentElement.style.setProperty('--vx', vx.toFixed(3));
-    document.documentElement.style.setProperty('--vy', vy.toFixed(3));
+    parallaxX = ((m.endPosition.x / cv.clientWidth)  * 2 - 1);
+    parallaxY = ((m.endPosition.y / cv.clientHeight) * 2 - 1);
+    if (!parallaxRaf) {
+      parallaxRaf = requestAnimationFrame(() => {
+        parallaxRaf = 0;
+        document.documentElement.style.setProperty('--vx', parallaxX.toFixed(3));
+        document.documentElement.style.setProperty('--vy', parallaxY.toFixed(3));
+      });
+    }
 
     const ray = viewer.camera.getPickRay(m.endPosition);
     const el = document.getElementById('tm-cursor');
@@ -2149,41 +2178,47 @@ function spawnClickRipple(screenPos) {
 // frame gives us a sine-driven pulse. We walk the active alert markers each
 // time alerts refresh and (re)wire their pixelSize to a pulsing function.
 
+// Pulse the highest-priority alert markers only — capped at PULSE_CAP entities
+// total so we never have hundreds of CallbackProperties driving the render
+// loop. Volcanoes are intentionally excluded: there can be 100+ "active in
+// last 10 years" and pulsing them all is expensive and visually noisy.
 const PULSE_ATTACHED = new WeakSet();
+const PULSE_CAP = 12;
+
 function attachPulseToAlertEntities() {
-  const want = new Set();
-  // Tsunamis — every entity
-  if (entitiesByLayer.tsunamis) for (const e of entitiesByLayer.tsunamis.values()) want.add(e);
-  // Severe Wx with high-severity events
-  if (entitiesByLayer.severe) for (const e of entitiesByLayer.severe.values()) {
-    const p = e.properties.getValue ? e.properties.getValue() : e.properties;
-    const ev = (p.event || '').toLowerCase();
-    if (ev.includes('tornado') || ev.includes('flash flood') || ev.includes('hurricane')) want.add(e);
+  const candidates = [];
+
+  // Tsunamis (rare, always pulse)
+  if (entitiesByLayer.tsunamis) for (const e of entitiesByLayer.tsunamis.values()) {
+    candidates.push({ e, prio: 100 });
   }
-  // Fresh quakes M5+
-  if (entitiesByLayer.quakes) for (const e of entitiesByLayer.quakes.values()) {
-    const p = e.properties.getValue ? e.properties.getValue() : e.properties;
-    if (typeof p.mag === 'number' && p.mag >= 5) want.add(e);
-  }
-  // Active launches (within ±1 h of net)
+  // Active launches within ±1 h
   if (entitiesByLayer.launches) for (const e of entitiesByLayer.launches.values()) {
     const p = e.properties.getValue ? e.properties.getValue() : e.properties;
     const dt = p.net ? (Date.parse(p.net) - Date.now()) / 3.6e6 : null;
-    if (dt != null && Math.abs(dt) < 1) want.add(e);
+    if (dt != null && Math.abs(dt) < 1) candidates.push({ e, prio: 90 });
   }
-  // Active volcanoes
-  if (entitiesByLayer.volcanoes) for (const e of entitiesByLayer.volcanoes.values()) {
+  // Fresh M5+ quakes only — drop M4+ to keep the count down
+  if (entitiesByLayer.quakes) for (const e of entitiesByLayer.quakes.values()) {
     const p = e.properties.getValue ? e.properties.getValue() : e.properties;
-    if (p.active === true) want.add(e);
+    if (typeof p.mag === 'number' && p.mag >= 5) candidates.push({ e, prio: 80 + p.mag });
+  }
+  // Severe Wx — only the highest-tier types
+  if (entitiesByLayer.severe) for (const e of entitiesByLayer.severe.values()) {
+    const p = e.properties.getValue ? e.properties.getValue() : e.properties;
+    const ev = (p.event || '').toLowerCase();
+    if (ev.includes('tornado') || ev.includes('flash flood')) candidates.push({ e, prio: 70 });
   }
 
-  for (const ent of want) {
+  candidates.sort((a, b) => b.prio - a.prio);
+  const want = candidates.slice(0, PULSE_CAP);
+
+  for (const { e: ent } of want) {
     if (PULSE_ATTACHED.has(ent) || !ent.point) continue;
     const orig = (ent.point.pixelSize && ent.point.pixelSize.getValue)
                  ? ent.point.pixelSize.getValue() : ent.point.pixelSize;
     if (typeof orig !== 'number') continue;
     ent.point.pixelSize = new Cesium.CallbackProperty(() => {
-      // 0.7 Hz breathing; +30% peak amplitude
       const t = Date.now() / 1000;
       return orig + Math.sin(t * 4.4) * orig * 0.30;
     }, false);
