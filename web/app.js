@@ -267,6 +267,100 @@ function initDataSources() {
   terminatorDS = new Cesium.CustomDataSource('terminator');
   viewer.dataSources.add(terminatorDS);
   initTerminator();
+
+  // Cluster crowded layers so the world view renders one dot per cluster, then
+  // breaks apart as the camera zooms in. Non-clustered layers (hurricanes,
+  // launches, tsunamis, severe, news, volcanoes, tfrs) are sparse enough that
+  // clustering hurts more than it helps.
+  configureClustering(dataSources.planes,     { color: COLORS.planes,     pixelRange: 50, minSize: 4 });
+  configureClustering(dataSources.ships,      { color: COLORS.ships,      pixelRange: 50, minSize: 4 });
+  configureClustering(dataSources.fires,      { color: COLORS.fires,      pixelRange: 60, minSize: 5 });
+  configureClustering(dataSources.airports,   { color: COLORS.airports,   pixelRange: 70, minSize: 4 });
+  configureClustering(dataSources.satellites, { color: COLORS.satellites, pixelRange: 45, minSize: 6 });
+  configureClustering(dataSources.quakes,     { color: COLORS.quakes,     pixelRange: 40, minSize: 4 });
+}
+
+// ---------- LOD / clustering helpers ----------------------------------------
+//
+// Three-tier policy (see HANDOFF):
+//   FAR   (alt > ~5 Mm)     — only highest-priority items + clusters
+//   MID   (alt 100 km–5 Mm) — most items, some clustering
+//   NEAR  (alt < ~10 km)    — moving things only; stationary background fades
+//                              out so parcels/buildings can take over.
+//
+// Cesium's DistanceDisplayCondition is camera-to-entity distance in metres,
+// which approximates altitude near nadir. We use it for both the FAR cap
+// (low-importance items hidden when distance > X) and the NEAR floor
+// (stationary items hidden when distance < STATIONARY_HIDE_NEAR_M).
+
+const STATIONARY_HIDE_NEAR_M = 10_000;       // 10 km — stationary background fades out
+const ALWAYS_VISIBLE_FAR_M   = 5e7;          // 50 000 km — effectively always
+
+function ddcQuake(mag) {
+  const m = (typeof mag === 'number') ? mag : 0;
+  if (m >= 5)   return new Cesium.DistanceDisplayCondition(0, ALWAYS_VISIBLE_FAR_M);
+  if (m >= 4)   return new Cesium.DistanceDisplayCondition(0, 1.5e7);  // 15 Mm
+  if (m >= 3)   return new Cesium.DistanceDisplayCondition(0, 5e6);    // 5 Mm
+  if (m >= 2)   return new Cesium.DistanceDisplayCondition(0, 1.5e6);  // 1.5 Mm
+  return        new Cesium.DistanceDisplayCondition(0, 5e5);            // 500 km
+}
+
+function ddcFire(frp) {
+  const f = (typeof frp === 'number') ? frp : 0;
+  if (f >= 100) return new Cesium.DistanceDisplayCondition(0, 1.5e7);
+  if (f >= 30)  return new Cesium.DistanceDisplayCondition(0, 5e6);
+  if (f >= 10)  return new Cesium.DistanceDisplayCondition(0, 1.5e6);
+  return        new Cesium.DistanceDisplayCondition(0, 5e5);
+}
+
+function ddcAirport(type) {
+  // Stationary — hide near zoom so parcels/buildings own the close view.
+  if (type === 'large_airport')  return new Cesium.DistanceDisplayCondition(STATIONARY_HIDE_NEAR_M, ALWAYS_VISIBLE_FAR_M);
+  if (type === 'medium_airport') return new Cesium.DistanceDisplayCondition(STATIONARY_HIDE_NEAR_M, 5e6);
+  return                              new Cesium.DistanceDisplayCondition(STATIONARY_HIDE_NEAR_M, 1.5e6);
+}
+
+function ddcVolcano(active) {
+  if (active) return new Cesium.DistanceDisplayCondition(STATIONARY_HIDE_NEAR_M, ALWAYS_VISIBLE_FAR_M);
+  return       new Cesium.DistanceDisplayCondition(STATIONARY_HIDE_NEAR_M, 5e6);
+}
+
+function ddcStationaryAlways() {
+  return new Cesium.DistanceDisplayCondition(STATIONARY_HIDE_NEAR_M, ALWAYS_VISIBLE_FAR_M);
+}
+
+function applyDDC(g, ddc) {
+  if (!g || !ddc) return g;
+  if (g.point)    g.point.distanceDisplayCondition    = ddc;
+  if (g.label)    g.label.distanceDisplayCondition    = ddc;
+  if (g.ellipse)  g.ellipse.distanceDisplayCondition  = ddc;
+  if (g.polyline) g.polyline.distanceDisplayCondition = ddc;
+  return g;
+}
+
+function configureClustering(ds, opts) {
+  if (!ds || !ds.clustering) return;
+  const c = ds.clustering;
+  c.enabled = true;
+  c.pixelRange = opts.pixelRange ?? 60;
+  c.minimumClusterSize = opts.minSize ?? 4;
+  const baseColor = opts.color || Cesium.Color.WHITE;
+  c.clusterEvent.addEventListener((entities, cluster) => {
+    cluster.billboard.show = false;
+    cluster.point.show = true;
+    cluster.point.pixelSize    = Math.min(22, 6 + Math.log2(entities.length) * 1.8);
+    cluster.point.color        = baseColor.withAlpha(0.95);
+    cluster.point.outlineColor = Cesium.Color.BLACK;
+    cluster.point.outlineWidth = 0.6;
+    cluster.label.show         = entities.length >= 8;
+    cluster.label.text         = entities.length.toLocaleString();
+    cluster.label.font         = '10px JetBrains Mono, monospace';
+    cluster.label.fillColor    = Cesium.Color.WHITE;
+    cluster.label.outlineColor = Cesium.Color.BLACK;
+    cluster.label.outlineWidth = 2;
+    cluster.label.style        = Cesium.LabelStyle.FILL_AND_OUTLINE;
+    cluster.label.pixelOffset  = new Cesium.Cartesian2(0, 0);
+  });
 }
 
 let cablesDS = null;
@@ -932,8 +1026,10 @@ function graphicsFor(layer, d) {
       // Active aftershock zone: shift toward warm white
       color = Cesium.Color.fromCssColorString('#fef3c7');
     }
-    return { point: { pixelSize: size, color,
-                      outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
+    return applyDDC({
+      point: { pixelSize: size, color,
+               outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 },
+    }, ddcQuake(mag));
   }
   // FRP + age for fires. Hot recent detections in bright orange-red, old ones fade.
   if (layer === 'fires') {
@@ -947,8 +1043,10 @@ function graphicsFor(layer, d) {
       const ms = Date.parse(iso);
       if (isFinite(ms)) ageH = (Date.now() - ms) / 3.6e6;
     }
-    return { point: { pixelSize: size, color: COLORS.fires.withAlpha(ageAlpha(ageH, 72)),
-                      outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 } };
+    return applyDDC({
+      point: { pixelSize: size, color: COLORS.fires.withAlpha(ageAlpha(ageH, 72)),
+               outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 },
+    }, ddcFire(frp));
   }
 
   // Launches: status-aware coloring. Ring on the ground, label, dot.
@@ -989,7 +1087,7 @@ function graphicsFor(layer, d) {
   // Volcanoes — bright orange when actively erupting (active=true), dim grey otherwise
   if (layer === 'volcanoes') {
     const active = d.active === true;
-    return {
+    return applyDDC({
       point: {
         pixelSize: active ? px + 1 : px,
         color: active
@@ -998,12 +1096,12 @@ function graphicsFor(layer, d) {
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 0.5,
       },
-    };
+    }, ddcVolcano(active));
   }
 
-  // TFRs — pulse-like outline ring
+  // TFRs — pulse-like outline ring (stationary; fades out at near zoom)
   if (layer === 'tfrs') {
-    return {
+    return applyDDC({
       point: { pixelSize: px, color: COLORS.tfrs,
                outlineColor: Cesium.Color.BLACK, outlineWidth: 1.5 },
       ellipse: {
@@ -1012,25 +1110,26 @@ function graphicsFor(layer, d) {
         outline: true, outlineColor: COLORS.tfrs.withAlpha(0.7),
         height: 0,
       },
-    };
+    }, ddcStationaryAlways());
   }
 
-  // Airports — small dot, scheduled service slightly brighter
+  // Airports — small dot, scheduled service slightly brighter (stationary)
   if (layer === 'airports') {
     const isLarge = d.type === 'large_airport';
-    return {
+    return applyDDC({
       point: {
         pixelSize: isLarge ? px + 1 : px,
         color: COLORS.airports.withAlpha(isLarge ? 0.95 : 0.55),
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 0.5,
       },
-    };
+    }, ddcAirport(d.type));
   }
 
-  // Hurricanes keep a name label (text, not an icon)
+  // Hurricanes keep a name label (text, not an icon). Stationary-ish — they
+  // move slowly, but treat as background and fade out at very-near zoom.
   if (layer === 'hurricanes') {
-    return {
+    return applyDDC({
       point: { pixelSize: px, color: COLORS.hurricanes,
                outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
       label: {
@@ -1042,7 +1141,7 @@ function graphicsFor(layer, d) {
         pixelOffset: new Cesium.Cartesian2(0, -14),
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.5e7),
       },
-    };
+    }, ddcStationaryAlways());
   }
 
   // Default: a colored dot
@@ -1073,11 +1172,20 @@ function rebuildSatellites(tles) {
     catch (e) { continue; }
     if (!satrec || satrec.error) continue;
     const color = Cesium.Color.fromCssColorString(t.color || '#c4b5fd');
+    // Importance gate: ISS / stations / visual always render; bulk
+    // constellations (gps, galileo, starlink) hide when far so the world view
+    // doesn't drown in dots.
+    const grp = (t.group || '').toLowerCase();
+    const alwaysOn = grp === 'stations' || grp === 'visual' || grp === 'science';
+    const ddc = alwaysOn
+      ? new Cesium.DistanceDisplayCondition(0, ALWAYS_VISIBLE_FAR_M)
+      : new Cesium.DistanceDisplayCondition(0, 3e7);   // 30 Mm
     const ent = ds.entities.add({
       id: `satellites:${id}`,
       position: Cesium.Cartesian3.fromDegrees(0, 0, 400000),
       point: { pixelSize: 3, color: color.withAlpha(0.9),
-               outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5 },
+               outlineColor: Cesium.Color.BLACK, outlineWidth: 0.5,
+               distanceDisplayCondition: ddc },
       properties: { kind: 'satellites', id, name: t.name, group: t.group, group_label: t.group_label },
     });
     satelliteRecords.set(id, { satrec, entity: ent, name: t.name, group: t.group });
@@ -1458,6 +1566,8 @@ function buildCables() {
           width: 1.0,
           material: mat,
           clampToGround: true,
+          // Stationary background — fade out at near zoom so parcels can take over.
+          distanceDisplayCondition: ddcStationaryAlways(),
         },
         properties: { kind: 'cable', name: props.name, slug: props.slug,
                       rfs: props.rfs, owners: props.owners, length: props.length },
