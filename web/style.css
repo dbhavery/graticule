@@ -579,21 +579,30 @@ html, body {
 .chip.flicker { animation: chip-flicker 700ms ease-out; }
 
 /* ──────────  COMPASS / TILT INDICATOR  ────────── */
+/* Anchored top-right just below the telemetry bar where there's empty space.
+ * No collision with feed strip (bottom-right), history strip (bottom-center),
+ * or detail panel (right side, top:60 — only shown when an entity is clicked).
+ * When the detail panel opens it'll cover the compass; that's intentional —
+ * the compass is contextual, the detail panel is task-focused.
+ */
 #compass {
   position: absolute;
   right: 16px;
-  bottom: 92px;
-  z-index: 10;
-  width: 72px;
-  height: 72px;
-  background: var(--panel-bg);
+  top: 56px;
+  z-index: 9;
+  width: 78px;
+  height: 78px;
+  background: var(--panel-bg-strong);
   border: 1px solid var(--panel-border);
   border-radius: 50%;
-  backdrop-filter: blur(6px);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
   display: grid;
   place-items: center;
 }
-#compass svg { width: 60px; height: 60px; display: block; }
+#compass svg { width: 66px; height: 66px; display: block; }
+/* Hide the compass when the detail panel is open — they share screen space */
+body:has(#panel:not(.hidden)) #compass { opacity: 0; pointer-events: none; }
 .cmp-rose {
   transform-origin: 50% 50%;
   transition: transform 140ms ease-out;
@@ -921,19 +930,19 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 /* ──────────  SETTINGS MODAL  ────────── */
 .settings-btn {
   margin-left: 14px;
-  background: none;
+  background: rgba(255,255,255,0.04);
   border: 1px solid var(--panel-rule);
   border-radius: 3px;
-  color: var(--text-dim);
-  width: 28px;
-  height: 28px;
-  font-size: 14px;
+  color: var(--text);
+  width: 36px;
+  height: 32px;
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
   align-self: center;
-  transition: color 100ms, border-color 100ms;
+  transition: color 120ms, background 120ms, border-color 120ms;
 }
-.settings-btn:hover { color: var(--text); border-color: var(--panel-border); }
+.settings-btn:hover { color: var(--accent); border-color: var(--panel-border); background: rgba(77,210,255,0.08); }
 
 #settings-overlay {
   position: absolute;

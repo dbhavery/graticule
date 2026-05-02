@@ -896,15 +896,11 @@ function applyMonitor(name, on) {
 // ---------- Clocks / telemetry ticker ---------------------------------------
 
 function startClocks() {
-  let prevSecond = null;
   setInterval(() => {
+    // UTC ticks every second; animating it makes the whole header jump.
+    // Just update text directly — no roll animation here.
     const now = new Date();
-    const utc = now.toISOString().slice(11, 19);
-    const utcEl = document.getElementById('tm-utc');
-    if (prevSecond !== utc) {
-      rollText(utcEl, utc);
-      prevSecond = utc;
-    }
+    document.getElementById('tm-utc').textContent = now.toISOString().slice(11, 19);
 
     // Camera altitude (units-aware) — only roll on actual change
     const altEl = document.getElementById('tm-alt');
