@@ -13,23 +13,23 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from vantage.feeds.adsb import opensky_loop
-from vantage.feeds.airports import airports_loop
-from vantage.feeds.ais import aisstream_loop
-from vantage.feeds.aurora import ovation_loop
-from vantage.feeds.cables import cables_loop
-from vantage.feeds.fires import firms_loop
-from vantage.feeds.hurricanes import nhc_loop
-from vantage.feeds.launches import launches_loop
-from vantage.feeds.news import gdelt_loop
-from vantage.feeds.quakes import usgs_loop
-from vantage.feeds.radar import rainviewer_loop
-from vantage.feeds.satellites import celestrak_loop
-from vantage.feeds.space_weather import space_weather_loop
-from vantage.feeds.tfrs import tfr_loop
-from vantage.feeds.tsunamis import nws_tsunami_loop
-from vantage.feeds.volcanoes import gvp_loop
-from vantage.state import state
+from overwatch.feeds.adsb import opensky_loop
+from overwatch.feeds.airports import airports_loop
+from overwatch.feeds.ais import aisstream_loop
+from overwatch.feeds.aurora import ovation_loop
+from overwatch.feeds.cables import cables_loop
+from overwatch.feeds.fires import firms_loop
+from overwatch.feeds.hurricanes import nhc_loop
+from overwatch.feeds.launches import launches_loop
+from overwatch.feeds.news import gdelt_loop
+from overwatch.feeds.quakes import usgs_loop
+from overwatch.feeds.radar import rainviewer_loop
+from overwatch.feeds.satellites import celestrak_loop
+from overwatch.feeds.space_weather import space_weather_loop
+from overwatch.feeds.tfrs import tfr_loop
+from overwatch.feeds.tsunamis import nws_tsunami_loop
+from overwatch.feeds.volcanoes import gvp_loop
+from overwatch.state import state
 
 WEB_DIR = Path(__file__).parent.parent / "web"
 
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
     ]
     tasks = [asyncio.create_task(fn(state), name=n) for n, fn in feeds]
     tasks.append(asyncio.create_task(_expire_loop(), name="expire"))
-    logger.info(f"vantage server up — {len(feeds)} feeds running")
+    logger.info(f"overwatch server up — {len(feeds)} feeds running")
     try:
         yield
     finally:

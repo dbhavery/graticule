@@ -1,4 +1,4 @@
-/* Vantage — front-end. Cesium globe + telemetry HUD + WebSocket-driven layers.
+/* Overwatch — front-end. Cesium globe + telemetry HUD + WebSocket-driven layers.
  *
  *  Categories (toggleable): AIR | SEA | EARTH | WEATHER | SPACE | ALERTS
  *  Always-on telemetry:     UTC clock, cursor lat/lon, camera altitude,
@@ -163,7 +163,7 @@ const FEEDS = [
 
 // User-tunable settings persisted in localStorage. Defaults reflect Don's
 // preferences: nothing checked, metric, globe view, 500 ms hover delay.
-const SETTINGS_KEY = 'vantage.settings.v1';
+const SETTINGS_KEY = 'overwatch.settings.v1';
 const settings = Object.assign(
   { units: 'metric', view: 'globe', hoverDelayMs: 500 },
   loadSettings()
@@ -217,7 +217,7 @@ function applyInitialLayerState() {
 async function initViewer() {
   const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
   Cesium.Ion.defaultAccessToken = cfg.cesium_ion_token || '';
-  window.__vantage_cfg = cfg;
+  window.__overwatch_cfg = cfg;
 
   viewer = new Cesium.Viewer('cesiumContainer', {
     baseLayerPicker: false,
@@ -414,7 +414,7 @@ function initFeedChips() {
 }
 
 async function applyServerCapabilities() {
-  const cfg = window.__vantage_cfg || {};
+  const cfg = window.__overwatch_cfg || {};
   if (!cfg.ships_enabled) disableLayer('ships', 'no AISSTREAM_KEY');
   if (!cfg.fires_enabled) disableLayer('fires', 'no FIRMS_MAP_KEY');
 }

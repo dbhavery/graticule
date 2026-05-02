@@ -1,7 +1,7 @@
-/* Vantage — telemetry HUD over a full-bleed dark globe.
+/* Overwatch — telemetry HUD over a full-bleed dark globe.
  * Inspiration mined from defense-data UIs (Vantor, Maven Smart System):
  * sharp letter-spacing, mono telemetry, edge-anchored panels, monochrome with
- * minimal accent color per data class. Composition is original to Vantage.
+ * minimal accent color per data class. Composition is original to Overwatch.
  */
 
 :root {

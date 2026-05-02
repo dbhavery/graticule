@@ -23,7 +23,7 @@ TIMEOUT_SEC = 20
 
 
 async def space_weather_loop(state) -> None:
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "vantage/0.1"}) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "overwatch/0.1"}) as client:
         while True:
             blob = {"kp": None, "solar_wind": None, "xray": None}
 

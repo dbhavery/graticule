@@ -58,7 +58,7 @@ STATE_CENTROIDS: dict[str, tuple[float, float]] = {
 
 async def tfr_loop(state) -> None:
     headers = {
-        "User-Agent": "vantage/0.1 (research; contact dbhavery@gmail.com)",
+        "User-Agent": "overwatch/0.1 (research; contact dbhavery@gmail.com)",
         "Accept": "application/json",
     }
     async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers=headers, follow_redirects=True) as client:

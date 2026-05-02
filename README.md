@@ -1,4 +1,4 @@
-# Vantage
+# Overwatch
 
 Personal situational-awareness globe. Spin the Earth, watch live planes and
 ships, click for details, toggle layers. Local-first, dark UI, single window.
@@ -23,7 +23,7 @@ required for the default load.
 ## Optional: Cesium ion (better imagery)
 
 Set `CESIUM_ION_TOKEN` in `.env` to a free token from https://ion.cesium.com.
-Without it, Vantage falls back to ESRI World Imagery (still looks great).
+Without it, Overwatch falls back to ESRI World Imagery (still looks great).
 
 ## Architecture
 
