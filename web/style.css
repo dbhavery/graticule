@@ -36,6 +36,8 @@
   --c-terminator: #475569;
   --c-airports:   #60a5fa;
   --c-tfrs:       #f43f5e;
+  --c-parcels_us: #fde68a;
+  --c-parcels_wa: #fcd34d;
 
   --ok:   #22cc66;
   --warn: #d6802b;
@@ -285,6 +287,8 @@ html, body {
 .dot[data-color=terminator] { background: var(--c-terminator); box-shadow: 0 0 5px var(--c-terminator); }
 .dot[data-color=airports]   { background: var(--c-airports);   box-shadow: 0 0 5px var(--c-airports); }
 .dot[data-color=tfrs]       { background: var(--c-tfrs);       box-shadow: 0 0 5px var(--c-tfrs); }
+.dot[data-color=parcels_us] { background: var(--c-parcels_us); box-shadow: 0 0 5px var(--c-parcels_us); }
+.dot[data-color=parcels_wa] { background: var(--c-parcels_wa); box-shadow: 0 0 5px var(--c-parcels_wa); }
 
 #layers .count {
   color: var(--text-mute);

@@ -30,6 +30,7 @@ const CATEGORY = {
   launches: 'space',
   tsunamis: 'alerts', severe: 'alerts', news: 'alerts',
   cables: 'reference',
+  parcels_us: 'land', parcels_wa: 'land',
 };
 
 const KIND_LABEL = {
@@ -39,6 +40,7 @@ const KIND_LABEL = {
   tsunamis: 'TSUNAMI ALERT', launches: 'LAUNCH', news: 'NATURAL EVENT',
   severe: 'SEVERE WX',
   airports: 'AIRPORT', tfrs: 'FLIGHT RESTRICTION',
+  parcels_wa: 'PARCEL',
 };
 
 // ─────────  LOD: distance-aware billboard icons  ─────────
@@ -317,6 +319,8 @@ function bindUI() {
       else if (layer === 'cables')     toggleCables(on);
       else if (layer === 'nightlights')toggleNightLights(on);
       else if (layer === 'terminator') toggleTerminator(on);
+      else if (layer === 'parcels_us') toggleParcelsUS(on);
+      else if (layer === 'parcels_wa') toggleParcelsWA(on);
       else if (dataSources[layer])     dataSources[layer].show = on;
       updateCategoryCounts();
     });
@@ -428,6 +432,15 @@ function summarizeEntity(p) {
   }
   if (k === 'tfrs') {
     return { title: p.notam_id || 'TFR', subtitle: p.type || 'Restriction', meta: p.state || '' };
+  }
+  if (k === 'parcels_wa') {
+    const total = (p.value_total || 0);
+    const meta = total ? `Assessed $${total.toLocaleString()}` : '';
+    return {
+      title: p.address || `Parcel ${p.parcel_id || ''}`,
+      subtitle: p.city || 'Washington',
+      meta,
+    };
   }
   return { title: p.name || p.id || 'Object', subtitle: '', meta: '' };
 }
@@ -683,7 +696,7 @@ function setCount(layer, n) {
 }
 
 function updateCategoryCounts() {
-  const totals = { air: 0, sea: 0, earth: 0, weather: 0, space: 0, alerts: 0 };
+  const totals = { air: 0, sea: 0, earth: 0, weather: 0, space: 0, alerts: 0, reference: 0, land: 0 };
   for (const [layer, cat] of Object.entries(CATEGORY)) {
     const cb = document.querySelector(`input[data-layer="${layer}"]`);
     if (!cb || !cb.checked) continue;
@@ -691,6 +704,8 @@ function updateCategoryCounts() {
     else if (entitiesByLayer[layer])             totals[cat] += entitiesByLayer[layer].size;
     else if (layer === 'radar' && radarLayer)    totals[cat] += 1;
     else if (layer === 'aurora' && auroraLayer)  totals[cat] += 1;
+    else if (layer === 'parcels_us' && parcelsUSLayer) totals[cat] += 1;
+    else if (layer === 'parcels_wa' && parcelsWADS)    totals[cat] += parcelsWADS.entities.values.length;
   }
   let grand = 0;
   for (const cat of Object.keys(totals)) {
@@ -1469,6 +1484,7 @@ function showPanel(entity) {
   else if (kind === 'tsunamis')   { title = props.event || 'Tsunami'; subtitle = props.area || 'Alert'; }
   else if (kind === 'launches')   { title = props.name || 'Launch'; subtitle = `${props.vehicle || ''} · ${props.pad_location || ''}`; }
   else if (kind === 'news')       { title = props.name || 'Natural event'; subtitle = (props.categories && props.categories.join(' · ')) || ''; }
+  else if (kind === 'parcels_wa') { title = props.address || `Parcel ${props.parcel_id || ''}`; subtitle = `${props.city || 'Washington'} · APN ${props.parcel_id || '—'}`; }
   else                            { title = entity.id; subtitle = ''; }
 
   document.getElementById('panel-kind').textContent = KIND_LABEL[kind] || (kind || '').toUpperCase();
@@ -1483,3 +1499,235 @@ function showPanel(entity) {
 }
 
 function hidePanel() { document.getElementById('panel').classList.add('hidden'); }
+
+// ---------- Parcels (LAND category) -----------------------------------------
+//
+// Two layers, both deliberately LOD-bounded so the globe stays readable when
+// zoomed out:
+//
+//   parcels_us — Regrid's free public nationwide parcel-boundary tile cache.
+//                Pre-rendered raster tiles only return content at z≈15+, which
+//                is exactly the LOD we want. No owner data (Regrid keeps that
+//                behind their paid API). Free, no key.
+//
+//   parcels_wa — WA statewide tax-parcel FeatureServer (DOR / WA Geoservices).
+//                Vector polygons fetched ON-DEMAND for the current viewport,
+//                only when the camera is below ~5 km altitude. Hover/click
+//                shows situs address, city, land + building assessed value.
+//                Owner names are redacted at the WA-state level (state policy)
+//                so they aren't shown — getting owner names would require
+//                county-by-county integrations or a paid Regrid API key.
+//
+// The WA layer auto-refetches when the camera stops moving. Polygons outside
+// the new viewport are dropped to keep the entity count bounded (~1500 max).
+
+const PARCELS_US_URL = 'https://tiles.arcgis.com/tiles/KzeiCaQsMoeCfoCq/arcgis/rest/services/Regrid_Nationwide_Parcel_Boundaries_v1/MapServer/tile/{z}/{y}/{x}';
+const PARCELS_WA_QUERY = 'https://services.arcgis.com/jsIt88o09Q0r1j8h/arcgis/rest/services/Current_Parcels/FeatureServer/0/query';
+const PARCELS_WA_MAX_ALT_M = 6000;       // start fetching at < 6 km
+const PARCELS_WA_FETCH_MAX_ALT_M = 4000; // stricter limit to actually issue queries
+const PARCELS_WA_MAX_FEATURES = 1500;    // entity cap
+const PARCELS_WA_PAGE_SIZE = 500;        // ArcGIS hard cap is 2000
+
+let parcelsUSLayer = null;
+let parcelsWADS = null;
+let parcelsWAEnabled = false;
+let parcelsWADebounce = null;
+let parcelsWAInflight = null;       // AbortController of current fetch
+let parcelsWALastBbox = null;       // [w, s, e, n] of last successful fetch
+
+function toggleParcelsUS(on) {
+  if (!on) {
+    if (parcelsUSLayer) { viewer.imageryLayers.remove(parcelsUSLayer); parcelsUSLayer = null; }
+    return;
+  }
+  if (parcelsUSLayer) return;
+  parcelsUSLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+    url: PARCELS_US_URL,
+    minimumLevel: 14,        // tile cache is empty below this
+    maximumLevel: 17,        // and stops here
+    credit: 'Parcels © Regrid',
+  }));
+  parcelsUSLayer.alpha = 0.85;
+  setCount('parcels_us', 'tiles');
+}
+
+function toggleParcelsWA(on) {
+  parcelsWAEnabled = on;
+  if (!parcelsWADS) {
+    parcelsWADS = new Cesium.CustomDataSource('parcels_wa');
+    viewer.dataSources.add(parcelsWADS);
+    initParcelsWACameraHook();
+  }
+  parcelsWADS.show = on;
+  if (on) {
+    requestParcelsWA();
+  } else {
+    if (parcelsWAInflight) { parcelsWAInflight.abort(); parcelsWAInflight = null; }
+    parcelsWADS.entities.removeAll();
+    parcelsWALastBbox = null;
+    setCount('parcels_wa', 0);
+    updateCategoryCounts();
+  }
+}
+
+function initParcelsWACameraHook() {
+  // moveEnd fires after the camera comes to rest — perfect debouncer for fetch
+  viewer.camera.moveEnd.addEventListener(() => {
+    if (parcelsWAEnabled) requestParcelsWA();
+  });
+}
+
+function requestParcelsWA() {
+  if (parcelsWADebounce) clearTimeout(parcelsWADebounce);
+  parcelsWADebounce = setTimeout(fetchParcelsWA, 250);
+}
+
+function cameraAltitudeMeters() {
+  if (!viewer || !viewer.camera) return Infinity;
+  const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
+  return carto ? carto.height : Infinity;
+}
+
+async function fetchParcelsWA() {
+  if (!parcelsWAEnabled || !parcelsWADS) return;
+
+  const alt = cameraAltitudeMeters();
+  if (alt > PARCELS_WA_MAX_ALT_M) {
+    // Too zoomed out — drop everything we have and bail.
+    if (parcelsWADS.entities.values.length) {
+      parcelsWADS.entities.removeAll();
+      parcelsWALastBbox = null;
+      setCount('parcels_wa', 0);
+      updateCategoryCounts();
+    }
+    return;
+  }
+  if (alt > PARCELS_WA_FETCH_MAX_ALT_M) {
+    // In the soft band — keep what's drawn but don't issue new queries.
+    return;
+  }
+
+  const rect = viewer.camera.computeViewRectangle();
+  if (!rect) return;
+  const w = Cesium.Math.toDegrees(rect.west);
+  const s = Cesium.Math.toDegrees(rect.south);
+  const e = Cesium.Math.toDegrees(rect.east);
+  const n = Cesium.Math.toDegrees(rect.north);
+  if (!isFinite(w) || !isFinite(e) || (e - w) > 0.4 || (n - s) > 0.4) {
+    // Sanity guard — if the bbox is huge (cross-pole, etc.) skip.
+    return;
+  }
+
+  // Skip refetch if the new bbox is within the previously fetched extent.
+  if (parcelsWALastBbox) {
+    const [pw, ps, pe, pn] = parcelsWALastBbox;
+    if (w >= pw && e <= pe && s >= ps && n <= pn) return;
+  }
+
+  // Pad the request bbox a little so panning doesn't constantly re-query.
+  const padX = (e - w) * 0.15, padY = (n - s) * 0.15;
+  const qw = w - padX, qe = e + padX, qs = s - padY, qn = n + padY;
+
+  if (parcelsWAInflight) parcelsWAInflight.abort();
+  const ac = new AbortController();
+  parcelsWAInflight = ac;
+
+  try {
+    const features = await queryParcelsWA(qw, qs, qe, qn, ac.signal);
+    if (ac.signal.aborted) return;
+    drawParcelsWA(features);
+    parcelsWALastBbox = [qw, qs, qe, qn];
+  } catch (err) {
+    if (err.name !== 'AbortError') console.warn('parcels_wa fetch failed:', err);
+  } finally {
+    if (parcelsWAInflight === ac) parcelsWAInflight = null;
+  }
+}
+
+async function queryParcelsWA(w, s, e, n, signal) {
+  const out = [];
+  let offset = 0;
+  while (out.length < PARCELS_WA_MAX_FEATURES) {
+    const params = new URLSearchParams({
+      where: '1=1',
+      geometry: `${w},${s},${e},${n}`,
+      geometryType: 'esriGeometryEnvelope',
+      inSR: '4326',
+      outFields: 'COUNTY_NM,PARCEL_ID_NR,SITUS_ADDRESS,SITUS_CITY_NM,VALUE_LAND,VALUE_BLDG,LANDUSE_CD',
+      outSR: '4326',
+      f: 'geojson',
+      resultRecordCount: String(PARCELS_WA_PAGE_SIZE),
+      resultOffset: String(offset),
+    });
+    const res = await fetch(`${PARCELS_WA_QUERY}?${params}`, { signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const feats = data.features || [];
+    out.push(...feats);
+    if (feats.length < PARCELS_WA_PAGE_SIZE) break;
+    offset += feats.length;
+    if (out.length >= PARCELS_WA_MAX_FEATURES) break;
+  }
+  return out;
+}
+
+function drawParcelsWA(features) {
+  const ds = parcelsWADS;
+  ds.entities.removeAll();
+
+  const stroke   = Cesium.Color.fromCssColorString('#fcd34d').withAlpha(0.92);
+  const fill     = Cesium.Color.fromCssColorString('#fde68a').withAlpha(0.05);
+  const fillHi   = Cesium.Color.fromCssColorString('#fde68a').withAlpha(0.18);
+
+  for (const f of features) {
+    const g = f.geometry;
+    if (!g) continue;
+    const props = f.properties || {};
+    const rings = (g.type === 'Polygon')      ? [g.coordinates]
+                : (g.type === 'MultiPolygon') ?  g.coordinates
+                : null;
+    if (!rings) continue;
+    for (const poly of rings) {
+      const outer = (poly && poly[0]) || [];
+      if (outer.length < 3) continue;
+      const flat = [];
+      for (const [lon, lat] of outer) {
+        if (typeof lon === 'number' && typeof lat === 'number') flat.push(lon, lat);
+      }
+      if (flat.length < 6) continue;
+      const positions = Cesium.Cartesian3.fromDegreesArray(flat);
+      const pid = props.PARCEL_ID_NR || '';
+      ds.entities.add({
+        id: `parcels_wa:${pid}:${flat[0].toFixed(5)},${flat[1].toFixed(5)}`,
+        polygon: {
+          hierarchy: positions,
+          material: fill,
+          outline: false,            // we draw the outline as a separate polyline so it stays crisp
+          height: 0,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        },
+        polyline: {
+          positions,
+          width: 1.2,
+          material: stroke,
+          clampToGround: true,
+        },
+        properties: {
+          kind: 'parcels_wa',
+          id: pid,
+          parcel_id: pid,
+          address: props.SITUS_ADDRESS || '',
+          city: props.SITUS_CITY_NM || '',
+          county_fips: props.COUNTY_NM || '',
+          value_land: props.VALUE_LAND,
+          value_bldg: props.VALUE_BLDG,
+          value_total: (props.VALUE_LAND || 0) + (props.VALUE_BLDG || 0),
+          landuse_cd: props.LANDUSE_CD,
+        },
+      });
+      void fillHi;  // reserved for hover-state styling
+    }
+  }
+  setCount('parcels_wa', features.length);
+  updateCategoryCounts();
+}
