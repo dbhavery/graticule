@@ -1,4 +1,4 @@
-/* Overwatch — front-end. Cesium globe + telemetry HUD + WebSocket-driven layers.
+/* Cupola — front-end. Cesium globe + telemetry HUD + WebSocket-driven layers.
  *
  *  Categories (toggleable): AIR | SEA | EARTH | WEATHER | SPACE | ALERTS
  *  Always-on telemetry:     UTC clock, cursor lat/lon, camera altitude,
@@ -163,7 +163,7 @@ const FEEDS = [
 
 // User-tunable settings persisted in localStorage. Defaults reflect Don's
 // preferences: nothing checked, metric, globe view, 500 ms hover delay.
-const SETTINGS_KEY = 'overwatch.settings.v1';
+const SETTINGS_KEY = 'cupola.settings.v1';
 const settings = Object.assign(
   { units: 'metric', view: 'globe', hoverDelayMs: 500 },
   loadSettings()
@@ -219,7 +219,7 @@ function applyInitialLayerState() {
 async function initViewer() {
   const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
   Cesium.Ion.defaultAccessToken = cfg.cesium_ion_token || '';
-  window.__overwatch_cfg = cfg;
+  window.__cupola_cfg = cfg;
 
   viewer = new Cesium.Viewer('cesiumContainer', {
     baseLayerPicker: false,
@@ -480,7 +480,7 @@ function initFeedChips() {
 }
 
 async function applyServerCapabilities() {
-  const cfg = window.__overwatch_cfg || {};
+  const cfg = window.__cupola_cfg || {};
   if (!cfg.ships_enabled) disableLayer('ships', 'no AISSTREAM_KEY');
   if (!cfg.fires_enabled) disableLayer('fires', 'no FIRMS_MAP_KEY');
 }
@@ -2268,7 +2268,7 @@ function initContextMenu() {
 
 // ---------- Camera presets --------------------------------------------------
 
-const PRESETS_KEY = 'overwatch.presets.v1';
+const PRESETS_KEY = 'cupola.presets.v1';
 
 function loadPresets() {
   try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '[]'); } catch { return []; }

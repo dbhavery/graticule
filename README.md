@@ -1,4 +1,4 @@
-# Overwatch
+# Cupola
 
 Personal situational-awareness globe. Live planes, ships, satellites, quakes,
 fires, weather, alerts, parcels — all on a single dark Cesium-driven Earth.
@@ -23,8 +23,8 @@ camera presets, and a settings modal.
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/overwatch.git
-cd overwatch
+git clone https://github.com/<you>/cupola.git
+cd cupola
 cp .env.example .env       # see "API keys" below — most are optional
 uv sync
 uv run python main.py
@@ -92,7 +92,7 @@ public-API catalog.
 
 ## License & names
 
-This is a personal project. "Overwatch" is unaffiliated with the Blizzard
+This is a personal project. "Cupola" is unaffiliated with the Blizzard
 Entertainment trademark. Do not redistribute under that name.
 
 Cesium World Imagery © Cesium / Microsoft. Parcel data © Regrid (US tiles)
