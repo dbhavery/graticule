@@ -161,6 +161,21 @@ const FEEDS = [
   { id: 'space_weather', label: 'SWPC', meta: true, hideFromChips: false },
 ];
 
+// User-tunable settings persisted in localStorage. Defaults reflect Don's
+// preferences: nothing checked, metric, globe view, 500 ms hover delay.
+const SETTINGS_KEY = 'vantage.settings.v1';
+const settings = Object.assign(
+  { units: 'metric', view: 'globe', hoverDelayMs: 500 },
+  loadSettings()
+);
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); }
+  catch { return {}; }
+}
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+}
+
 let viewer;
 const dataSources = {};
 const entitiesByLayer = {};
@@ -181,9 +196,23 @@ const TICKER_MAX = 6;
   initFeedChips();
   await applyServerCapabilities();
   bindUI();
+  applyInitialLayerState();
   startClocks();
   connectWebSocket();
 })();
+
+// Cesium CustomDataSource.show defaults to true regardless of checkbox state,
+// so an unchecked layer would still render at boot. Walk every data-layer
+// checkbox and force the matching dataSource / overlay to its declared state.
+function applyInitialLayerState() {
+  document.querySelectorAll('input[data-layer]').forEach((cb) => {
+    if (cb.disabled) return;
+    cb.dispatchEvent(new Event('change'));
+  });
+  // Also align the terminator (its DS exists from initTerminator)
+  const term = document.querySelector('input[data-layer="terminator"]');
+  if (term && terminatorDS) terminatorDS.show = !!term.checked;
+}
 
 async function initViewer() {
   const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
@@ -242,13 +271,12 @@ async function initViewer() {
       } else { el.textContent = '—'; }
     }
 
-    // Hover tooltip pick
+    // Hover tooltip pick — debounced by config.hoverDelayMs (default 500 ms).
+    // We restart the timer on every move; only when the cursor lingers on the
+    // same entity for the full delay does the tooltip appear.
     const picked = viewer.scene.pick(m.endPosition);
-    if (Cesium.defined(picked) && picked.id && picked.id.properties) {
-      showHoverTip(picked.id, m.endPosition);
-    } else {
-      hideHoverTip();
-    }
+    const target = (Cesium.defined(picked) && picked.id && picked.id.properties) ? picked.id : null;
+    scheduleHoverTip(target, m.endPosition);
   }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 }
 
@@ -421,20 +449,57 @@ function bindUI() {
   });
   document.getElementById('panel-close').addEventListener('click', hidePanel);
 
-  // Alerts window — filter toggles, collapse, drag
+  // Alerts panel — filter toggles only (no drag/collapse anymore)
   document.querySelectorAll('input[data-alert]').forEach((cb) => {
     cb.addEventListener('change', refreshAlerts);
   });
-  const aw = document.getElementById('alerts-window');
-  document.getElementById('aw-collapse').addEventListener('click', (e) => {
-    e.stopPropagation();
-    const collapsed = aw.classList.toggle('collapsed');
-    e.currentTarget.textContent = collapsed ? '+' : '−';
+
+  // Monitoring window toggles (sidebar + settings mirror)
+  document.querySelectorAll('input[data-monitor]').forEach((cb) => {
+    cb.addEventListener('change', () => applyMonitor(cb.dataset.monitor, cb.checked));
   });
-  initAlertsDrag();
+  document.querySelectorAll('input[data-monitor-mirror]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const sidebar = document.querySelector(`input[data-monitor="${cb.dataset.monitorMirror}"]`);
+      if (sidebar) { sidebar.checked = cb.checked; sidebar.dispatchEvent(new Event('change')); }
+    });
+  });
+
+  initSettings();
 }
 
 // ---------- Hover tooltip ---------------------------------------------------
+
+let hoverTimer = null;
+let hoverEntityId = null;
+let hoverLastPos = null;
+
+function scheduleHoverTip(entity, screenPos) {
+  // Track the last cursor position so we can place the tip under wherever the
+  // cursor lands when the timer fires.
+  hoverLastPos = screenPos;
+
+  if (!entity) {
+    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+    hoverEntityId = null;
+    hideHoverTip();
+    return;
+  }
+  // Same entity as before? Keep the timer running but update the position
+  // (the user is still hovering over the same dot).
+  if (hoverEntityId === entity.id) return;
+
+  // New entity — restart the dwell timer.
+  hoverEntityId = entity.id;
+  if (hoverTimer) clearTimeout(hoverTimer);
+  hideHoverTip();
+  const delay = Math.max(0, settings.hoverDelayMs | 0);
+  hoverTimer = setTimeout(() => {
+    hoverTimer = null;
+    if (hoverEntityId !== entity.id || !hoverLastPos) return;
+    showHoverTip(entity, hoverLastPos);
+  }, delay);
+}
 
 function showHoverTip(entity, screenPos) {
   const props = entity.properties.getValue ? entity.properties.getValue() : entity.properties;
@@ -665,7 +730,7 @@ function doRefreshAlerts() {
   const counts = Object.fromEntries(ALERT_KINDS.map(k => [k, 0]));
   for (const a of all) counts[a.kind] = (counts[a.kind] || 0) + 1;
   for (const k of ALERT_KINDS) {
-    const el = document.getElementById(`awn-${k}`);
+    const el = document.getElementById(`apn-${k}`);
     if (el) el.textContent = counts[k] || 0;
   }
 
@@ -674,7 +739,7 @@ function doRefreshAlerts() {
   const cap = 60;
   const shown = filtered.slice(0, cap);
 
-  const list = document.getElementById('aw-list');
+  const list = document.getElementById('ap-list');
   list.innerHTML = '';
   for (const a of shown) {
     const li = document.createElement('li');
@@ -687,8 +752,8 @@ function doRefreshAlerts() {
     list.appendChild(li);
   }
 
-  document.getElementById('aw-empty').classList.toggle('hidden', shown.length > 0);
-  const cEl = document.getElementById('aw-count');
+  document.getElementById('ap-empty').classList.toggle('hidden', shown.length > 0);
+  const cEl = document.getElementById('ap-count');
   cEl.textContent = filtered.length;
   cEl.dataset.zero = (filtered.length === 0) ? 'true' : 'false';
 }
@@ -704,32 +769,23 @@ function flyToEntity(entity) {
   } catch (e) { /* ignore */ }
 }
 
-// Drag the alerts window by its header
-function initAlertsDrag() {
-  const aw = document.getElementById('alerts-window');
-  const head = document.getElementById('aw-drag');
-  if (!aw || !head) return;
-  let dragging = false, startX = 0, startY = 0, baseLeft = 0, baseTop = 0;
-  head.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.aw-btn')) return;
-    dragging = true;
-    const rect = aw.getBoundingClientRect();
-    // Switch to absolute pixel positioning so the centered transform doesn't fight us
-    aw.style.left = `${rect.left}px`;
-    aw.style.top  = `${rect.top}px`;
-    aw.style.transform = 'none';
-    baseLeft = rect.left; baseTop = rect.top;
-    startX = e.clientX; startY = e.clientY;
-    e.preventDefault();
-  });
-  window.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
-    const x = Math.max(2, Math.min(window.innerWidth  - 80, baseLeft + (e.clientX - startX)));
-    const y = Math.max(2, Math.min(window.innerHeight - 40, baseTop  + (e.clientY - startY)));
-    aw.style.left = `${x}px`;
-    aw.style.top  = `${y}px`;
-  });
-  window.addEventListener('mouseup', () => { dragging = false; });
+// Monitoring windows — sidebar toggles show/hide the docked alerts panel and
+// the bottom-left live-feed ticker. Both default off.
+function applyMonitor(name, on) {
+  if (name === 'alerts_panel') {
+    const ap = document.getElementById('alerts-panel');
+    if (!ap) return;
+    ap.classList.toggle('hidden', !on);
+    if (on) refreshAlerts();
+  } else if (name === 'live_feed') {
+    const tk = document.getElementById('ticker');
+    if (!tk) return;
+    tk.classList.toggle('hidden', !on);
+    document.body.classList.toggle('live-feed-on', on);
+  }
+  // Mirror to settings-modal monitor checkboxes if open
+  const mirror = document.querySelector(`input[data-monitor-mirror="${name}"]`);
+  if (mirror) mirror.checked = on;
 }
 
 // ---------- Clocks / telemetry ticker ---------------------------------------
@@ -740,11 +796,11 @@ function startClocks() {
     const utc = now.toISOString().slice(11, 19);
     document.getElementById('tm-utc').textContent = utc;
 
-    // Camera altitude
+    // Camera altitude (units-aware)
     const altEl = document.getElementById('tm-alt');
     if (viewer && viewer.camera) {
       const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
-      if (carto) altEl.textContent = formatKm(carto.height);
+      if (carto) altEl.textContent = formatAltitude(carto.height);
     }
 
     // Feed-chip aging — chips that haven't updated in 5x their poll go warn
@@ -762,6 +818,22 @@ function formatKm(meters) {
   if (km > 999) return `${(km / 1000).toFixed(1)} Mm`;
   if (km > 9)   return `${km.toFixed(0)} km`;
   return `${km.toFixed(1)} km`;
+}
+
+// Altitude formatter that respects the active unit system.
+//   metric → m / km / Mm
+//   us     → ft / mi
+function formatAltitude(meters) {
+  if (meters == null || !isFinite(meters)) return '—';
+  if (settings.units === 'us') {
+    const feet = meters * 3.28084;
+    if (feet < 1000)   return `${feet.toFixed(0)} ft`;
+    const miles = meters / 1609.344;
+    if (miles < 10)    return `${miles.toFixed(1)} mi`;
+    if (miles < 1000)  return `${miles.toFixed(0)} mi`;
+    return `${(miles / 1000).toFixed(1)} k mi`;
+  }
+  return formatKm(meters);
 }
 
 function refreshFeedChips() {
@@ -1316,17 +1388,12 @@ function toggleAurora(on) {
 function applySpaceWeather(blob) {
   if (!blob) return;
   const kpEl = document.getElementById('tm-kp');
-  const swEl = document.getElementById('tm-sw');
   const xEl  = document.getElementById('tm-xray');
 
   if (blob.kp && blob.kp.value != null) {
     kpEl.textContent = blob.kp.value.toFixed(1);
     kpEl.className = 'tm-val mono ' + (blob.kp.value >= 6 ? 'kp-storm' : blob.kp.value >= 4 ? 'kp-active' : 'kp-quiet');
   } else { kpEl.textContent = '—'; kpEl.className = 'tm-val mono'; }
-
-  if (blob.solar_wind && blob.solar_wind.speed_kms != null) {
-    swEl.textContent = `${Math.round(blob.solar_wind.speed_kms)} km/s`;
-  } else { swEl.textContent = '—'; }
 
   if (blob.xray && blob.xray.class) {
     const cls = String(blob.xray.class);
@@ -1779,6 +1846,66 @@ async function queryParcelsWA(w, s, e, n, signal) {
     if (out.length >= PARCELS_WA_MAX_FEATURES) break;
   }
   return out;
+}
+
+// ---------- Settings modal --------------------------------------------------
+
+function initSettings() {
+  // Reflect persisted settings into the modal controls
+  document.querySelectorAll('input[name=units]').forEach((r) => { r.checked = (r.value === settings.units); });
+  document.querySelectorAll('input[name=view]').forEach((r)  => { r.checked = (r.value === settings.view); });
+  const hd = document.getElementById('hover-delay');
+  const hdv = document.getElementById('hover-delay-val');
+  if (hd && hdv) {
+    hd.value = String(settings.hoverDelayMs);
+    hdv.textContent = `${settings.hoverDelayMs} ms`;
+    hd.addEventListener('input', () => {
+      settings.hoverDelayMs = Number(hd.value) | 0;
+      hdv.textContent = `${settings.hoverDelayMs} ms`;
+      saveSettings();
+    });
+  }
+
+  document.querySelectorAll('input[name=units]').forEach((r) => {
+    r.addEventListener('change', () => {
+      if (r.checked) { settings.units = r.value; saveSettings(); applyUnits(); }
+    });
+  });
+  document.querySelectorAll('input[name=view]').forEach((r) => {
+    r.addEventListener('change', () => {
+      if (r.checked) { settings.view = r.value; saveSettings(); applyView(); }
+    });
+  });
+
+  // Open / close
+  const overlay = document.getElementById('settings-overlay');
+  const btn = document.getElementById('settings-btn');
+  const close = document.getElementById('settings-close');
+  if (btn) btn.addEventListener('click', () => overlay.classList.remove('hidden'));
+  if (close) close.addEventListener('click', () => overlay.classList.add('hidden'));
+  if (overlay) overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.classList.add('hidden');
+  });
+
+  // Apply on boot so first paint matches persisted state
+  applyUnits();
+  applyView();
+}
+
+function applyUnits() {
+  const lbl = document.getElementById('tm-alt-label');
+  if (lbl) lbl.textContent = settings.units === 'us' ? 'ALT (US)' : 'ALT';
+  // formatAltitude reads settings.units directly on every tick, so the header
+  // value catches up within ~1s on its own.
+}
+
+function applyView() {
+  if (!viewer || !viewer.scene) return;
+  try {
+    if      (settings.view === 'map')      viewer.scene.morphTo2D(0.4);
+    else if (settings.view === 'columbus') viewer.scene.morphToColumbusView(0.4);
+    else                                    viewer.scene.morphTo3D(0.4);
+  } catch (e) { console.warn('view morph failed', e); }
 }
 
 function drawParcelsWA(features) {
