@@ -225,18 +225,28 @@ async function initViewer() {
     if (Cesium.defined(picked) && picked.id) showPanel(picked.id);
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-  // Mouse move → cursor lat/lon readout
+  // Mouse move → cursor lat/lon readout + hover tooltip
   const move = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   move.setInputAction((m) => {
     const ray = viewer.camera.getPickRay(m.endPosition);
-    if (!ray) return;
-    const cart = viewer.scene.globe.pick(ray, viewer.scene);
     const el = document.getElementById('tm-cursor');
-    if (!cart) { el.textContent = '—'; return; }
-    const c = Cesium.Cartographic.fromCartesian(cart);
-    const lat = Cesium.Math.toDegrees(c.latitude).toFixed(2);
-    const lon = Cesium.Math.toDegrees(c.longitude).toFixed(2);
-    el.textContent = `${lat.padStart(6)}  ${lon.padStart(7)}`;
+    if (ray) {
+      const cart = viewer.scene.globe.pick(ray, viewer.scene);
+      if (cart) {
+        const c = Cesium.Cartographic.fromCartesian(cart);
+        const lat = Cesium.Math.toDegrees(c.latitude).toFixed(2);
+        const lon = Cesium.Math.toDegrees(c.longitude).toFixed(2);
+        el.textContent = `${lat.padStart(6)}  ${lon.padStart(7)}`;
+      } else { el.textContent = '—'; }
+    }
+
+    // Hover tooltip pick
+    const picked = viewer.scene.pick(m.endPosition);
+    if (Cesium.defined(picked) && picked.id && picked.id.properties) {
+      showHoverTip(picked.id, m.endPosition);
+    } else {
+      hideHoverTip();
+    }
   }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 }
 
@@ -312,6 +322,307 @@ function bindUI() {
     });
   });
   document.getElementById('panel-close').addEventListener('click', hidePanel);
+
+  // Alerts window — filter toggles, collapse, drag
+  document.querySelectorAll('input[data-alert]').forEach((cb) => {
+    cb.addEventListener('change', refreshAlerts);
+  });
+  const aw = document.getElementById('alerts-window');
+  document.getElementById('aw-collapse').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const collapsed = aw.classList.toggle('collapsed');
+    e.currentTarget.textContent = collapsed ? '+' : '−';
+  });
+  initAlertsDrag();
+}
+
+// ---------- Hover tooltip ---------------------------------------------------
+
+function showHoverTip(entity, screenPos) {
+  const props = entity.properties.getValue ? entity.properties.getValue() : entity.properties;
+  if (!props || !props.kind) { hideHoverTip(); return; }
+  const tip = document.getElementById('hover-tip');
+  const summary = summarizeEntity(props);
+  document.getElementById('ht-kind').textContent  = KIND_LABEL[props.kind] || (props.kind || '').toUpperCase();
+  document.getElementById('ht-title').textContent = summary.title || '—';
+  document.getElementById('ht-sub').textContent   = summary.subtitle || '';
+  document.getElementById('ht-meta').textContent  = summary.meta || '';
+  document.getElementById('ht-sub').style.display  = summary.subtitle ? '' : 'none';
+  document.getElementById('ht-meta').style.display = summary.meta     ? '' : 'none';
+
+  // Position near cursor; clamp to viewport
+  const pad = 14;
+  let x = screenPos.x + pad;
+  let y = screenPos.y + pad;
+  const w = tip.offsetWidth || 220;
+  const h = tip.offsetHeight || 60;
+  if (x + w + 8 > window.innerWidth)  x = screenPos.x - w - pad;
+  if (y + h + 8 > window.innerHeight) y = screenPos.y - h - pad;
+  if (x < 4) x = 4;
+  if (y < 4) y = 4;
+  tip.style.left = `${x}px`;
+  tip.style.top  = `${y}px`;
+  tip.classList.remove('hidden');
+}
+
+function hideHoverTip() {
+  const tip = document.getElementById('hover-tip');
+  if (tip && !tip.classList.contains('hidden')) tip.classList.add('hidden');
+}
+
+function summarizeEntity(p) {
+  const k = p.kind;
+  if (k === 'planes') {
+    const sub = p.country ? p.country : 'Aircraft';
+    const bits = [];
+    if (typeof p.alt === 'number')   bits.push(`${Math.round(p.alt)} m`);
+    if (typeof p.speed === 'number') bits.push(`${Math.round(p.speed * 1.94384)} kt`);
+    if (typeof p.heading === 'number') bits.push(`${Math.round(p.heading)}°`);
+    return { title: p.callsign || p.id, subtitle: sub, meta: bits.join(' · ') };
+  }
+  if (k === 'ships') {
+    const sub = p.destination ? `→ ${p.destination}` : 'Vessel';
+    const bits = [];
+    if (typeof p.sog === 'number') bits.push(`${p.sog.toFixed(1)} kt`);
+    if (typeof p.cog === 'number') bits.push(`${Math.round(p.cog)}°`);
+    if (p.type_label) bits.push(String(p.type_label));
+    return { title: p.name || `MMSI ${p.id}`, subtitle: sub, meta: bits.join(' · ') };
+  }
+  if (k === 'satellites') {
+    return { title: p.name || p.id, subtitle: p.group_label || 'Satellite', meta: '' };
+  }
+  if (k === 'quakes') {
+    const ageH = p.time ? ((Date.now() - p.time) / 3.6e6) : null;
+    const meta = (ageH != null) ? `${formatAge(ageH)} ago${p.depth != null ? ' · ' + Math.round(p.depth) + ' km' : ''}` : '';
+    return { title: (p.mag != null ? `M${p.mag.toFixed(1)}` : 'Quake'), subtitle: p.place || '', meta };
+  }
+  if (k === 'hurricanes') {
+    const bits = [];
+    if (p.intensity) bits.push(`${p.intensity} kt`);
+    if (p.pressure)  bits.push(`${p.pressure} mb`);
+    return { title: p.name || 'Storm', subtitle: p.classification || 'Tropical cyclone', meta: bits.join(' · ') };
+  }
+  if (k === 'volcanoes') {
+    const sub = (p.country || 'Volcano') + (p.active ? ' · ACTIVE' : '');
+    const meta = p.last_eruption ? `Last erupted ${p.last_eruption}` : '';
+    return { title: p.name || 'Volcano', subtitle: sub, meta };
+  }
+  if (k === 'fires') {
+    const meta = (p.acq_date || '') + (p.acq_time ? ' ' + p.acq_time + ' UTC' : '');
+    return { title: 'Fire detection', subtitle: `FRP ${p.frp ?? '?'} MW`, meta };
+  }
+  if (k === 'tsunamis' || k === 'severe') {
+    return { title: p.event || p.headline || 'Alert', subtitle: p.area || p.headline || '', meta: p.severity || '' };
+  }
+  if (k === 'launches') {
+    const dt = p.net ? (Date.parse(p.net) - Date.now()) / 3.6e6 : null;
+    const cd = (dt != null) ? `T${dt >= 0 ? '−' : '+'}${formatAge(Math.abs(dt))}` : '';
+    return { title: p.name || 'Launch', subtitle: p.vehicle || p.pad_location || '', meta: cd };
+  }
+  if (k === 'news') {
+    return { title: p.name || 'Natural event', subtitle: (p.categories || []).join(' · '), meta: '' };
+  }
+  if (k === 'airports') {
+    const meta = [p.iata, p.icao].filter(Boolean).join(' · ');
+    return { title: p.name || p.id, subtitle: (p.type || '').replace('_', ' '), meta };
+  }
+  if (k === 'tfrs') {
+    return { title: p.notam_id || 'TFR', subtitle: p.type || 'Restriction', meta: p.state || '' };
+  }
+  return { title: p.name || p.id || 'Object', subtitle: '', meta: '' };
+}
+
+function formatAge(hours) {
+  if (hours == null || !isFinite(hours)) return '—';
+  if (hours < 1)  return `${Math.round(hours * 60)}m`;
+  if (hours < 48) return `${hours.toFixed(1)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
+// ---------- Alerts & warnings window ---------------------------------------
+
+const ALERT_KINDS = ['tsunamis','severe','hurricanes','tfrs','quakes','volcanoes','launches','news'];
+
+function isAlertOn(kind) {
+  const cb = document.querySelector(`input[data-alert="${kind}"]`);
+  return !!(cb && cb.checked);
+}
+
+function collectAlerts() {
+  // Returns array of {kind, id, tag, text, meta, sev, sortKey, entity}
+  const out = [];
+  const now = Date.now();
+
+  const layers = ['tsunamis','severe','hurricanes','tfrs','volcanoes','news'];
+  for (const layer of layers) {
+    const ents = entitiesByLayer[layer]; if (!ents) continue;
+    for (const ent of ents.values()) {
+      const p = ent.properties.getValue ? ent.properties.getValue() : ent.properties;
+      if (!p) continue;
+      if (layer === 'volcanoes' && p.active !== true) continue;
+      out.push(buildAlertRow(layer, p, ent, now));
+    }
+  }
+
+  // Quakes: only M >= 4 within 24h
+  const qents = entitiesByLayer.quakes;
+  if (qents) for (const ent of qents.values()) {
+    const p = ent.properties.getValue ? ent.properties.getValue() : ent.properties;
+    if (!p || typeof p.mag !== 'number' || p.mag < 4) continue;
+    const ageH = p.time ? ((now - p.time) / 3.6e6) : 999;
+    if (ageH > 24) continue;
+    out.push(buildAlertRow('quakes', p, ent, now));
+  }
+
+  // Launches: within ±3h of NET
+  const lents = entitiesByLayer.launches;
+  if (lents) for (const ent of lents.values()) {
+    const p = ent.properties.getValue ? ent.properties.getValue() : ent.properties;
+    if (!p || !p.net) continue;
+    const dt = (Date.parse(p.net) - now) / 3.6e6;
+    if (!isFinite(dt) || Math.abs(dt) > 3) continue;
+    out.push(buildAlertRow('launches', p, ent, now));
+  }
+
+  return out;
+}
+
+function buildAlertRow(kind, p, ent, now) {
+  let tag = (KIND_LABEL[kind] || kind).split(' ')[0].slice(0, 8);
+  let text = '—', meta = '', sev = 'low', sortKey = 0;
+
+  if (kind === 'tsunamis') {
+    tag = 'TSUNAMI'; sev = 'high';
+    text = p.event || p.headline || 'Tsunami alert';
+    meta = p.area || '';
+    sortKey = 1e15;  // top
+  } else if (kind === 'severe') {
+    tag = 'SEVERE';
+    const ev = (p.event || '').toLowerCase();
+    sev = (ev.includes('tornado') || ev.includes('hurricane') || ev.includes('flash flood')) ? 'high' : 'mid';
+    text = p.event || p.headline || 'Severe weather';
+    meta = p.area || '';
+    sortKey = (sev === 'high' ? 9e14 : 8e14);
+  } else if (kind === 'hurricanes') {
+    tag = 'STORM'; sev = 'high';
+    text = `${p.classification || ''} ${p.name || ''}`.trim() || 'Storm';
+    if (p.intensity) meta = `${p.intensity} kt`;
+    sortKey = 7e14 + (p.intensity || 0);
+  } else if (kind === 'tfrs') {
+    tag = 'TFR'; sev = 'mid';
+    text = `${p.type || 'TFR'} · ${p.notam_id || ''}`.trim();
+    meta = p.state || '';
+    sortKey = 3e14;
+  } else if (kind === 'quakes') {
+    tag = 'QUAKE';
+    const m = p.mag || 0;
+    sev = m >= 6 ? 'high' : m >= 5 ? 'mid' : 'low';
+    text = `M${m.toFixed(1)} — ${p.place || 'unknown'}`;
+    if (p.time) meta = `${formatAge((now - p.time) / 3.6e6)} ago`;
+    sortKey = 5e14 + m * 1e10 + (p.time || 0);
+  } else if (kind === 'volcanoes') {
+    tag = 'VOLCANO'; sev = 'mid';
+    text = `${p.name || 'Volcano'} — ${p.country || ''}`.trim();
+    meta = p.last_eruption ? `Last ${p.last_eruption}` : 'Active';
+    sortKey = 4e14;
+  } else if (kind === 'launches') {
+    const dt = (Date.parse(p.net) - now) / 3.6e6;
+    sev = (Math.abs(dt) < 1) ? 'active' : 'mid';
+    tag = 'LAUNCH';
+    text = `${p.name || 'Launch'}`;
+    meta = `T${dt >= 0 ? '−' : '+'}${formatAge(Math.abs(dt))}`;
+    sortKey = 6e14 - Math.abs(dt) * 1e9;
+  } else if (kind === 'news') {
+    tag = 'EVENT'; sev = 'low';
+    text = p.name || 'Natural event';
+    meta = (p.categories || []).join(' · ');
+    sortKey = 2e14;
+  }
+  return { kind, id: p.id, tag, text, meta, sev, sortKey, entity: ent };
+}
+
+let alertsRefreshScheduled = false;
+function refreshAlerts() {
+  // Coalesce bursts of upserts into a single update
+  if (alertsRefreshScheduled) return;
+  alertsRefreshScheduled = true;
+  requestAnimationFrame(() => {
+    alertsRefreshScheduled = false;
+    doRefreshAlerts();
+  });
+}
+
+function doRefreshAlerts() {
+  const all = collectAlerts();
+  // Per-kind counts (always show, regardless of toggle)
+  const counts = Object.fromEntries(ALERT_KINDS.map(k => [k, 0]));
+  for (const a of all) counts[a.kind] = (counts[a.kind] || 0) + 1;
+  for (const k of ALERT_KINDS) {
+    const el = document.getElementById(`awn-${k}`);
+    if (el) el.textContent = counts[k] || 0;
+  }
+
+  const filtered = all.filter(a => isAlertOn(a.kind));
+  filtered.sort((a, b) => b.sortKey - a.sortKey);
+  const cap = 60;
+  const shown = filtered.slice(0, cap);
+
+  const list = document.getElementById('aw-list');
+  list.innerHTML = '';
+  for (const a of shown) {
+    const li = document.createElement('li');
+    li.dataset.sev = a.sev;
+    li.innerHTML = `<span class="al-tag">${a.tag}</span><span class="al-text">${escapeHtml(a.text)}</span><span class="al-meta">${escapeHtml(a.meta || '')}</span>`;
+    li.addEventListener('click', () => {
+      flyToEntity(a.entity);
+      showPanel(a.entity);
+    });
+    list.appendChild(li);
+  }
+
+  document.getElementById('aw-empty').classList.toggle('hidden', shown.length > 0);
+  const cEl = document.getElementById('aw-count');
+  cEl.textContent = filtered.length;
+  cEl.dataset.zero = (filtered.length === 0) ? 'true' : 'false';
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function flyToEntity(entity) {
+  if (!entity || !viewer) return;
+  try {
+    viewer.flyTo(entity, { duration: 1.2, offset: new Cesium.HeadingPitchRange(0, -Math.PI / 3, 800_000) });
+  } catch (e) { /* ignore */ }
+}
+
+// Drag the alerts window by its header
+function initAlertsDrag() {
+  const aw = document.getElementById('alerts-window');
+  const head = document.getElementById('aw-drag');
+  if (!aw || !head) return;
+  let dragging = false, startX = 0, startY = 0, baseLeft = 0, baseTop = 0;
+  head.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.aw-btn')) return;
+    dragging = true;
+    const rect = aw.getBoundingClientRect();
+    // Switch to absolute pixel positioning so the centered transform doesn't fight us
+    aw.style.left = `${rect.left}px`;
+    aw.style.top  = `${rect.top}px`;
+    aw.style.transform = 'none';
+    baseLeft = rect.left; baseTop = rect.top;
+    startX = e.clientX; startY = e.clientY;
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const x = Math.max(2, Math.min(window.innerWidth  - 80, baseLeft + (e.clientX - startX)));
+    const y = Math.max(2, Math.min(window.innerHeight - 40, baseTop  + (e.clientY - startY)));
+    aw.style.left = `${x}px`;
+    aw.style.top  = `${y}px`;
+  });
+  window.addEventListener('mouseup', () => { dragging = false; });
 }
 
 // ---------- Clocks / telemetry ticker ---------------------------------------
@@ -332,6 +643,10 @@ function startClocks() {
     // Feed-chip aging — chips that haven't updated in 5x their poll go warn
     refreshFeedChips();
   }, 1000);
+
+  // Recompute alerts every 30s so age-windowed items (quakes 24h, launches ±3h)
+  // roll in and out without waiting for the next snapshot.
+  setInterval(refreshAlerts, 30_000);
 }
 
 function formatKm(meters) {
@@ -423,6 +738,7 @@ function handleMessage(msg) {
     else if (msg.key === 'cables')        { cablesGeoJson = msg.data.geojson; cablesBuilt = false; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
   }
   updateCategoryCounts();
+  refreshAlerts();
 }
 
 function isLayerOn(layer) {

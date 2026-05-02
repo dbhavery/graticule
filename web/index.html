@@ -122,6 +122,38 @@
     </div>
   </aside>
 
+  <!-- ─────────  HOVER TOOLTIP  ───────── -->
+  <div id="hover-tip" class="hidden">
+    <div class="ht-kind" id="ht-kind">—</div>
+    <div class="ht-title" id="ht-title">—</div>
+    <div class="ht-line" id="ht-sub">—</div>
+    <div class="ht-line ht-meta" id="ht-meta"></div>
+  </div>
+
+  <!-- ─────────  ALERTS / WARNINGS WINDOW  ───────── -->
+  <section id="alerts-window">
+    <header class="aw-head" id="aw-drag">
+      <span class="aw-tag">ALERTS &amp; WARNINGS</span>
+      <span class="aw-count mono" id="aw-count">0</span>
+      <span class="aw-rule"></span>
+      <button class="aw-btn" id="aw-collapse" aria-label="Collapse">−</button>
+    </header>
+    <div class="aw-body">
+      <div class="aw-filters" id="aw-filters">
+        <label class="awf"><input type="checkbox" data-alert="tsunamis"  checked><span class="awf-dot" data-color="tsunamis"></span><span class="awf-lbl">Tsunami</span><span class="awf-n" id="awn-tsunamis">0</span></label>
+        <label class="awf"><input type="checkbox" data-alert="severe"    checked><span class="awf-dot" data-color="severe"></span><span class="awf-lbl">Severe Wx</span><span class="awf-n" id="awn-severe">0</span></label>
+        <label class="awf"><input type="checkbox" data-alert="hurricanes"checked><span class="awf-dot" data-color="hurricanes"></span><span class="awf-lbl">Storms</span><span class="awf-n" id="awn-hurricanes">0</span></label>
+        <label class="awf"><input type="checkbox" data-alert="tfrs"      checked><span class="awf-dot" data-color="tfrs"></span><span class="awf-lbl">TFRs</span><span class="awf-n" id="awn-tfrs">0</span></label>
+        <label class="awf"><input type="checkbox" data-alert="quakes"    checked><span class="awf-dot" data-color="quakes"></span><span class="awf-lbl">Quakes M4+</span><span class="awf-n" id="awn-quakes">0</span></label>
+        <label class="awf"><input type="checkbox" data-alert="volcanoes" checked><span class="awf-dot" data-color="volcanoes"></span><span class="awf-lbl">Volcanoes</span><span class="awf-n" id="awn-volcanoes">0</span></label>
+        <label class="awf"><input type="checkbox" data-alert="launches"  checked><span class="awf-dot" data-color="launches"></span><span class="awf-lbl">Launches T±3h</span><span class="awf-n" id="awn-launches">0</span></label>
+        <label class="awf"><input type="checkbox" data-alert="news"      checked><span class="awf-dot" data-color="news"></span><span class="awf-lbl">EONET</span><span class="awf-n" id="awn-news">0</span></label>
+      </div>
+      <ul id="aw-list"></ul>
+      <div id="aw-empty" class="aw-empty">No active alerts match selected filters.</div>
+    </div>
+  </section>
+
   <!-- ─────────  RIGHT DETAIL PANEL  ───────── -->
   <div id="panel" class="hidden">
     <button id="panel-close" aria-label="Close">×</button>
