@@ -129,9 +129,11 @@ def state_borders_and_labels() -> tuple[dict, dict]:
     r = _open(ROOT / "ne_10m_admin_1_states_provinces.zip")
     border_feats = []
     label_feats = []
-    # 80 points per ring is plenty for a state outline at globe scale; full
-    # detail (1.3M pts → 47 MB) bloats the GeoJSON without visible payoff.
-    MAX_PTS_PER_RING = 80
+    # 250 points per ring keeps coastline fidelity at city zoom while still
+    # cutting the ~47 MB raw output to a manageable ~15 MB. (Full undecimated
+    # 1.3M pts is overkill but readable; 80 was too aggressive — Don flagged
+    # state lines as inaccurate when zoomed in.)
+    MAX_PTS_PER_RING = 250
     for rec in r.iterShapeRecords():
         d = rec.record.as_dict()
         # Skip the smallest-rank features (Natural Earth uses scalerank to mark
@@ -168,6 +170,71 @@ def state_borders_and_labels() -> tuple[dict, dict]:
         {"type": "FeatureCollection", "features": border_feats},
         {"type": "FeatureCollection", "features": label_feats},
     )
+
+
+POPULATED_PLACES_URL = (
+    "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_populated_places.zip"
+)
+
+
+def _ensure_populated_places() -> Path | None:
+    """Download Natural Earth populated_places once into the repo root if not
+    already present. Cached file is gitignored via the ne_*.zip rule."""
+    local = ROOT / "ne_10m_populated_places.zip"
+    if local.exists():
+        return local
+    print(f"  fetching {POPULATED_PLACES_URL} (~1.5 MB) …")
+    try:
+        import urllib.request
+        urllib.request.urlretrieve(POPULATED_PLACES_URL, local)
+        return local
+    except Exception as e:
+        print(f"  populated_places fetch failed: {e}")
+        return None
+
+
+def populated_places() -> dict | None:
+    """Convert NE populated_places to a Point FeatureCollection. Properties
+    include NAME, NAMEASCII, SCALERANK (lower = bigger city), POP_MIN, POP_MAX,
+    ADM0NAME (country), ADM1NAME (state), and LATITUDE/LONGITUDE.
+    SCALERANK 0 = world capitals; 6+ = small towns. We keep all and let the
+    front-end DDC-gate by rank.
+    """
+    zp = _ensure_populated_places()
+    if not zp:
+        return None
+    r = _open(zp)
+    feats = []
+    for rec in r.iterShapeRecords():
+        d = rec.record.as_dict()
+        name = (d.get("NAME") or d.get("NAMEASCII") or "").strip()
+        if not name:
+            continue
+        # NE includes both real coordinate fields and a SHAPE point. Use
+        # LATITUDE/LONGITUDE since they're the cartographer-curated label position.
+        lon = d.get("LONGITUDE")
+        lat = d.get("LATITUDE")
+        if lon is None or lat is None:
+            if not rec.shape.points:
+                continue
+            lon, lat = rec.shape.points[0]
+        feats.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
+            "properties": {
+                "kind": "city_label",
+                "name": name,
+                "scalerank": int(d.get("SCALERANK") or 6),
+                "labelrank": int(d.get("LABELRANK") or 6),
+                "rank_max": int(d.get("RANK_MAX") or 0),
+                "pop_max": int(d.get("POP_MAX") or 0),
+                "pop_min": int(d.get("POP_MIN") or 0),
+                "country": d.get("ADM0NAME") or "",
+                "state": d.get("ADM1NAME") or "",
+                "featurecla": d.get("FEATURECLA") or "",
+            },
+        })
+    return {"type": "FeatureCollection", "features": feats}
 
 
 def airspace() -> list[dict] | None:
@@ -222,6 +289,13 @@ def main() -> None:
     sb, sl = state_borders_and_labels()
     print(f"  {len(sb['features'])} border features → {write('ne_state_borders.geojson', sb):,} bytes")
     print(f"  {len(sl['features'])} label features → {write('ne_state_labels.geojson', sl):,} bytes")
+
+    print("building populated places (cities/towns) …")
+    pp = populated_places()
+    if pp is None:
+        print("  populated_places fetch failed — skipping city labels")
+    else:
+        print(f"  {len(pp['features'])} city features → {write('ne_populated_places.geojson', pp):,} bytes")
 
     print("building airspace …")
     asp = airspace()

@@ -106,7 +106,23 @@ async def ws(websocket: WebSocket) -> None:
 
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    # WebView2 caches aggressively — force a fresh fetch every load so
+    # rebuilds show up without manual reload tricks.
+    return FileResponse(
+        WEB_DIR / "index.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    """Disable caching for /static/* so WebView2 always fetches the latest JS/CSS/data."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 # Static assets — served AFTER explicit routes above

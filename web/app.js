@@ -22,6 +22,7 @@ const COLORS = {
   tfrs:       Cesium.Color.fromCssColorString('#f43f5e'),
   boundaries: Cesium.Color.fromCssColorString('#94a3b8'),  // cool slate — neutral over any base
   airspace:   Cesium.Color.fromCssColorString('#a78bfa'),  // soft violet for airspace classes
+  cities:     Cesium.Color.fromCssColorString('#fcd34d'),  // amber for city dots
 };
 
 const CATEGORY = {
@@ -33,7 +34,7 @@ const CATEGORY = {
   tsunamis: 'alerts', severe: 'alerts', news: 'alerts',
   cables: 'reference',
   parcels_us: 'land', parcels_wa: 'land',
-  countries: 'boundaries', states: 'boundaries', airspace: 'boundaries',
+  countries: 'boundaries', states: 'boundaries', airspace: 'boundaries', cities: 'boundaries',
 };
 
 const KIND_LABEL = {
@@ -205,8 +206,8 @@ let satelliteTickHandle = null;
 let countdownTickHandle = null;
 let radarLayer = null, auroraLayer = null;
 let radarMeta = null, auroraMeta = null;
-let countriesDS = null, statesDS = null, airspaceDS = null;
-let countriesBuilt = false, statesBuilt = false, airspaceBuilt = false;
+let countriesDS = null, statesDS = null, airspaceDS = null, citiesDS = null;
+let countriesBuilt = false, statesBuilt = false, airspaceBuilt = false, citiesBuilt = false;
 const feedActivity = {};   // layer -> last update timestamp (ms)
 const recentEvents = [];   // ticker entries (newest first)
 const TICKER_MAX = 6;
@@ -391,6 +392,8 @@ function initDataSources() {
   viewer.dataSources.add(statesDS); statesDS.show = false;
   airspaceDS = new Cesium.CustomDataSource('airspace');
   viewer.dataSources.add(airspaceDS); airspaceDS.show = false;
+  citiesDS = new Cesium.CustomDataSource('cities');
+  viewer.dataSources.add(citiesDS); citiesDS.show = false;
   // Subsolar / terminator marker
   terminatorDS = new Cesium.CustomDataSource('terminator');
   viewer.dataSources.add(terminatorDS);
@@ -690,6 +693,7 @@ function bindUI() {
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
       else if (layer === 'countries')  toggleCountries(on);
       else if (layer === 'states')     toggleStates(on);
+      else if (layer === 'cities')     toggleCities(on);
       else if (layer === 'airspace')   toggleAirspace(on);
       else if (dataSources[layer])     fadeDataSource(dataSources[layer], on ? 'in' : 'out');
       updateCategoryCounts();
@@ -2042,6 +2046,12 @@ function toggleAirspace(on) {
   fadeDataSource(airspaceDS, on ? 'in' : 'out');
 }
 
+function toggleCities(on) {
+  if (!citiesDS) return;
+  if (on && !citiesBuilt) buildCities();
+  fadeDataSource(citiesDS, on ? 'in' : 'out');
+}
+
 async function buildCountries() {
   if (countriesBuilt) return;
   countriesBuilt = true;     // mark optimistically so concurrent toggles don't double-fetch
@@ -2103,7 +2113,8 @@ async function buildCountries() {
           translucencyByDistance: new Cesium.NearFarScalar(5e5, 0.0, 1.2e6, 1.0),
           // Slightly shrink at far zoom so labels don't crowd
           scaleByDistance: new Cesium.NearFarScalar(1e6, 1.0, 1.5e7, 0.7),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          // Depth-test ON so labels on the far side of the globe are occluded.
+          // (Default behavior — leaving this here as documentation of intent.)
         },
         properties: { kind: 'country_label', ...p },
       });
@@ -2170,7 +2181,7 @@ async function buildStates() {
           distanceDisplayCondition: new Cesium.DistanceDisplayCondition(5e4, 2.5e6),
           translucencyByDistance: new Cesium.NearFarScalar(8e4, 0.0, 2e5, 1.0),
           scaleByDistance: new Cesium.NearFarScalar(2e5, 1.0, 2.5e6, 0.85),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          // Depth-test ON so far-side labels stay hidden behind the globe.
         },
         properties: { kind: 'state_label', ...p },
       });
@@ -2250,6 +2261,94 @@ async function buildAirspace() {
   } catch (e) {
     console.warn('Airspace failed to load:', e);
     airspaceBuilt = false;
+  }
+}
+
+// SCALERANK → max camera distance at which the city is visible. Lower rank =
+// bigger city, visible from farther out. Tuned so the world view shows ~30
+// capitals, the regional view fills in mid-tier cities, and street-zoom adds
+// small towns. Beyond `far`, the city is hidden via DistanceDisplayCondition.
+function _cityMaxDist(scalerank) {
+  const r = Math.max(0, Math.min(12, scalerank | 0));
+  // Distances in metres
+  const table = [
+    5e7,    // 0 — capitals (always)
+    2.5e7,  // 1
+    1.5e7,  // 2
+    8e6,    // 3
+    4e6,    // 4
+    2e6,    // 5
+    9e5,    // 6
+    4e5,    // 7
+    2e5,    // 8
+    1e5,    // 9
+    6e4,    // 10
+    4e4,    // 11
+    3e4,    // 12+
+  ];
+  return table[r];
+}
+
+async function buildCities() {
+  if (citiesBuilt) return;
+  citiesBuilt = true;
+  try {
+    const res = await fetch('/static/data/ne_populated_places.geojson');
+    if (!res.ok) throw new Error(`/static/data/ne_populated_places.geojson → HTTP ${res.status}`);
+    const fc = await res.json();
+    const labelFill = Cesium.Color.fromCssColorString('#f8fafc');
+    const labelOutline = Cesium.Color.fromCssColorString('#000000').withAlpha(0.95);
+    const dotColor = COLORS.cities.withAlpha(0.85);
+
+    let added = 0;
+    for (const f of (fc.features || [])) {
+      const c = f.geometry?.coordinates;
+      if (!c) continue;
+      const p = f.properties || {};
+      const sr = p.scalerank ?? 6;
+      const farM = _cityMaxDist(sr);
+      // Lower rank = larger label; cap range to keep things readable
+      const fontPx = sr <= 1 ? 12 : sr <= 3 ? 11 : sr <= 6 ? 10 : 9;
+      // Dot size scales gently with rank too
+      const dotPx = sr <= 1 ? 4.5 : sr <= 4 ? 3.5 : 2.5;
+      // Fade-in distance: a third of the visibility range so the city
+      // softly appears as the camera approaches.
+      const fadeStart = Math.min(farM, farM * 0.6);
+      const fadeFull  = Math.min(farM, farM * 0.35);
+      citiesDS.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
+        point: {
+          pixelSize: dotPx,
+          color: dotColor,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 0.5,
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, farM),
+          translucencyByDistance: new Cesium.NearFarScalar(fadeStart, 0.0, fadeFull, 1.0),
+        },
+        label: {
+          text: p.name || '',
+          font: `500 ${fontPx}px "Inter", system-ui, sans-serif`,
+          fillColor: labelFill,
+          outlineColor: labelOutline,
+          outlineWidth: 2.5,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          pixelOffset: new Cesium.Cartesian2(6, 0),
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, farM),
+          translucencyByDistance: new Cesium.NearFarScalar(fadeStart, 0.0, fadeFull, 1.0),
+          // Depth-test ON so cities on the far side of the globe are occluded.
+        },
+        properties: { kind: 'city_label', ...p },
+      });
+      added++;
+    }
+    setCount('cities', added);
+    updateCategoryCounts();
+    console.log(`Built ${added} city/town labels`);
+  } catch (e) {
+    console.warn('Cities failed to load:', e);
+    citiesBuilt = false;
   }
 }
 

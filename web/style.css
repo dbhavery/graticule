@@ -40,6 +40,7 @@
   --c-parcels_wa: #fcd34d;
   --c-boundaries: #94a3b8;
   --c-airspace:   #a78bfa;
+  --c-cities:     #fcd34d;
   --c-mon_alerts: #ef4444;
   --c-mon_feed:   #38bdf8;
 
@@ -405,6 +406,7 @@ html, body {
 .dot[data-color=parcels_wa] { background: var(--c-parcels_wa); box-shadow: 0 0 5px var(--c-parcels_wa); }
 .dot[data-color=boundaries] { background: var(--c-boundaries); box-shadow: 0 0 5px var(--c-boundaries); }
 .dot[data-color=airspace]   { background: var(--c-airspace);   box-shadow: 0 0 5px var(--c-airspace); }
+.dot[data-color=cities]     { background: var(--c-cities);     box-shadow: 0 0 5px var(--c-cities); }
 .dot[data-color=mon_alerts] { background: var(--c-mon_alerts); box-shadow: 0 0 5px var(--c-mon_alerts); }
 .dot[data-color=mon_feed]   { background: var(--c-mon_feed);   box-shadow: 0 0 5px var(--c-mon_feed); }
 
