@@ -20,6 +20,8 @@ const COLORS = {
   cables:     Cesium.Color.fromCssColorString('#fbbf24'),
   airports:   Cesium.Color.fromCssColorString('#60a5fa'),
   tfrs:       Cesium.Color.fromCssColorString('#f43f5e'),
+  boundaries: Cesium.Color.fromCssColorString('#94a3b8'),  // cool slate — neutral over any base
+  airspace:   Cesium.Color.fromCssColorString('#a78bfa'),  // soft violet for airspace classes
 };
 
 const CATEGORY = {
@@ -31,6 +33,7 @@ const CATEGORY = {
   tsunamis: 'alerts', severe: 'alerts', news: 'alerts',
   cables: 'reference',
   parcels_us: 'land', parcels_wa: 'land',
+  countries: 'boundaries', states: 'boundaries', airspace: 'boundaries',
 };
 
 const KIND_LABEL = {
@@ -202,6 +205,8 @@ let satelliteTickHandle = null;
 let countdownTickHandle = null;
 let radarLayer = null, auroraLayer = null;
 let radarMeta = null, auroraMeta = null;
+let countriesDS = null, statesDS = null, airspaceDS = null;
+let countriesBuilt = false, statesBuilt = false, airspaceBuilt = false;
 const feedActivity = {};   // layer -> last update timestamp (ms)
 const recentEvents = [];   // ticker entries (newest first)
 const TICKER_MAX = 6;
@@ -246,6 +251,10 @@ async function initViewer() {
     navigationHelpButton: false, selectionIndicator: false, infoBox: false,
     creditContainer: document.createElement('div'),
   });
+
+  // Test-only handle so Playwright (and the dev console) can drive the camera
+  // and inspect data sources during self-test without re-plumbing the closure.
+  window.__graticule_viewer = viewer;
 
   viewer.imageryLayers.removeAll();
   // Prefer Cesium ion World Imagery (Bing-backed, 19+ levels) when a token is
@@ -375,6 +384,13 @@ function initDataSources() {
   cablesDS = new Cesium.CustomDataSource('cables');
   viewer.dataSources.add(cablesDS);
   cablesDS.show = false;
+  // Boundaries — static, lazily populated on first toggle
+  countriesDS = new Cesium.CustomDataSource('countries');
+  viewer.dataSources.add(countriesDS); countriesDS.show = false;
+  statesDS = new Cesium.CustomDataSource('states');
+  viewer.dataSources.add(statesDS); statesDS.show = false;
+  airspaceDS = new Cesium.CustomDataSource('airspace');
+  viewer.dataSources.add(airspaceDS); airspaceDS.show = false;
   // Subsolar / terminator marker
   terminatorDS = new Cesium.CustomDataSource('terminator');
   viewer.dataSources.add(terminatorDS);
@@ -672,6 +688,9 @@ function bindUI() {
       else if (layer === 'terminator') toggleTerminator(on);
       else if (layer === 'parcels_us') toggleParcelsUS(on);
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
+      else if (layer === 'countries')  toggleCountries(on);
+      else if (layer === 'states')     toggleStates(on);
+      else if (layer === 'airspace')   toggleAirspace(on);
       else if (dataSources[layer])     fadeDataSource(dataSources[layer], on ? 'in' : 'out');
       updateCategoryCounts();
     });
@@ -1967,6 +1986,252 @@ function buildCables() {
   cablesBuilt = true;
   setCount('cables', features.length);
   console.log(`Built ${features.length} submarine-cable polylines`);
+}
+
+// ---------- Boundaries (countries / states / airspace) ----------------------
+//
+// Countries and states are pre-built GeoJSON files (Natural Earth 10m, derived
+// via scripts/build_boundaries.py). Airspace is OpenAIP raw-API JSON converted
+// to a GeoJSON FeatureCollection at build time. All three are lazy-loaded on
+// first toggle, kept resident, and shown/hidden via fadeDataSource.
+//
+// Visual rules:
+//   - Country borders: 1 px hairline, ~22% alpha → present without dominating
+//   - Country labels:  small slate caps, fade in from 1.2 Mm down to ~500 km,
+//                      hide when very close so they don't fight ground detail
+//   - State borders:   1 px hairline, ~14% alpha — quieter than countries
+//   - State labels:    smaller font, fade in from 200 km down to 50 km,
+//                      hide when above ~2 Mm so they don't crowd the world view
+//   - Airspace polys:  ICAO-class-tinted fills with low alpha, outlined; only
+//                      visible at regional zoom (DDC 0–800 km)
+
+function toggleCountries(on) {
+  if (!countriesDS) return;
+  if (on && !countriesBuilt) buildCountries();
+  fadeDataSource(countriesDS, on ? 'in' : 'out');
+}
+
+function toggleStates(on) {
+  if (!statesDS) return;
+  if (on && !statesBuilt) buildStates();
+  fadeDataSource(statesDS, on ? 'in' : 'out');
+}
+
+function toggleAirspace(on) {
+  if (!airspaceDS) return;
+  if (on && !airspaceBuilt) buildAirspace();
+  fadeDataSource(airspaceDS, on ? 'in' : 'out');
+}
+
+async function buildCountries() {
+  if (countriesBuilt) return;
+  countriesBuilt = true;     // mark optimistically so concurrent toggles don't double-fetch
+  try {
+    const [bordersRes, labelsRes] = await Promise.all([
+      fetch('/static/data/ne_country_borders.geojson'),
+      fetch('/static/data/ne_country_labels.geojson'),
+    ]);
+    const borders = await bordersRes.json();
+    const labels  = await labelsRes.json();
+
+    // Lighter slate at moderate alpha — visible over satellite imagery without
+    // shouting. Tuned by eye against ESRI World Imagery + Cesium ion Bing.
+    const lineColor    = Cesium.Color.fromCssColorString('#cbd5e1').withAlpha(0.45);
+    const lineMaterial = new Cesium.ColorMaterialProperty(lineColor);
+
+    for (const f of (borders.features || [])) {
+      const coords = f.geometry?.coordinates;
+      if (!coords || coords.length < 2) continue;
+      const positions = coords
+        .filter(c => typeof c[0] === 'number' && typeof c[1] === 'number')
+        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+      if (positions.length < 2) continue;
+      countriesDS.entities.add({
+        polyline: {
+          positions, width: 1.0, material: lineMaterial, clampToGround: true,
+        },
+        properties: { kind: 'country_border', ...f.properties },
+      });
+    }
+
+    // Labels: tasteful — small caps, slate gray, distance-fade so they only
+    // assert when zoomed close enough to be useful. Brighter fill + heavier
+    // outline so they read against busy satellite imagery without shouting.
+    const labelFill = Cesium.Color.fromCssColorString('#f1f5f9');
+    const labelOutline = Cesium.Color.fromCssColorString('#000000').withAlpha(0.95);
+    for (const f of (labels.features || [])) {
+      const c = f.geometry?.coordinates;
+      if (!c) continue;
+      const p = f.properties || {};
+      const labelrank = p.labelrank ?? 5;
+      // Only render labels for top-tier countries (labelrank ≤ 7) so the globe
+      // doesn't drown in micro-territory text. Higher rank = less prominent.
+      if (labelrank > 7) continue;
+      countriesDS.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
+        label: {
+          text: (p.name || '').toUpperCase(),
+          font: '600 12px "Inter", system-ui, sans-serif',
+          fillColor: labelFill,
+          outlineColor: labelOutline,
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          // Hide when very close (< 200 km) and very far (> 18 Mm)
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(2e5, 1.8e7),
+          // Soft fade-in over 500 km → 1.2 Mm
+          translucencyByDistance: new Cesium.NearFarScalar(5e5, 0.0, 1.2e6, 1.0),
+          // Slightly shrink at far zoom so labels don't crowd
+          scaleByDistance: new Cesium.NearFarScalar(1e6, 1.0, 1.5e7, 0.7),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        properties: { kind: 'country_label', ...p },
+      });
+    }
+    setCount('countries', countriesDS.entities.values.length);
+    updateCategoryCounts();
+    console.log(`Built ${(borders.features||[]).length} country border lines + ${(labels.features||[]).length} labels`);
+  } catch (e) {
+    console.warn('Country boundaries failed to load:', e);
+    countriesBuilt = false;
+  }
+}
+
+async function buildStates() {
+  if (statesBuilt) return;
+  statesBuilt = true;
+  try {
+    const [bordersRes, labelsRes] = await Promise.all([
+      fetch('/static/data/ne_state_borders.geojson'),
+      fetch('/static/data/ne_state_labels.geojson'),
+    ]);
+    const borders = await bordersRes.json();
+    const labels  = await labelsRes.json();
+
+    // Quieter than country borders — half the alpha so they don't compete.
+    const lineColor    = Cesium.Color.fromCssColorString('#cbd5e1').withAlpha(0.30);
+    const lineMaterial = new Cesium.ColorMaterialProperty(lineColor);
+
+    for (const f of (borders.features || [])) {
+      const coords = f.geometry?.coordinates;
+      if (!coords || coords.length < 2) continue;
+      const positions = coords
+        .filter(c => typeof c[0] === 'number' && typeof c[1] === 'number')
+        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+      if (positions.length < 2) continue;
+      statesDS.entities.add({
+        polyline: {
+          positions, width: 1.0, material: lineMaterial, clampToGround: true,
+          // States only readable at regional zoom — hide when very far
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 8e6),
+        },
+        properties: { kind: 'state_border', ...f.properties },
+      });
+    }
+
+    const labelFill = Cesium.Color.fromCssColorString('#e2e8f0');
+    const labelOutline = Cesium.Color.fromCssColorString('#000000').withAlpha(0.95);
+    for (const f of (labels.features || [])) {
+      const c = f.geometry?.coordinates;
+      if (!c) continue;
+      const p = f.properties || {};
+      statesDS.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
+        label: {
+          text: p.name || '',
+          font: '500 11px "Inter", system-ui, sans-serif',
+          fillColor: labelFill,
+          outlineColor: labelOutline,
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          // Visible only at regional zoom (50 km – 2.5 Mm)
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(5e4, 2.5e6),
+          translucencyByDistance: new Cesium.NearFarScalar(8e4, 0.0, 2e5, 1.0),
+          scaleByDistance: new Cesium.NearFarScalar(2e5, 1.0, 2.5e6, 0.85),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        properties: { kind: 'state_label', ...p },
+      });
+    }
+    setCount('states', statesDS.entities.values.length);
+    updateCategoryCounts();
+    console.log(`Built ${(borders.features||[]).length} state border lines + ${(labels.features||[]).length} labels`);
+  } catch (e) {
+    console.warn('State boundaries failed to load:', e);
+    statesBuilt = false;
+  }
+}
+
+// ICAO airspace class → fill color (low alpha) + outline color (higher alpha).
+// OpenAIP icaoClass: 1=A, 2=B, 3=C, 4=D, 5=E, 6=F, 7=G, 8=other/unspecified.
+const AIRSPACE_CLASS_COLOR = {
+  1: '#f87171',  // A — red
+  2: '#fb923c',  // B — orange
+  3: '#fbbf24',  // C — amber
+  4: '#a3e635',  // D — lime
+  5: '#60a5fa',  // E — blue
+  6: '#a78bfa',  // F — violet
+  7: '#a78bfa',  // G — violet (rare in US)
+  8: '#94a3b8',  // other — slate
+};
+
+async function buildAirspace() {
+  if (airspaceBuilt) return;
+  airspaceBuilt = true;
+  try {
+    const res = await fetch('/static/data/airspace.json');
+    if (!res.ok) throw new Error(`/static/data/airspace.json → HTTP ${res.status}`);
+    const records = await res.json();
+
+    let added = 0;
+    for (const a of records) {
+      const geom = a.geometry || {};
+      if (geom.type !== 'Polygon' || !Array.isArray(geom.coordinates)) continue;
+      const ring = geom.coordinates[0];
+      if (!ring || ring.length < 3) continue;
+      const positions = ring
+        .filter(p => typeof p[0] === 'number' && typeof p[1] === 'number')
+        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+      if (positions.length < 3) continue;
+
+      const cls = a.icaoClass ?? 8;
+      const css = AIRSPACE_CLASS_COLOR[cls] || AIRSPACE_CLASS_COLOR[8];
+      const fill = Cesium.Color.fromCssColorString(css).withAlpha(0.10);
+      const outline = Cesium.Color.fromCssColorString(css).withAlpha(0.55);
+
+      airspaceDS.entities.add({
+        polygon: {
+          hierarchy: new Cesium.PolygonHierarchy(positions),
+          material: new Cesium.ColorMaterialProperty(fill),
+          outline: true,
+          outlineColor: outline,
+          outlineWidth: 1.0,
+          // Only visible at regional zoom (≤ 800 km altitude)
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 8e5),
+          height: 0,
+        },
+        properties: {
+          kind: 'airspace',
+          name: a.name || '',
+          icaoClass: cls,
+          type: a.type,
+          upperLimit: a.upperLimit,
+          lowerLimit: a.lowerLimit,
+          hoursOfOperation: a.hoursOfOperation,
+        },
+      });
+      added++;
+    }
+    setCount('airspace', added);
+    updateCategoryCounts();
+    console.log(`Built ${added} airspace polygons (${records.length} input records)`);
+  } catch (e) {
+    console.warn('Airspace failed to load:', e);
+    airspaceBuilt = false;
+  }
 }
 
 function showPanel(entity) {

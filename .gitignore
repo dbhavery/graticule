@@ -27,8 +27,10 @@ us_hot.json
 us_hot.geojson
 
 # Bulk data — Natural Earth shapefile zips (public domain, 73 MB total).
-# Converted to GeoJSON at build time → web/data/ne_*.geojson.
+# Converted to GeoJSON via scripts/build_boundaries.py → web/data/ne_*.geojson.
+# We commit the derived GeoJSONs (~11 MB total) but keep the zips out.
 ne_*.zip
 
-# Generated GeoJSON derived from above
-web/data/
+# Airspace JSON — derived from OpenAIP us_asp.json, same CC-BY-NC-SA license
+# constraint as the upstream. Don't commit; build locally.
+web/data/airspace.json
