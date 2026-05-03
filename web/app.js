@@ -493,6 +493,11 @@ function applyDDC(g, ddc) {
   if (g.label)    g.label.distanceDisplayCondition    = ddc;
   if (g.ellipse)  g.ellipse.distanceDisplayCondition  = ddc;
   if (g.polyline) g.polyline.distanceDisplayCondition = ddc;
+  // Scale point graphics 1.0× at distance, up to 1.7× when very close,
+  // so hover targets are easier to hit at street zoom.
+  if (g.point && !g.point.scaleByDistance) {
+    g.point.scaleByDistance = new Cesium.NearFarScalar(5_000, 1.7, 1_500_000, 1.0);
+  }
   return g;
 }
 
@@ -1378,7 +1383,30 @@ function pushDeltasToTicker(layer, entries) {
 // GitHub. Used at very-close zoom (<50 km) so dots become recognizable
 // silhouettes when you fly down to a city. Falls back to dot if it fails.
 const PLANE_MODEL_URL = 'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/models/CesiumAir/Cesium_Air.glb';
-const MODEL_SWAP_DISTANCE_M = 50_000;
+const MODEL_SWAP_DISTANCE_M = 50_000;          // planes: model below 50 km
+const SHIP_ICON_DIST_M     = 200_000;          // ships: SVG icon below 200 km
+const SAT_ICON_DIST_M      = 5_000_000;        // satellites: SVG icon below 5 Mm
+
+// Inline SVG billboards for near-zoom ship + satellite representations.
+// Encoded as data URLs so no extra network calls and no asset hosting.
+function _svgDataUrl(svg) {
+  return 'data:image/svg+xml;base64,' + btoa(svg);
+}
+const SHIP_ICON_URL = _svgDataUrl(`<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 64" width="32" height="64">
+  <path d="M16 2 L26 22 L26 54 L20 62 L12 62 L6 54 L6 22 Z"
+        fill="#4dd2ff" stroke="#001824" stroke-width="2" stroke-linejoin="round"/>
+  <line x1="16" y1="14" x2="16" y2="58" stroke="#001824" stroke-width="1.5"/>
+  <circle cx="16" cy="36" r="3" fill="#001824"/>
+</svg>`);
+const SAT_ICON_URL = _svgDataUrl(`<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 32" width="48" height="32">
+  <rect x="20" y="11" width="8" height="10" fill="#c4b5fd" stroke="#1e1b3a" stroke-width="1.5"/>
+  <rect x="2"  y="13" width="16" height="6"  fill="#a78bfa" stroke="#1e1b3a" stroke-width="1.5"/>
+  <rect x="30" y="13" width="16" height="6"  fill="#a78bfa" stroke="#1e1b3a" stroke-width="1.5"/>
+  <line x1="2" y1="16" x2="46" y2="16" stroke="#1e1b3a" stroke-width="0.6"/>
+  <rect x="22" y="2"  width="4"  height="9"  fill="#fde68a" stroke="#1e1b3a" stroke-width="1"/>
+</svg>`);
 
 function planeOrientation(pos, headingDeg) {
   if (headingDeg == null || !isFinite(headingDeg)) return undefined;
@@ -1411,6 +1439,27 @@ function upsertEntity(layer, id, data) {
         runAnimations: false,
       };
       if (g.point) g.point.distanceDisplayCondition = new Cesium.DistanceDisplayCondition(MODEL_SWAP_DISTANCE_M, ALWAYS_VISIBLE_FAR_M);
+    } else if (layer === 'ships') {
+      // Below 200 km, draw a top-down boat silhouette billboard rotated by COG.
+      g.billboard = {
+        image: SHIP_ICON_URL,
+        width: 14, height: 26,
+        scaleByDistance: new Cesium.NearFarScalar(5_000, 1.4, SHIP_ICON_DIST_M, 0.7),
+        rotation: Cesium.Math.toRadians(-(Number(data.cog) || 0)),
+        alignedAxis: Cesium.Cartesian3.UNIT_Z,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, SHIP_ICON_DIST_M),
+        verticalOrigin: Cesium.VerticalOrigin.CENTER,
+      };
+      if (g.point) g.point.distanceDisplayCondition = new Cesium.DistanceDisplayCondition(SHIP_ICON_DIST_M, ALWAYS_VISIBLE_FAR_M);
+    } else if (layer === 'satellites') {
+      // Below 5 Mm, draw a small box-with-solar-panels silhouette.
+      g.billboard = {
+        image: SAT_ICON_URL,
+        width: 22, height: 14,
+        scaleByDistance: new Cesium.NearFarScalar(50_000, 1.3, SAT_ICON_DIST_M, 0.7),
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, SAT_ICON_DIST_M),
+      };
+      if (g.point) g.point.distanceDisplayCondition = new Cesium.DistanceDisplayCondition(SAT_ICON_DIST_M, ALWAYS_VISIBLE_FAR_M);
     }
     const opts = {
       id: `${layer}:${id}`,
@@ -1437,6 +1486,8 @@ function upsertEntity(layer, id, data) {
     if (layer === 'planes') {
       const ori = planeOrientation(pos, data.heading);
       if (ori) ent.orientation = ori;
+    } else if (layer === 'ships' && ent.billboard && data.cog != null) {
+      ent.billboard.rotation = Cesium.Math.toRadians(-Number(data.cog));
     }
     const g = graphicsFor(layer, data);
     if (g.point && ent.point) {
