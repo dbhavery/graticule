@@ -513,6 +513,151 @@ function disableLayer(layer, reason) {
   if (dataSources[layer]) dataSources[layer].show = false;
 }
 
+// ---------- Layer fade helpers ----------------------------------------------
+//
+// Layers reveal and dismiss with a brief alpha fade (LAYER_FADE_MS) instead of
+// snapping. For entity-based dataSources we walk entities once at fade start,
+// capture their baseline color/material/label values, then lerp alpha each
+// rAF tick. Imagery layers fade via ImageryLayer.alpha; 3D tilesets via a
+// Cesium3DTileStyle color('white', a). When fading out, dataSource.show
+// flips to false at the end so picks/clusters stop firing on invisible items.
+
+const LAYER_FADE_MS = 350;
+const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+
+function fadeDataSource(ds, dir = 'in', durationMs = LAYER_FADE_MS, onDone) {
+  if (!ds) { onDone?.(); return; }
+  // Cancel any in-flight fade on this source so rapid toggles don't fight.
+  if (ds._fadeAbort) ds._fadeAbort();
+  // Empty source — flip show directly, skip the rAF loop.
+  if (!ds.entities.values.length) {
+    ds.show = (dir === 'in');
+    onDone?.();
+    return;
+  }
+  if (dir === 'in') ds.show = true;
+  const entities = Array.from(ds.entities.values);
+  const baseline = entities.map(captureEntityColors);
+  let aborted = false;
+  ds._fadeAbort = () => {
+    aborted = true;
+    for (let i = 0; i < entities.length; i++) restoreEntity(entities[i], baseline[i]);
+    ds._fadeAbort = null;
+  };
+  const t0 = performance.now();
+  function step(now) {
+    if (aborted) return;
+    const t = Math.min(1, (now - t0) / durationMs);
+    const eased = easeOutCubic(t);
+    const mul = (dir === 'in') ? eased : (1 - eased);
+    for (let i = 0; i < entities.length; i++) {
+      applyAlphaMul(entities[i], baseline[i], mul);
+    }
+    viewer.scene.requestRender();
+    if (t < 1) requestAnimationFrame(step);
+    else {
+      for (let i = 0; i < entities.length; i++) restoreEntity(entities[i], baseline[i]);
+      ds._fadeAbort = null;
+      if (dir === 'out') ds.show = false;
+      viewer.scene.requestRender();
+      onDone?.();
+    }
+  }
+  requestAnimationFrame(step);
+}
+
+function captureEntityColors(e) {
+  const t = viewer.clock.currentTime;
+  const cap = {};
+  const get = (prop) => prop?.getValue ? prop.getValue(t) : null;
+  if (e.billboard?.color)  { const v = get(e.billboard.color);  if (v) cap.billboard = v.clone(); }
+  if (e.point?.color)      { const v = get(e.point.color);      if (v) cap.point     = v.clone(); }
+  if (e.polyline?.material instanceof Cesium.ColorMaterialProperty) {
+    const v = get(e.polyline.material.color); if (v) cap.polylineColor = v.clone();
+  }
+  if (e.polyline?.material instanceof Cesium.PolylineDashMaterialProperty) {
+    const v = get(e.polyline.material.color); if (v) cap.polylineDashColor = v.clone();
+    cap.polylineDashLength = e.polyline.material.dashLength?.getValue?.(t) ?? 16;
+  }
+  if (e.polygon?.material instanceof Cesium.ColorMaterialProperty) {
+    const v = get(e.polygon.material.color); if (v) cap.polygonColor = v.clone();
+  }
+  if (e.polygon?.outlineColor) { const v = get(e.polygon.outlineColor); if (v) cap.polygonOutline = v.clone(); }
+  if (e.label?.fillColor)      { const v = get(e.label.fillColor);      if (v) cap.labelFill    = v.clone(); }
+  if (e.label?.outlineColor)   { const v = get(e.label.outlineColor);   if (v) cap.labelOutline = v.clone(); }
+  return cap;
+}
+
+function applyAlphaMul(e, b, mul) {
+  if (b.billboard && e.billboard) e.billboard.color = b.billboard.withAlpha(b.billboard.alpha * mul);
+  if (b.point && e.point)         e.point.color     = b.point.withAlpha(b.point.alpha * mul);
+  if (b.polylineColor && e.polyline) {
+    e.polyline.material = new Cesium.ColorMaterialProperty(b.polylineColor.withAlpha(b.polylineColor.alpha * mul));
+  }
+  if (b.polylineDashColor && e.polyline) {
+    e.polyline.material = new Cesium.PolylineDashMaterialProperty({
+      color: b.polylineDashColor.withAlpha(b.polylineDashColor.alpha * mul),
+      dashLength: b.polylineDashLength,
+    });
+  }
+  if (b.polygonColor && e.polygon) {
+    e.polygon.material = new Cesium.ColorMaterialProperty(b.polygonColor.withAlpha(b.polygonColor.alpha * mul));
+  }
+  if (b.polygonOutline && e.polygon) e.polygon.outlineColor = b.polygonOutline.withAlpha(b.polygonOutline.alpha * mul);
+  if (b.labelFill && e.label)        e.label.fillColor      = b.labelFill.withAlpha(b.labelFill.alpha * mul);
+  if (b.labelOutline && e.label)     e.label.outlineColor   = b.labelOutline.withAlpha(b.labelOutline.alpha * mul);
+}
+
+function restoreEntity(e, b) {
+  if (b.billboard && e.billboard) e.billboard.color = b.billboard;
+  if (b.point && e.point)         e.point.color     = b.point;
+  if (b.polylineColor && e.polyline) e.polyline.material = new Cesium.ColorMaterialProperty(b.polylineColor);
+  if (b.polylineDashColor && e.polyline) {
+    e.polyline.material = new Cesium.PolylineDashMaterialProperty({ color: b.polylineDashColor, dashLength: b.polylineDashLength });
+  }
+  if (b.polygonColor && e.polygon) e.polygon.material = new Cesium.ColorMaterialProperty(b.polygonColor);
+  if (b.polygonOutline && e.polygon) e.polygon.outlineColor = b.polygonOutline;
+  if (b.labelFill && e.label)        e.label.fillColor      = b.labelFill;
+  if (b.labelOutline && e.label)     e.label.outlineColor   = b.labelOutline;
+}
+
+function fadeImageryLayer(layer, fromA, toA, durationMs = LAYER_FADE_MS, onDone) {
+  if (!layer) { onDone?.(); return; }
+  const t0 = performance.now();
+  layer.alpha = fromA;
+  layer.show = true;
+  function step(now) {
+    const t = Math.min(1, (now - t0) / durationMs);
+    layer.alpha = fromA + (toA - fromA) * easeOutCubic(t);
+    viewer.scene.requestRender();
+    if (t < 1) requestAnimationFrame(step);
+    else {
+      if (toA <= 0) layer.show = false;
+      viewer.scene.requestRender();
+      onDone?.();
+    }
+  }
+  requestAnimationFrame(step);
+}
+
+function fadeTileset(tileset, fromA, toA, durationMs = LAYER_FADE_MS, onDone) {
+  if (!tileset) { onDone?.(); return; }
+  if (toA > 0) tileset.show = true;
+  const t0 = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - t0) / durationMs);
+    const a = fromA + (toA - fromA) * easeOutCubic(t);
+    tileset.style = new Cesium.Cesium3DTileStyle({ color: `color('white', ${a})` });
+    viewer.scene.requestRender();
+    if (t < 1) requestAnimationFrame(step);
+    else {
+      if (toA <= 0) tileset.show = false;
+      onDone?.();
+    }
+  }
+  requestAnimationFrame(step);
+}
+
 function bindUI() {
   document.querySelectorAll('input[data-layer]').forEach((cb) => {
     cb.addEventListener('change', () => {
@@ -527,7 +672,7 @@ function bindUI() {
       else if (layer === 'terminator') toggleTerminator(on);
       else if (layer === 'parcels_us') toggleParcelsUS(on);
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
-      else if (dataSources[layer])     dataSources[layer].show = on;
+      else if (dataSources[layer])     fadeDataSource(dataSources[layer], on ? 'in' : 'out');
       updateCategoryCounts();
     });
   });
@@ -1495,7 +1640,10 @@ function startCountdownTicker() {
 
 function toggleRadar(on) {
   if (!on) {
-    if (radarLayer) { viewer.imageryLayers.remove(radarLayer); radarLayer = null; }
+    if (radarLayer) {
+      const ref = radarLayer; radarLayer = null;
+      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
+    }
     return;
   }
   if (!radarMeta || !radarMeta.host) return;
@@ -1508,12 +1656,15 @@ function toggleRadar(on) {
     url: tpl, credit: 'Radar © RainViewer',
     minimumLevel: 0, maximumLevel: 7,
   }));
-  radarLayer.alpha = 0.7;
+  fadeImageryLayer(radarLayer, 0, 0.7);
 }
 
 function toggleAurora(on) {
   if (!on) {
-    if (auroraLayer) { viewer.imageryLayers.remove(auroraLayer); auroraLayer = null; }
+    if (auroraLayer) {
+      const ref = auroraLayer; auroraLayer = null;
+      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
+    }
     return;
   }
   if (!auroraMeta || !auroraMeta.coordinates) return;
@@ -1552,7 +1703,7 @@ function toggleAurora(on) {
     rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90),
     credit: 'Aurora © NOAA SWPC',
   }));
-  auroraLayer.alpha = 0.85;
+  fadeImageryLayer(auroraLayer, 0, 0.85);
 }
 
 // ---------- Space weather header chips --------------------------------------
@@ -1646,10 +1797,10 @@ function enable3DLayer(layer) {
 }
 
 function toggleBuildings(on) {
-  if (osmBuildingsTileset) osmBuildingsTileset.show = on;
+  if (osmBuildingsTileset) fadeTileset(osmBuildingsTileset, on ? 0 : 1, on ? 1 : 0);
 }
 function togglePhotoreal3D(on) {
-  if (googleTileset) googleTileset.show = on;
+  if (googleTileset) fadeTileset(googleTileset, on ? 0 : 1, on ? 1 : 0);
 }
 
 // ---------- Night Lights (NASA Black Marble via GIBS) -----------------------
@@ -1657,8 +1808,8 @@ function togglePhotoreal3D(on) {
 function toggleNightLights(on) {
   if (!on) {
     if (nightLightsLayer) {
-      viewer.imageryLayers.remove(nightLightsLayer);
-      nightLightsLayer = null;
+      const ref = nightLightsLayer; nightLightsLayer = null;
+      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
     }
     return;
   }
@@ -1680,7 +1831,7 @@ function toggleNightLights(on) {
   // supports per-imagery dayAlpha/nightAlpha when the globe has lighting.
   nightLightsLayer.dayAlpha   = 0.0;
   nightLightsLayer.nightAlpha = 1.0;
-  nightLightsLayer.alpha      = 1.0;
+  fadeImageryLayer(nightLightsLayer, 0, 1.0);
 }
 
 // ---------- Subsolar point + day/night terminator ---------------------------
@@ -1725,7 +1876,7 @@ function initTerminator() {
 }
 
 function toggleTerminator(on) {
-  if (terminatorDS) terminatorDS.show = on;
+  if (terminatorDS) fadeDataSource(terminatorDS, on ? 'in' : 'out');
 }
 
 // Subsolar point (lat, lon) for given Date — simple low-precision algorithm.
@@ -1776,8 +1927,8 @@ function updateTerminator() {
 
 function toggleCables(on) {
   if (!cablesDS) return;
-  cablesDS.show = on;
   if (on && !cablesBuilt && cablesGeoJson) buildCables();
+  fadeDataSource(cablesDS, on ? 'in' : 'out');
 }
 
 function buildCables() {
@@ -1886,7 +2037,10 @@ let parcelsWALastBbox = null;       // [w, s, e, n] of last successful fetch
 
 function toggleParcelsUS(on) {
   if (!on) {
-    if (parcelsUSLayer) { viewer.imageryLayers.remove(parcelsUSLayer); parcelsUSLayer = null; }
+    if (parcelsUSLayer) {
+      const ref = parcelsUSLayer; parcelsUSLayer = null;
+      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
+    }
     return;
   }
   if (parcelsUSLayer) return;
@@ -1896,7 +2050,7 @@ function toggleParcelsUS(on) {
     maximumLevel: 17,        // and stops here
     credit: 'Parcels © Regrid',
   }));
-  parcelsUSLayer.alpha = 0.85;
+  fadeImageryLayer(parcelsUSLayer, 0, 0.85);
   setCount('parcels_us', 'tiles');
 }
 
@@ -1907,15 +2061,17 @@ function toggleParcelsWA(on) {
     viewer.dataSources.add(parcelsWADS);
     initParcelsWACameraHook();
   }
-  parcelsWADS.show = on;
   if (on) {
+    fadeDataSource(parcelsWADS, 'in');
     requestParcelsWA();
   } else {
-    if (parcelsWAInflight) { parcelsWAInflight.abort(); parcelsWAInflight = null; }
-    parcelsWADS.entities.removeAll();
-    parcelsWALastBbox = null;
-    setCount('parcels_wa', 0);
-    updateCategoryCounts();
+    fadeDataSource(parcelsWADS, 'out', LAYER_FADE_MS, () => {
+      if (parcelsWAInflight) { parcelsWAInflight.abort(); parcelsWAInflight = null; }
+      parcelsWADS.entities.removeAll();
+      parcelsWALastBbox = null;
+      setCount('parcels_wa', 0);
+      updateCategoryCounts();
+    });
   }
 }
 
