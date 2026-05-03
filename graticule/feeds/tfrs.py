@@ -1,29 +1,31 @@
-"""FAA Temporary Flight Restrictions (TFRs) — US airspace.
+"""FAA Temporary Flight Restrictions (TFRs) — US airspace, with real polygons.
 
-Source: https://tfr.faa.gov/tfrapi/exportTfrList (FAA's own JSON aggregator,
-free, no key, returns all currently-published TFRs).
+Primary source: https://tfr.faa.gov/geoserver/TFR/ows  (FAA's public GeoServer
+WFS — exposes TFR:V_TFR_LOC as a Polygon feature type with NOTAM_KEY / TITLE /
+STATE / LEGAL properties; ~70 features at any time).
 
-Each TFR has notam_id + type + facility + state + description, but no
-lat/lon — the FAA's new tfr3 SPA pulls boundary polygons from a different
-endpoint we couldn't reverse-engineer cleanly. As a pragmatic v1 we plot
-each TFR at its state's centroid; the description carries the actual
-location text. Click a dot to see full details in the side panel.
+Each TFR is plotted as the actual polygon when the WFS query succeeds. We also
+fetch https://tfr.faa.gov/tfrapi/exportTfrList for type/facility/created
+metadata that V_TFR_LOC doesn't expose, joined on notam_id. If the WFS layer
+fails, we fall back to plotting at the state centroid (legacy behavior).
 
 Refresh: 15 min.
 """
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 from loguru import logger
 
-URL = "https://tfr.faa.gov/tfrapi/exportTfrList"
+WFS_URL = "https://tfr.faa.gov/geoserver/TFR/ows"
+LIST_URL = "https://tfr.faa.gov/tfrapi/exportTfrList"
 POLL_SEC = 900
 TIMEOUT_SEC = 30
 
-# Approximate state centroids (US 50 + DC + territories). Good enough for
-# distinguishing where a TFR lives at globe scale.
+# Approximate state centroids (US 50 + DC + territories). Used only when the
+# WFS polygon feed fails — the FAA's exportTfrList JSON has no coordinates.
 STATE_CENTROIDS: dict[str, tuple[float, float]] = {
     "AL": (32.806671, -86.791130), "AK": (61.370716, -152.404419),
     "AZ": (33.729759, -111.431221), "AR": (34.969704, -92.373123),
@@ -56,6 +58,101 @@ STATE_CENTROIDS: dict[str, tuple[float, float]] = {
 }
 
 
+def _poly_centroid(ring: list[list[float]]) -> tuple[float, float] | None:
+    """Bounding-box centre of an [lon,lat] ring — good enough for picking +
+    panel-anchor; not the geometric centroid but cheap and stable."""
+    if not ring:
+        return None
+    lons = [c[0] for c in ring if isinstance(c, (list, tuple)) and len(c) >= 2]
+    lats = [c[1] for c in ring if isinstance(c, (list, tuple)) and len(c) >= 2]
+    if not lons or not lats:
+        return None
+    return (sum(lons) / len(lons), sum(lats) / len(lats))
+
+
+def _ring_from_geom(geom: dict[str, Any]) -> list[list[float]] | None:
+    """Pull a single outer ring out of Polygon / MultiPolygon GeoJSON, picking
+    the largest ring by point-count when there are several."""
+    t = (geom or {}).get("type")
+    if t == "Polygon":
+        rings = geom.get("coordinates") or []
+        return rings[0] if rings else None
+    if t == "MultiPolygon":
+        polys = geom.get("coordinates") or []
+        if not polys:
+            return None
+        # Largest outer ring across all polygons
+        best = max((p[0] for p in polys if p), key=len, default=None)
+        return best
+    return None
+
+
+def _notam_id_from_key(notam_key: str) -> str:
+    """V_TFR_LOC NOTAM_KEY is `6/6432-1-FDC-F`; exportTfrList notam_id is
+    `6/6432`. Strip everything from the first dash on."""
+    if not notam_key:
+        return ""
+    return notam_key.split("-", 1)[0].strip()
+
+
+async def _fetch_wfs_polygons(client: httpx.AsyncClient) -> dict[str, dict] | None:
+    """Returns {notam_id: feature-dict} or None on failure."""
+    try:
+        r = await client.get(WFS_URL, params={
+            "service": "WFS",
+            "version": "2.0.0",
+            "request": "GetFeature",
+            "typeNames": "TFR:V_TFR_LOC",
+            "outputFormat": "application/json",
+            "srsName": "EPSG:4326",
+        })
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        logger.warning(f"FAA WFS V_TFR_LOC fetch failed: {e!r}")
+        return None
+    out: dict[str, dict] = {}
+    for f in data.get("features", []):
+        props = f.get("properties") or {}
+        nid = _notam_id_from_key(props.get("NOTAM_KEY") or "")
+        if not nid:
+            continue
+        ring = _ring_from_geom(f.get("geometry") or {})
+        if not ring:
+            continue
+        out[nid] = {
+            "ring": ring,
+            "title": props.get("TITLE") or "",
+            "state": (props.get("STATE") or "").strip().upper(),
+            "legal": props.get("LEGAL") or "",
+            "modified": props.get("LAST_MODIFICATION_DATETIME") or "",
+        }
+    return out
+
+
+async def _fetch_metadata(client: httpx.AsyncClient) -> dict[str, dict]:
+    """Returns {notam_id: metadata} from exportTfrList — type/facility/created."""
+    try:
+        r = await client.get(LIST_URL)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        logger.warning(f"FAA exportTfrList fetch failed: {e!r}")
+        return {}
+    out: dict[str, dict] = {}
+    for tfr in data:
+        nid = (tfr.get("notam_id") or "").strip()
+        if not nid:
+            continue
+        out[nid] = {
+            "type": tfr.get("type"),
+            "facility": tfr.get("facility"),
+            "description": tfr.get("description"),
+            "created": tfr.get("creation_date"),
+        }
+    return out
+
+
 async def tfr_loop(state) -> None:
     headers = {
         "User-Agent": "graticule/0.1 (research; contact dbhavery@gmail.com)",
@@ -64,37 +161,67 @@ async def tfr_loop(state) -> None:
     async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers=headers, follow_redirects=True) as client:
         while True:
             try:
-                r = await client.get(URL)
-                r.raise_for_status()
-                data = r.json()
-                if not isinstance(data, list):
-                    raise ValueError(f"unexpected payload shape: {type(data).__name__}")
+                # Fetch both in parallel — WFS gives polygons, exportTfrList gives type/facility
+                polys, meta = await asyncio.gather(
+                    _fetch_wfs_polygons(client),
+                    _fetch_metadata(client),
+                )
+
                 entries: dict[str, dict] = {}
-                for tfr in data:
-                    notam_id = (tfr.get("notam_id") or "").strip()
-                    if not notam_id:
-                        continue
-                    state_code = (tfr.get("state") or "").strip().upper()
-                    coords = STATE_CENTROIDS.get(state_code)
-                    if not coords:
-                        continue  # unknown / non-state location
-                    lat, lon = coords
-                    entries[notam_id] = {
-                        "lat": lat,
-                        "lon": lon,
-                        "name": notam_id,
-                        "type": tfr.get("type"),
-                        "facility": tfr.get("facility"),
-                        "state": state_code,
-                        "description": tfr.get("description"),
-                        "created": tfr.get("creation_date"),
-                    }
+
+                # Primary path: polygon-backed entries from V_TFR_LOC.
+                if polys:
+                    for nid, p in polys.items():
+                        ring = p["ring"]
+                        center = _poly_centroid(ring)
+                        if not center:
+                            continue
+                        lon, lat = center
+                        m = meta.get(nid, {})
+                        entries[nid] = {
+                            "lat": lat,
+                            "lon": lon,
+                            "polygon": ring,
+                            "name": nid,
+                            "notam_id": nid,
+                            "state": p["state"],
+                            "legal": p["legal"],
+                            "title": p["title"],
+                            "description": m.get("description") or p["title"],
+                            "type": m.get("type"),
+                            "facility": m.get("facility"),
+                            "created": m.get("created"),
+                            "modified": p["modified"],
+                        }
+
+                # Fill in state-centroid stubs for any TFRs in the list that don't
+                # have a WFS polygon (typically space-ops / non-CONUS items where
+                # V_TFR_LOC hasn't ingested geometry yet).
+                try:
+                    r = await client.get(LIST_URL)
+                    r.raise_for_status()
+                    for tfr in r.json():
+                        nid = (tfr.get("notam_id") or "").strip()
+                        if not nid or nid in entries:
+                            continue
+                        sc = STATE_CENTROIDS.get((tfr.get("state") or "").upper())
+                        if not sc:
+                            continue
+                        lat, lon = sc
+                        entries[nid] = {
+                            "lat": lat, "lon": lon, "name": nid, "notam_id": nid,
+                            "type": tfr.get("type"), "facility": tfr.get("facility"),
+                            "state": (tfr.get("state") or "").upper(),
+                            "description": tfr.get("description"),
+                            "created": tfr.get("creation_date"),
+                        }
+                except Exception as e:
+                    logger.warning(f"FAA TFR list-fill failed: {e!r}")
+
+                poly_count = sum(1 for v in entries.values() if v.get("polygon"))
+                logger.info(f"FAA TFRs: {len(entries)} active ({poly_count} polygon-backed, {len(entries) - poly_count} state-centroid)")
+
                 state.replace_layer("tfrs", entries)
-                logger.info(f"FAA TFRs: {len(entries)} active (state-centroid plotted)")
-            except httpx.HTTPStatusError as e:
-                logger.warning(f"FAA TFR http {e.response.status_code} — backing off 1h")
-                await asyncio.sleep(3600)
-                continue
             except Exception as e:
                 logger.warning(f"FAA TFR poll failed: {e!r}")
             await asyncio.sleep(POLL_SEC)

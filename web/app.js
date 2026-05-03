@@ -1507,18 +1507,37 @@ function graphicsFor(layer, d) {
     }, ddcVolcano(active));
   }
 
-  // TFRs — pulse-like outline ring (stationary; fades out at near zoom)
+  // TFRs — real polygon hierarchy when the FAA GeoServer feed gives us one,
+  // a 5-nm fallback ellipse when only a state-centroid point is available.
   if (layer === 'tfrs') {
-    return applyDDC({
+    const g = {
       point: { pixelSize: px, color: COLORS.tfrs,
                outlineColor: Cesium.Color.BLACK, outlineWidth: 1.5 },
-      ellipse: {
-        semiMajorAxis: 9260, semiMinorAxis: 9260,  // ~5 nm typical TFR radius
+    };
+    if (Array.isArray(d.polygon) && d.polygon.length >= 3) {
+      const positions = d.polygon
+        .filter(c => typeof c[0] === 'number' && typeof c[1] === 'number')
+        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+      g.polygon = {
+        hierarchy: new Cesium.PolygonHierarchy(positions),
+        material: COLORS.tfrs.withAlpha(0.18),
+        outline: true,
+        outlineColor: COLORS.tfrs.withAlpha(0.85),
+        outlineWidth: 1.5,
+        height: 0,
+      };
+      // Hide the dot at close zoom — the polygon takes over
+      g.point.distanceDisplayCondition = new Cesium.DistanceDisplayCondition(STATIONARY_HIDE_NEAR_M, ALWAYS_VISIBLE_FAR_M);
+    } else {
+      // No polygon — fall back to the historical ~5 nm ring
+      g.ellipse = {
+        semiMajorAxis: 9260, semiMinorAxis: 9260,
         material: COLORS.tfrs.withAlpha(0.10),
         outline: true, outlineColor: COLORS.tfrs.withAlpha(0.7),
         height: 0,
-      },
-    }, ddcStationaryAlways());
+      };
+    }
+    return applyDDC(g, ddcStationaryAlways());
   }
 
   // Airports — small dot, scheduled service slightly brighter (stationary)
