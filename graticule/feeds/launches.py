@@ -23,7 +23,7 @@ WINDOW_HOURS = 72  # show recent T+0..T+72h alongside upcoming
 
 
 async def launches_loop(state) -> None:
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "cupola/0.1"}) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "graticule/0.1"}) as client:
         while True:
             try:
                 # Upcoming: next ~10 launches

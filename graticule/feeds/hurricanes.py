@@ -17,7 +17,7 @@ TIMEOUT_SEC = 20
 
 
 async def nhc_loop(state) -> None:
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "cupola/0.1"}) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "graticule/0.1"}) as client:
         while True:
             try:
                 r = await client.get(NHC_URL)

@@ -54,7 +54,7 @@ SEVERE_EVENTS = {
 
 async def nws_tsunami_loop(state) -> None:
     headers = {
-        "User-Agent": "cupola/0.1 (personal-situational-awareness, dbhavery@gmail.com)",
+        "User-Agent": "graticule/0.1 (personal-situational-awareness, dbhavery@gmail.com)",
         "Accept": "application/geo+json",
     }
     async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers=headers) as client:

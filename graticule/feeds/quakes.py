@@ -19,7 +19,7 @@ WINDOW_HOURS = 72
 
 
 async def usgs_loop(state) -> None:
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "cupola/0.1"}) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "graticule/0.1"}) as client:
         while True:
             try:
                 r = await client.get(USGS_URL)

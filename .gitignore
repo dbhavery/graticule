@@ -8,3 +8,27 @@ __pycache__/
 dist/
 build/
 .pilot/
+
+# Bulk data — OpenAIP US export (CC-BY-NC-SA; redistribution restricted)
+us_apt.json
+us_apt.geojson
+us_asp.json
+us_asp.geojson
+us_nav.json
+us_nav.geojson
+us_nav.cupx
+us_obs.json
+us_obs.geojson
+us_raa.json
+us_raa.geojson
+us_rca.json
+us_rca.geojson
+us_hot.json
+us_hot.geojson
+
+# Bulk data — Natural Earth shapefile zips (public domain, 73 MB total).
+# Converted to GeoJSON at build time → web/data/ne_*.geojson.
+ne_*.zip
+
+# Generated GeoJSON derived from above
+web/data/

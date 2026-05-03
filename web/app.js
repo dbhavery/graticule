@@ -1,4 +1,4 @@
-/* Cupola — front-end. Cesium globe + telemetry HUD + WebSocket-driven layers.
+/* Graticule — front-end. Cesium globe + telemetry HUD + WebSocket-driven layers.
  *
  *  Categories (toggleable): AIR | SEA | EARTH | WEATHER | SPACE | ALERTS
  *  Always-on telemetry:     UTC clock, cursor lat/lon, camera altitude,
@@ -161,9 +161,27 @@ const FEEDS = [
   { id: 'space_weather', label: 'SWPC', meta: true, hideFromChips: false },
 ];
 
+// One-time migration from legacy cupola.* localStorage keys after the
+// 2026-05-02 Cupola → Graticule rename. Read old, write new, delete old.
+(function migrateLegacyKeys() {
+  try {
+    const pairs = [
+      ['cupola.settings.v1', 'graticule.settings.v1'],
+      ['cupola.presets.v1',  'graticule.presets.v1'],
+    ];
+    for (const [oldK, newK] of pairs) {
+      const v = localStorage.getItem(oldK);
+      if (v != null && localStorage.getItem(newK) == null) {
+        localStorage.setItem(newK, v);
+      }
+      if (v != null) localStorage.removeItem(oldK);
+    }
+  } catch {}
+})();
+
 // User-tunable settings persisted in localStorage. Defaults reflect Don's
 // preferences: nothing checked, metric, globe view, 500 ms hover delay.
-const SETTINGS_KEY = 'cupola.settings.v1';
+const SETTINGS_KEY = 'graticule.settings.v1';
 const settings = Object.assign(
   { units: 'metric', view: 'globe', hoverDelayMs: 500 },
   loadSettings()
@@ -219,7 +237,7 @@ function applyInitialLayerState() {
 async function initViewer() {
   const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
   Cesium.Ion.defaultAccessToken = cfg.cesium_ion_token || '';
-  window.__cupola_cfg = cfg;
+  window.__graticule_cfg = cfg;
 
   viewer = new Cesium.Viewer('cesiumContainer', {
     baseLayerPicker: false,
@@ -480,7 +498,7 @@ function initFeedChips() {
 }
 
 async function applyServerCapabilities() {
-  const cfg = window.__cupola_cfg || {};
+  const cfg = window.__graticule_cfg || {};
   if (!cfg.ships_enabled) disableLayer('ships', 'no AISSTREAM_KEY');
   if (!cfg.fires_enabled) disableLayer('fires', 'no FIRMS_MAP_KEY');
 }
@@ -2268,7 +2286,7 @@ function initContextMenu() {
 
 // ---------- Camera presets --------------------------------------------------
 
-const PRESETS_KEY = 'cupola.presets.v1';
+const PRESETS_KEY = 'graticule.presets.v1';
 
 function loadPresets() {
   try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '[]'); } catch { return []; }

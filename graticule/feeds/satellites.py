@@ -36,7 +36,7 @@ TIMEOUT_SEC = 30
 
 
 async def celestrak_loop(state) -> None:
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "cupola/0.1"}) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "graticule/0.1"}) as client:
         while True:
             entries: dict[str, dict] = {}
             for group_id, label, color, max_count in GROUPS:

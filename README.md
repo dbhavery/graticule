@@ -1,4 +1,4 @@
-# Cupola
+# Graticule
 
 Personal situational-awareness globe. Live planes, ships, satellites, quakes,
 fires, weather, alerts, parcels — all on a single dark Cesium-driven Earth.
@@ -23,8 +23,8 @@ camera presets, and a settings modal.
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/cupola.git
-cd cupola
+git clone https://github.com/<you>/graticule.git
+cd graticule
 cp .env.example .env       # see "API keys" below — most are optional
 uv sync
 uv run python main.py
@@ -92,8 +92,8 @@ public-API catalog.
 
 ## License & names
 
-This is a personal project. "Cupola" is unaffiliated with the Blizzard
-Entertainment trademark. Do not redistribute under that name.
+This is a personal project. "Graticule" refers to the network of meridians
+and parallels drawn on a globe — apt for a situational-awareness Earth.
 
 Cesium World Imagery © Cesium / Microsoft. Parcel data © Regrid (US tiles)
 and Washington State DOR (vector). Other feeds credited per their public

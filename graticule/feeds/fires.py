@@ -27,7 +27,7 @@ async def firms_loop(state) -> None:
     # VIIRS NOAA-20 = best resolution, 3-day rolling global window. CSV format.
     # Front-end fades dots by age so 72h-old detections render dim.
     url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{map_key}/VIIRS_NOAA20_NRT/world/3"
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "cupola/0.1"}) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "graticule/0.1"}) as client:
         while True:
             try:
                 r = await client.get(url)

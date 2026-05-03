@@ -86,7 +86,7 @@ async def opensky_loop(state) -> None:
 
     async with httpx.AsyncClient(
         timeout=TIMEOUT_SEC,
-        headers={"User-Agent": "cupola/0.1"},
+        headers={"User-Agent": "graticule/0.1"},
         auth=basic_auth,
     ) as client:
         while True:

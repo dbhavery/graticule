@@ -1,4 +1,4 @@
-"""Cupola — pywebview launcher.
+"""Graticule — pywebview launcher.
 
 Boots the FastAPI backend in a daemon thread, opens a single dark window
 pointed at it. Closing the window kills the process group.
@@ -11,7 +11,7 @@ import time
 import webview
 from dotenv import load_dotenv
 
-from cupola.server import run_server
+from graticule.server import run_server
 
 PORT = 8731  # arbitrary, local-only
 
@@ -19,13 +19,13 @@ if __name__ == "__main__":
     load_dotenv()
 
     server_thread = threading.Thread(
-        target=run_server, args=(PORT,), daemon=True, name="cupola-server"
+        target=run_server, args=(PORT,), daemon=True, name="graticule-server"
     )
     server_thread.start()
     time.sleep(0.4)  # let uvicorn bind before the webview hits it
 
     webview.create_window(
-        title="Cupola",
+        title="Graticule",
         url=f"http://127.0.0.1:{PORT}/",
         width=1600,
         height=1000,

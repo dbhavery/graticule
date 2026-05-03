@@ -25,7 +25,7 @@ TIMEOUT_SEC = 30
 
 async def gdelt_loop(state) -> None:
     """Function name kept for import stability — actually pulls EONET."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "cupola/0.1"}) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SEC, headers={"User-Agent": "graticule/0.1"}) as client:
         while True:
             try:
                 r = await client.get(URL, params={"status": "open", "limit": 200})
