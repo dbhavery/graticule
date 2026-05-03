@@ -1084,8 +1084,51 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   color: var(--text-dim);
   min-width: 110px;
 }
+.sm-row + .sm-row { margin-top: 6px; }
 .sm-row input[type=range] { flex: 1; accent-color: var(--accent); }
+.sm-row .mono { color: var(--text); min-width: 64px; text-align: right; font-size: 11px; }
 #hover-delay-val { color: var(--text); min-width: 60px; text-align: right; font-size: 11px; }
+
+.sm-section-danger { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.sm-danger-btn {
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 3px;
+  padding: 8px 14px;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.sm-danger-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fee2e2;
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+/* Diagnostics overlay */
+#diagnostics-overlay {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 12;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+  line-height: 1.5;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+#diagnostics-overlay.hidden { display: none; }
+#diagnostics-overlay .diag-key { color: var(--text-mute); margin-right: 6px; }
+#diagnostics-overlay .diag-val { color: var(--text); }
 
 /* Hide Cesium chrome we don't want */
 .cesium-viewer-bottom { display: none !important; }

@@ -243,8 +243,110 @@
         <section class="sm-section">
           <div class="sm-section-label">UNITS</div>
           <div class="sm-radiogroup">
-            <label class="sm-radio"><input type="radio" name="units" value="metric" checked><span>Metric</span><span class="sm-hint">km · m · °C</span></label>
-            <label class="sm-radio"><input type="radio" name="units" value="us"><span>US Customary</span><span class="sm-hint">mi · ft · °F</span></label>
+            <label class="sm-radio"><input type="radio" name="units" value="us" checked><span>US Customary</span><span class="sm-hint">mi · ft · °F</span></label>
+            <label class="sm-radio"><input type="radio" name="units" value="metric"><span>Metric</span><span class="sm-hint">km · m · °C</span></label>
+          </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">CLOCK</div>
+          <div class="sm-radiogroup">
+            <label class="sm-radio"><input type="radio" name="timeFormat" value="utc" checked><span>UTC only</span><span class="sm-hint">14:32:08</span></label>
+            <label class="sm-radio"><input type="radio" name="timeFormat" value="local"><span>Local only</span><span class="sm-hint">7:32:08 AM</span></label>
+            <label class="sm-radio"><input type="radio" name="timeFormat" value="both"><span>UTC + Local + offset</span><span class="sm-hint">14:32 · 07:32 UTC-7</span></label>
+          </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">IMAGERY</div>
+          <div class="sm-radiogroup">
+            <label class="sm-radio"><input type="radio" name="imageryBase" value="satellite" checked><span>Satellite</span><span class="sm-hint">Cesium ion / ESRI</span></label>
+            <label class="sm-radio"><input type="radio" name="imageryBase" value="streets"><span>Streets</span><span class="sm-hint">OpenStreetMap</span></label>
+            <label class="sm-radio"><input type="radio" name="imageryBase" value="topo"><span>Topographic</span><span class="sm-hint">USGS / OpenTopoMap</span></label>
+            <label class="sm-radio"><input type="radio" name="imageryBase" value="night"><span>Night Lights</span><span class="sm-hint">NASA Black Marble</span></label>
+          </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">VIEW</div>
+          <div class="sm-checkgroup">
+            <label class="sm-check"><input type="checkbox" id="show-graticule"><span>Show graticule (meridian / parallel grid)</span></label>
+            <label class="sm-check"><input type="checkbox" id="sun-lighting" checked><span>Sun-following surface lighting</span></label>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Atmosphere intensity</label>
+            <input type="range" id="atmos-intensity" min="0" max="30" step="0.5" value="12">
+            <span id="atmos-intensity-val" class="mono">12.0</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Vignette intensity</label>
+            <input type="range" id="vignette-intensity" min="0" max="1" step="0.05" value="0.5">
+            <span id="vignette-intensity-val" class="mono">0.50</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Auto-rotate when idle</label>
+            <input type="range" id="idle-rotate" min="0" max="300" step="15" value="60">
+            <span id="idle-rotate-val" class="mono">60 s</span>
+          </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">BOUNDARY OPACITY</div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Country lines</label>
+            <input type="range" id="op-countries" min="0" max="1" step="0.05" value="0.45">
+            <span id="op-countries-val" class="mono">0.45</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">State lines</label>
+            <input type="range" id="op-states" min="0" max="1" step="0.05" value="0.30">
+            <span id="op-states-val" class="mono">0.30</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">City labels</label>
+            <input type="range" id="op-cities" min="0" max="1" step="0.05" value="1.00">
+            <span id="op-cities-val" class="mono">1.00</span>
+          </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">IMAGERY OPACITY</div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Radar</label>
+            <input type="range" id="op-radar" min="0" max="1" step="0.05" value="0.70">
+            <span id="op-radar-val" class="mono">0.70</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Clouds</label>
+            <input type="range" id="op-clouds" min="0" max="1" step="0.05" value="0.55">
+            <span id="op-clouds-val" class="mono">0.55</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Aurora</label>
+            <input type="range" id="op-aurora" min="0" max="1" step="0.05" value="0.85">
+            <span id="op-aurora-val" class="mono">0.85</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Parcels</label>
+            <input type="range" id="op-parcels" min="0" max="1" step="0.05" value="0.85">
+            <span id="op-parcels-val" class="mono">0.85</span>
+          </div>
+        </section>
+
+        <section class="sm-section">
+          <div class="sm-section-label">PERFORMANCE</div>
+          <div class="sm-radiogroup">
+            <label class="sm-radio"><input type="radio" name="perfPreset" value="high" checked><span>High</span><span class="sm-hint">No caps</span></label>
+            <label class="sm-radio"><input type="radio" name="perfPreset" value="balanced"><span>Balanced</span><span class="sm-hint">~50% caps</span></label>
+            <label class="sm-radio"><input type="radio" name="perfPreset" value="low"><span>Low</span><span class="sm-hint">2k ships · 2k planes</span></label>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Layer fade</label>
+            <input type="range" id="fade-ms" min="0" max="800" step="50" value="350">
+            <span id="fade-ms-val" class="mono">350 ms</span>
+          </div>
+          <div class="sm-checkgroup">
+            <label class="sm-check"><input type="checkbox" id="diagnostics"><span>Show diagnostics overlay (FPS · ms · entities)</span></label>
           </div>
         </section>
 
@@ -261,6 +363,7 @@
           <div class="sm-section-label">SOUND</div>
           <div class="sm-checkgroup">
             <label class="sm-check"><input type="checkbox" id="sound-alerts"><span>Alert beep on new tsunami / launch</span></label>
+            <label class="sm-check"><input type="checkbox" id="ambient-sound"><span>Ambient atmospheric drone (low-volume loop)</span></label>
           </div>
         </section>
 
@@ -270,8 +373,20 @@
           <div id="presets-empty">No presets saved. Right-click the globe → "Save as preset" to capture the current camera.</div>
         </section>
 
+        <section class="sm-section sm-section-danger">
+          <button id="reset-settings" class="sm-danger-btn">Reset all settings</button>
+          <span class="sm-hint">Clears localStorage and reloads. Camera presets and unit choice are wiped too.</span>
+        </section>
+
       </div>
     </div>
+  </div>
+
+  <!-- Diagnostics overlay (FPS / ms / entity counts; off by default) -->
+  <div id="diagnostics-overlay" class="hidden">
+    <div><span class="diag-key">FPS</span><span class="diag-val" id="diag-fps">—</span></div>
+    <div><span class="diag-key">ms</span><span class="diag-val" id="diag-ms">—</span></div>
+    <div><span class="diag-key">ent</span><span class="diag-val" id="diag-ent">—</span></div>
   </div>
 
   <script src="/static/app.js"></script>

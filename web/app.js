@@ -206,10 +206,30 @@ const FEEDS = [
 // User-tunable settings persisted in localStorage. Defaults reflect Don's
 // preferences: nothing checked, US Customary units, globe view, 500 ms hover.
 const SETTINGS_KEY = 'graticule.settings.v1';
-const settings = Object.assign(
-  { units: 'us', view: 'globe', hoverDelayMs: 500 },
-  loadSettings()
-);
+const settings = Object.assign({
+  units: 'us',
+  view: 'globe',
+  hoverDelayMs: 500,
+  timeFormat: 'utc',                // 'utc' | 'local' | 'both'
+  imageryBase: 'satellite',         // 'satellite' | 'streets' | 'topo' | 'night'
+  showGraticule: false,
+  sunLighting: true,
+  atmosIntensity: 12,
+  vignetteIntensity: 0.5,
+  idleRotateSec: 60,                // 0 = disabled
+  opCountries: 0.45,
+  opStates: 0.30,
+  opCities: 1.00,
+  opRadar: 0.70,
+  opClouds: 0.55,
+  opAurora: 0.85,
+  opParcels: 0.85,
+  perfPreset: 'high',               // 'high' | 'balanced' | 'low'
+  layerFadeMs: 350,
+  diagnostics: false,
+  ambientSound: false,
+  soundAlerts: false,
+}, loadSettings());
 function loadSettings() {
   try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); }
   catch { return {}; }
@@ -278,28 +298,10 @@ async function initViewer() {
   window.__graticule_viewer = viewer;
 
   viewer.imageryLayers.removeAll();
-  // Prefer Cesium ion World Imagery (Bing-backed, 19+ levels) when a token is
-  // configured — significantly higher detail at city/block scale. Fall back
-  // to ESRI for token-less use.
-  if (cfg.cesium_ion_token) {
-    try {
-      const layer = await Cesium.IonImageryProvider.fromAssetId(2);
-      viewer.imageryLayers.addImageryProvider(layer);
-    } catch (e) {
-      console.warn('Cesium ion imagery failed, falling back to ESRI:', e);
-      viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        maximumLevel: 19,
-        credit: 'Tiles © Esri',
-      }));
-    }
-  } else {
-    viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      maximumLevel: 19,
-      credit: 'Tiles © Esri',
-    }));
-  }
+  // Imagery base is settings-driven now (Satellite / Streets / Topo / Night).
+  // applyImageryBase honors settings.imageryBase, falls back to satellite, and
+  // tracks the layer so the picker can swap it later.
+  await applyImageryBase(settings.imageryBase || 'satellite');
   // Allow Cesium to over-zoom past native level (interpolated, lossy but the
   // user sees something instead of a black tile).
   viewer.scene.maximumScreenSpaceError = 1.5;
@@ -561,10 +563,16 @@ function disableLayer(layer, reason) {
 // Cesium3DTileStyle color('white', a). When fading out, dataSource.show
 // flips to false at the end so picks/clusters stop firing on invisible items.
 
-const LAYER_FADE_MS = 350;
+// Reads from settings each call so the slider takes effect immediately.
+const LAYER_FADE_MS_DEFAULT = 350;
+function _layerFadeMs() {
+  const v = Number(settings.layerFadeMs);
+  return Number.isFinite(v) && v >= 0 ? v : LAYER_FADE_MS_DEFAULT;
+}
+const LAYER_FADE_MS = LAYER_FADE_MS_DEFAULT;  // legacy export, still used in some places
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 
-function fadeDataSource(ds, dir = 'in', durationMs = LAYER_FADE_MS, onDone) {
+function fadeDataSource(ds, dir = 'in', durationMs = _layerFadeMs(), onDone) {
   if (!ds) { onDone?.(); return; }
   // Cancel any in-flight fade on this source so rapid toggles don't fight.
   if (ds._fadeAbort) ds._fadeAbort();
@@ -660,7 +668,7 @@ function restoreEntity(e, b) {
   if (b.labelOutline && e.label)     e.label.outlineColor   = b.labelOutline;
 }
 
-function fadeImageryLayer(layer, fromA, toA, durationMs = LAYER_FADE_MS, onDone) {
+function fadeImageryLayer(layer, fromA, toA, durationMs = _layerFadeMs(), onDone) {
   if (!layer) { onDone?.(); return; }
   const t0 = performance.now();
   layer.alpha = fromA;
@@ -679,7 +687,7 @@ function fadeImageryLayer(layer, fromA, toA, durationMs = LAYER_FADE_MS, onDone)
   requestAnimationFrame(step);
 }
 
-function fadeTileset(tileset, fromA, toA, durationMs = LAYER_FADE_MS, onDone) {
+function fadeTileset(tileset, fromA, toA, durationMs = _layerFadeMs(), onDone) {
   if (!tileset) { onDone?.(); return; }
   if (toA > 0) tileset.show = true;
   const t0 = performance.now();
@@ -1106,8 +1114,8 @@ function startClocks() {
   setInterval(() => {
     // UTC ticks every second; animating it makes the whole header jump.
     // Just update text directly — no roll animation here.
-    const now = new Date();
-    document.getElementById('tm-utc').textContent = now.toISOString().slice(11, 19);
+    const utcEl = document.getElementById('tm-utc');
+    if (utcEl) utcEl.textContent = formatClock();
 
     // Camera altitude (units-aware) — only roll on actual change
     const altEl = document.getElementById('tm-alt');
@@ -1127,6 +1135,22 @@ function startClocks() {
   // Recompute alerts every 30s so age-windowed items (quakes 24h, launches ±3h)
   // roll in and out without waiting for the next snapshot.
   setInterval(refreshAlerts, 30_000);
+}
+
+function formatClock() {
+  const now = new Date();
+  const utc = now.toISOString().slice(11, 19);
+  if (settings.timeFormat === 'utc') return utc;
+  const pad = (n) => String(n).padStart(2, '0');
+  const local = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  if (settings.timeFormat === 'local') return local;
+  // 'both' — UTC · LOCAL UTC±N
+  const offsetMin = -now.getTimezoneOffset();              // +ve = ahead of UTC
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const hh = Math.floor(Math.abs(offsetMin) / 60);
+  const mm = Math.abs(offsetMin) % 60;
+  const offsetTxt = mm === 0 ? `UTC${sign}${hh}` : `UTC${sign}${hh}:${pad(mm)}`;
+  return `${utc} · ${local} ${offsetTxt}`;
 }
 
 function formatKm(meters) {
@@ -2607,25 +2631,78 @@ async function queryParcelsWA(w, s, e, n, signal) {
 // ---------- Settings modal --------------------------------------------------
 
 function initSettings() {
-  // Reflect persisted settings into the modal controls
-  document.querySelectorAll('input[name=units]').forEach((r) => { r.checked = (r.value === settings.units); });
-  document.querySelectorAll('input[name=view]').forEach((r)  => { r.checked = (r.value === settings.view); });
-  const hd = document.getElementById('hover-delay');
-  const hdv = document.getElementById('hover-delay-val');
-  if (hd && hdv) {
-    hd.value = String(settings.hoverDelayMs);
-    hdv.textContent = `${settings.hoverDelayMs} ms`;
-    hd.addEventListener('input', () => {
-      settings.hoverDelayMs = Number(hd.value) | 0;
-      hdv.textContent = `${settings.hoverDelayMs} ms`;
+  // ----- helpers --------------------------------------------------------
+  const radioGroup = (name, key, onChange) => {
+    document.querySelectorAll(`input[name=${name}]`).forEach((r) => {
+      r.checked = (r.value === settings[key]);
+      r.addEventListener('change', () => {
+        if (r.checked) { settings[key] = r.value; saveSettings(); onChange?.(settings[key]); }
+      });
+    });
+  };
+  const slider = (id, key, suffix, formatter, onChange) => {
+    const el = document.getElementById(id);
+    const lbl = document.getElementById(id + '-val');
+    if (!el) return;
+    el.value = String(settings[key]);
+    if (lbl) lbl.textContent = formatter(settings[key]);
+    el.addEventListener('input', () => {
+      const v = el.type === 'range' ? Number(el.value) : el.value;
+      settings[key] = v;
+      if (lbl) lbl.textContent = formatter(v);
       saveSettings();
+      onChange?.(v);
     });
-  }
+  };
+  const checkbox = (id, key, onChange) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.checked = !!settings[key];
+    el.addEventListener('change', () => {
+      settings[key] = el.checked;
+      saveSettings();
+      onChange?.(el.checked);
+    });
+  };
 
-  document.querySelectorAll('input[name=units]').forEach((r) => {
-    r.addEventListener('change', () => {
-      if (r.checked) { settings.units = r.value; saveSettings(); applyUnits(); }
-    });
+  // ----- bind controls --------------------------------------------------
+  radioGroup('units', 'units', applyUnits);
+  radioGroup('timeFormat', 'timeFormat');     // formatClock() reads settings.timeFormat each tick
+  radioGroup('imageryBase', 'imageryBase', applyImageryBase);
+  radioGroup('perfPreset', 'perfPreset', applyPerfPreset);
+  radioGroup('view', 'view');
+
+  slider('hover-delay',       'hoverDelayMs',     ' ms', (v) => `${v|0} ms`);
+  slider('atmos-intensity',   'atmosIntensity',    '',  (v) => Number(v).toFixed(1), applyAtmosIntensity);
+  slider('vignette-intensity','vignetteIntensity', '',  (v) => Number(v).toFixed(2), applyVignetteIntensity);
+  slider('idle-rotate',       'idleRotateSec',    ' s', (v) => v == 0 ? 'off' : `${v|0} s`, applyIdleRotate);
+  slider('op-countries',      'opCountries',       '',  (v) => Number(v).toFixed(2), () => applyBoundaryOpacity('countries'));
+  slider('op-states',         'opStates',          '',  (v) => Number(v).toFixed(2), () => applyBoundaryOpacity('states'));
+  slider('op-cities',         'opCities',          '',  (v) => Number(v).toFixed(2), () => applyBoundaryOpacity('cities'));
+  slider('op-radar',          'opRadar',           '',  (v) => Number(v).toFixed(2), () => applyImageryOpacity('radar'));
+  slider('op-clouds',         'opClouds',          '',  (v) => Number(v).toFixed(2), () => applyImageryOpacity('clouds'));
+  slider('op-aurora',         'opAurora',          '',  (v) => Number(v).toFixed(2), () => applyImageryOpacity('aurora'));
+  slider('op-parcels',        'opParcels',         '',  (v) => Number(v).toFixed(2), () => applyImageryOpacity('parcels'));
+  slider('fade-ms',           'layerFadeMs',      ' ms', (v) => `${v|0} ms`);
+
+  checkbox('show-graticule',  'showGraticule',  applyGraticule);
+  checkbox('sun-lighting',    'sunLighting',    applySunLighting);
+  checkbox('diagnostics',     'diagnostics',    applyDiagnostics);
+  checkbox('ambient-sound',   'ambientSound',   applyAmbientSound);
+  checkbox('sound-alerts',    'soundAlerts');
+
+  // Reset all settings — clears localStorage and reloads.
+  const resetBtn = document.getElementById('reset-settings');
+  if (resetBtn) resetBtn.addEventListener('click', () => {
+    if (!confirm('Reset all Graticule settings (units, presets, opacities, etc.) and reload?')) return;
+    try {
+      // Wipe all graticule.* keys
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('graticule.')) localStorage.removeItem(k);
+      }
+    } catch {}
+    location.reload();
   });
 
   // Open / close
@@ -2638,8 +2715,17 @@ function initSettings() {
     if (e.target === overlay) overlay.classList.add('hidden');
   });
 
-  // Apply on boot so first paint matches persisted state
+  // Apply persisted state on boot so first paint matches.
   applyUnits();
+  applyAtmosIntensity(settings.atmosIntensity);
+  applyVignetteIntensity(settings.vignetteIntensity);
+  applySunLighting(settings.sunLighting);
+  applyGraticule(settings.showGraticule);
+  applyImageryBase(settings.imageryBase);
+  applyPerfPreset(settings.perfPreset);
+  applyDiagnostics(settings.diagnostics);
+  applyAmbientSound(settings.ambientSound);
+  applyIdleRotate(settings.idleRotateSec);
 }
 
 function applyUnits() {
@@ -2647,6 +2733,335 @@ function applyUnits() {
   if (lbl) lbl.textContent = settings.units === 'us' ? 'ALT (US)' : 'ALT';
   // formatAltitude reads settings.units directly on every tick, so the header
   // value catches up within ~1s on its own.
+}
+
+// ---------- Atmosphere / vignette / sun lighting ----------------------------
+
+function applyAtmosIntensity(v) {
+  if (!viewer) return;
+  viewer.scene.globe.atmosphereLightIntensity = Number(v) || 0;
+  viewer.scene.requestRender();
+}
+
+function applyVignetteIntensity(v) {
+  const el = document.getElementById('overlay-vignette');
+  if (el) el.style.opacity = String(Math.max(0, Math.min(1, Number(v) || 0)));
+}
+
+function applySunLighting(on) {
+  if (!viewer) return;
+  viewer.scene.globe.enableLighting = !!on;
+  viewer.scene.requestRender();
+}
+
+// ---------- Graticule overlay (meridian / parallel grid) -------------------
+
+let graticuleDS = null;
+function applyGraticule(on) {
+  if (!viewer) return;
+  if (!graticuleDS) {
+    graticuleDS = new Cesium.CustomDataSource('graticule');
+    viewer.dataSources.add(graticuleDS);
+    buildGraticule(graticuleDS);
+  }
+  graticuleDS.show = !!on;
+  viewer.scene.requestRender();
+}
+
+function buildGraticule(ds) {
+  const lineColor = Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.20);
+  const equatorColor = Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.45);
+  const labelFill = Cesium.Color.fromCssColorString('#cbd5e1');
+  const labelOutline = Cesium.Color.fromCssColorString('#000000').withAlpha(0.85);
+  const labelStyle = {
+    font: '500 9px "Inter", system-ui, sans-serif',
+    fillColor: labelFill,
+    outlineColor: labelOutline,
+    outlineWidth: 2,
+    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+    verticalOrigin: Cesium.VerticalOrigin.CENTER,
+    distanceDisplayCondition: new Cesium.DistanceDisplayCondition(2e5, 5e7),
+  };
+  // Parallels every 15° (12 pieces of pie). Equator is bolder.
+  for (let lat = -75; lat <= 75; lat += 15) {
+    const positions = [];
+    for (let lon = -180; lon <= 180; lon += 2) {
+      positions.push(Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+    }
+    ds.entities.add({
+      polyline: {
+        positions, width: 1.0,
+        material: lat === 0 ? equatorColor : lineColor,
+        clampToGround: true,
+      },
+    });
+    if (lat !== 0) {
+      ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(0, lat, 0),
+        label: { ...labelStyle, text: `${lat > 0 ? '+' : ''}${lat}°` },
+      });
+    }
+  }
+  // Meridians every 30°. Prime meridian is bolder.
+  for (let lon = -180; lon < 180; lon += 30) {
+    const positions = [];
+    for (let lat = -85; lat <= 85; lat += 2) {
+      positions.push(Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+    }
+    ds.entities.add({
+      polyline: {
+        positions, width: 1.0,
+        material: lon === 0 ? equatorColor : lineColor,
+        clampToGround: true,
+      },
+    });
+    ds.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, 0, 0),
+      label: { ...labelStyle, text: `${lon > 0 ? '+' : ''}${lon}°` },
+    });
+  }
+  ds.show = false;
+}
+
+// ---------- Imagery base picker ---------------------------------------------
+
+let baseImageryLayer = null;
+async function applyImageryBase(kind) {
+  if (!viewer) return;
+  // Remove the previous base, then add the new one as the bottom-most layer.
+  if (baseImageryLayer) {
+    try { viewer.imageryLayers.remove(baseImageryLayer); } catch {}
+    baseImageryLayer = null;
+  }
+  const cfg = window.__graticule_cfg || {};
+  let provider;
+  try {
+    if (kind === 'streets') {
+      provider = new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        maximumLevel: 19,
+        credit: 'Tiles © OpenStreetMap contributors',
+      });
+    } else if (kind === 'topo') {
+      provider = new Cesium.UrlTemplateImageryProvider({
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        subdomains: ['a', 'b', 'c'],
+        maximumLevel: 17,
+        credit: 'Tiles © OpenTopoMap (CC-BY-SA)',
+      });
+    } else if (kind === 'night') {
+      provider = new Cesium.UrlTemplateImageryProvider({
+        url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_Black_Marble/default/2016-01-01/500m/{z}/{y}/{x}.jpg',
+        tilingScheme: new Cesium.GeographicTilingScheme(),
+        maximumLevel: 8,
+        credit: 'NASA Earthdata · VIIRS Black Marble',
+      });
+    } else {
+      // Satellite: prefer Cesium ion when token is present, else ESRI.
+      if (cfg.cesium_ion_token) {
+        try {
+          provider = await Cesium.IonImageryProvider.fromAssetId(2);
+        } catch {
+          provider = new Cesium.UrlTemplateImageryProvider({
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            maximumLevel: 19,
+            credit: 'Tiles © Esri',
+          });
+        }
+      } else {
+        provider = new Cesium.UrlTemplateImageryProvider({
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          maximumLevel: 19,
+          credit: 'Tiles © Esri',
+        });
+      }
+    }
+    baseImageryLayer = viewer.imageryLayers.addImageryProvider(provider);
+    // Keep it on the bottom; other overlays (radar, clouds, parcels) ride on top
+    while (viewer.imageryLayers.indexOf(baseImageryLayer) > 0) {
+      viewer.imageryLayers.lower(baseImageryLayer);
+    }
+  } catch (e) {
+    console.warn('Imagery base swap failed:', e);
+  }
+}
+
+// ---------- Boundary / imagery opacity sliders -----------------------------
+
+function applyBoundaryOpacity(which) {
+  if (!viewer) return;
+  const map = { countries: countriesDS, states: statesDS, cities: citiesDS };
+  const ds = map[which];
+  if (!ds) return;
+  const targetAlpha = which === 'countries' ? settings.opCountries
+                    : which === 'states'    ? settings.opStates
+                    : settings.opCities;
+  const t = viewer.clock.currentTime;
+  for (const e of ds.entities.values) {
+    if (e.polyline?.material instanceof Cesium.ColorMaterialProperty) {
+      const c = e.polyline.material.color.getValue(t);
+      if (c) e.polyline.material = new Cesium.ColorMaterialProperty(c.withAlpha(targetAlpha));
+    }
+    if (e.label?.fillColor) {
+      // Cities slider scales the label fill alpha; country/state labels keep
+      // their own fade-by-distance behaviour. We treat opCities as a master.
+      if (which === 'cities') {
+        const c = e.label.fillColor.getValue(t);
+        if (c) e.label.fillColor = c.withAlpha(targetAlpha);
+      }
+    }
+    if (e.point?.color && which === 'cities') {
+      const c = e.point.color.getValue(t);
+      if (c) e.point.color = c.withAlpha(Math.min(1, targetAlpha + 0.15));
+    }
+  }
+  viewer.scene.requestRender();
+}
+
+function applyImageryOpacity(which) {
+  if (!viewer) return;
+  const v = which === 'radar'   ? settings.opRadar
+          : which === 'clouds'  ? settings.opClouds
+          : which === 'aurora'  ? settings.opAurora
+          : which === 'parcels' ? settings.opParcels
+          : 1.0;
+  const layer = which === 'radar'   ? radarLayer
+              : which === 'clouds'  ? cloudsLayer
+              : which === 'aurora'  ? auroraLayer
+              : which === 'parcels' ? parcelsUSLayer
+              : null;
+  if (layer) layer.alpha = v;
+  viewer.scene.requestRender();
+}
+
+// ---------- Performance preset ---------------------------------------------
+
+function applyPerfPreset(preset) {
+  if (!viewer) return;
+  // Tunes Cesium globe SSE + cluster pixelRange. Layer-specific entity caps
+  // would require backend cooperation — for now we tune just the renderer.
+  if (preset === 'low') {
+    viewer.scene.maximumScreenSpaceError = 4;
+  } else if (preset === 'balanced') {
+    viewer.scene.maximumScreenSpaceError = 2.5;
+  } else {
+    viewer.scene.maximumScreenSpaceError = 1.5;
+  }
+  viewer.scene.requestRender();
+}
+
+// ---------- Auto-rotate when idle ------------------------------------------
+
+let _idleHandle = null;
+let _idleStart = 0;
+let _lastInteractionAt = 0;
+function applyIdleRotate(seconds) {
+  const sec = Number(seconds) | 0;
+  if (_idleHandle) { cancelAnimationFrame(_idleHandle); _idleHandle = null; }
+  if (sec <= 0) return;  // disabled
+  // Reset on any user interaction
+  if (!applyIdleRotate._installed) {
+    applyIdleRotate._installed = true;
+    const reset = () => { _lastInteractionAt = performance.now(); };
+    ['mousedown','wheel','keydown','touchstart','pointerdown'].forEach(ev => {
+      document.addEventListener(ev, reset, { passive: true });
+    });
+    reset();
+  }
+  function tick() {
+    const now = performance.now();
+    const idleMs = now - _lastInteractionAt;
+    if (idleMs > sec * 1000) {
+      // Spin slowly: ~6° per second around Earth's axis
+      const dt = 1 / 60;
+      try {
+        viewer.camera.rotateRight(Cesium.Math.toRadians(6) * dt);
+        viewer.scene.requestRender();
+      } catch {}
+    }
+    _idleHandle = requestAnimationFrame(tick);
+  }
+  _idleHandle = requestAnimationFrame(tick);
+}
+
+// ---------- Diagnostics overlay ---------------------------------------------
+
+let _diagHandle = null;
+let _diagFrames = 0;
+let _diagLastTick = 0;
+function applyDiagnostics(on) {
+  const el = document.getElementById('diagnostics-overlay');
+  if (!el) return;
+  if (!on) {
+    el.classList.add('hidden');
+    if (_diagHandle) { cancelAnimationFrame(_diagHandle); _diagHandle = null; }
+    return;
+  }
+  el.classList.remove('hidden');
+  _diagFrames = 0;
+  _diagLastTick = performance.now();
+  const fpsEl = document.getElementById('diag-fps');
+  const msEl  = document.getElementById('diag-ms');
+  const entEl = document.getElementById('diag-ent');
+  function tick() {
+    _diagFrames++;
+    const now = performance.now();
+    if (now - _diagLastTick >= 500) {
+      const fps = (_diagFrames * 1000) / (now - _diagLastTick);
+      const ms = (now - _diagLastTick) / _diagFrames;
+      if (fpsEl) fpsEl.textContent = fps.toFixed(0);
+      if (msEl)  msEl.textContent  = ms.toFixed(1);
+      let total = 0;
+      if (viewer) {
+        for (let i = 0; i < viewer.dataSources.length; i++) {
+          total += viewer.dataSources.get(i).entities.values.length;
+        }
+      }
+      if (entEl) entEl.textContent = total.toLocaleString();
+      _diagFrames = 0;
+      _diagLastTick = now;
+    }
+    _diagHandle = requestAnimationFrame(tick);
+  }
+  _diagHandle = requestAnimationFrame(tick);
+}
+
+// ---------- Ambient sound ---------------------------------------------------
+
+let _ambientCtx = null;
+let _ambientNodes = null;
+function applyAmbientSound(on) {
+  if (!on) {
+    if (_ambientNodes) {
+      try {
+        _ambientNodes.osc1.stop();
+        _ambientNodes.osc2.stop();
+      } catch {}
+      _ambientNodes = null;
+    }
+    return;
+  }
+  try {
+    if (!_ambientCtx) _ambientCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_ambientCtx.state === 'suspended') _ambientCtx.resume();
+    // Two slightly-detuned sine drones + a low-pass filter. Quiet by design.
+    const ctx = _ambientCtx;
+    const out = ctx.createGain();
+    out.gain.value = 0.03;
+    out.connect(ctx.destination);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 200;
+    lp.connect(out);
+    const osc1 = ctx.createOscillator(); osc1.type = 'sine'; osc1.frequency.value = 65;
+    const osc2 = ctx.createOscillator(); osc2.type = 'sine'; osc2.frequency.value = 73;
+    osc1.connect(lp); osc2.connect(lp);
+    osc1.start(); osc2.start();
+    _ambientNodes = { osc1, osc2, gain: out };
+  } catch (e) {
+    console.warn('Ambient sound init failed:', e);
+  }
 }
 
 function drawParcelsWA(features) {
