@@ -1,26 +1,34 @@
 # Graticule — Session Handoff (2026-05-02 night)
 
-> **Session:** 2026-05-02 evening (Cupola → Graticule six-wave bundle)
+> **Session:** 2026-05-02 evening + late-night patch round (six waves + four patches)
 > **Repo state:** branch `dev` clean, working tree clean.
-> **Tip:** `cd403e5 polish: settings modal + alerts panel + sidebar entry/hover transitions`
+> **Tip:** `3b8f329 feat: near-zoom ship/sat icons + dot scaling + Windows shortcut installer`
 > **Branches:**
 >   - `master` — `9577dd9` (Phase 1 init, never merged from dev)
->   - `dev` — `cd403e5`
+>   - `dev` — `3b8f329`
 > **GitHub remote:** https://github.com/dbhavery/graticule — PUBLIC, default branch `dev`. Old `cupola` URL 301-redirects.
 > **Local working dir:** still `C:/Users/dbhav/Projects/vantage/` on disk (outer rename **DEFERRED — WinError 32 sharing violation**)
-> **Window status:** NOT running. Bring up with `uv run python main.py`.
+> **Window status:** Running as PID 67480 from final relaunch. Shortcut installed in Start Menu + Desktop.
+> **Shortcut**: file:///C:/Users/dbhav/Desktop/Graticule.lnk and Start Menu → "Graticule".
 
 ---
 
-## TL;DR — six waves shipped in one session
+## TL;DR — six waves + four patch rounds shipped
 
-| Tip | Wave | What |
+| Tip | Wave / Patch | What |
 |---|---|---|
 | `3b6d54b` | A | Rename Cupola → Graticule (inner package, GitHub repo, brand, localStorage migration) |
 | `692788f` | E | Layer toggle fade-in / fade-out animation (350 ms cubic) |
 | `f77dd01` | B + C | BOUNDARIES category — countries + states + airspace (NE 10m + OpenAIP) |
 | `2fe1704` | D | TFR boundary polygons via FAA GeoServer WFS |
 | `cd403e5` | F | Settings modal + alerts panel + sidebar entry/hover transitions |
+| `8dcefcf` | docs | Original handoff |
+| `6368dd7` | Patch 1 | Cache headers + remove City Lights + label depth-test + Cities layer + boundary fidelity (250 pts/ring) |
+| `3e7961f` | Patch 2 | Default units flipped to US Customary (with one-shot localStorage migration) |
+| `0ac0df4` | Wave G | Clouds layer (RainViewer satellite IR) + radar verified |
+| `1a32582` | Wave H | Settings overhaul — 14 new controls (clock format, imagery picker, opacity sliders, graticule overlay, performance preset, diagnostics, ambient sound, reset button…) |
+| `64c49ca` | Patch 3 | Feed-chip thresholds + sun-lighting default off + auto-rotate guards (≥5 Mm only, 1.5°/s) |
+| `3b8f329` | Patch 4 | Near-zoom ship/sat SVG billboards + dot scaleByDistance + Windows shortcut installer |
 
 **Deferred:** outer folder rename `Projects/vantage/` → `Projects/graticule/` — Windows WinError 32 (sharing violation) blocked it across multiple attempts including cmd.exe `move`, robocopy `/MOVE`, PowerShell `Rename-Item`, Python `os.rename`. Likely held by Windows search indexer, Defender, or the running bash session itself.
 
