@@ -145,25 +145,30 @@ const LOD = {
   launches:  { far: 15_000_000, mid: 2_000_000 },
 };
 
+// Per-feed staleness threshold in seconds — stays 'ok' (live green) while
+// fresh, flips 'warn' (amber) when stale, 'bad' (red) when very stale.
+// 'static' = loaded once at boot and never refreshed; chip stays 'ok' forever.
 const FEEDS = [
-  { id: 'planes',     label: 'ADS-B' },
-  { id: 'ships',      label: 'AIS' },
-  { id: 'satellites', label: 'TLE' },
-  { id: 'airports',   label: 'AIRPORTS' },
-  { id: 'tfrs',       label: 'TFR' },
-  { id: 'quakes',     label: 'USGS' },
-  { id: 'hurricanes', label: 'NHC' },
-  { id: 'volcanoes',  label: 'GVP' },
-  { id: 'fires',      label: 'FIRMS' },
-  { id: 'tsunamis',   label: 'NWS' },
-  { id: 'severe',     label: 'NWS-WX' },
-  { id: 'launches',   label: 'LL2' },
-  { id: 'news',       label: 'EONET' },
-  { id: 'cables',     label: 'CABLES', meta: true },
-  { id: 'radar',      label: 'RADAR',  meta: true },
-  { id: 'aurora',     label: 'AURORA', meta: true },
-  { id: 'space_weather', label: 'SWPC', meta: true, hideFromChips: false },
+  { id: 'planes',        label: 'ADS-B',     warn:    300, bad:   1200 },  //  6s poll → 5 min warn
+  { id: 'ships',         label: 'AIS',       warn:    600, bad:   1800 },  //  WS, but quiet patches happen
+  { id: 'satellites',    label: 'TLE',       warn:  21600, bad:  86400 },  //  6h refresh
+  { id: 'airports',      label: 'AIRPORTS',  static: true },               //  CSV loaded once
+  { id: 'tfrs',          label: 'TFR',       warn:   2700, bad:   7200 },  //  15 min poll
+  { id: 'quakes',        label: 'USGS',      warn:    900, bad:   3600 },  //  60s poll
+  { id: 'hurricanes',    label: 'NHC',       warn:   7200, bad:  21600 },  //  off-season idle
+  { id: 'volcanoes',     label: 'GVP',       static: true },               //  catalog, refreshes daily
+  { id: 'fires',         label: 'FIRMS',     warn:   7200, bad:  21600 },  //  3h poll
+  { id: 'tsunamis',      label: 'NWS',       warn:   3600, bad:  10800 },  //  10 min poll, often empty
+  { id: 'severe',        label: 'NWS-WX',    warn:   1800, bad:   5400 },  //  5 min poll
+  { id: 'launches',      label: 'LL2',       warn:   3600, bad:  10800 },  //  15 min poll
+  { id: 'news',          label: 'EONET',     warn:   7200, bad:  21600 },  //  30 min poll, can 500
+  { id: 'cables',        label: 'CABLES',    meta: true, static: true },   //  TeleGeography GeoJSON, static
+  { id: 'radar',         label: 'RADAR',     meta: true, warn:  900, bad:  3600 },  // 5 min poll
+  { id: 'aurora',        label: 'AURORA',    meta: true, warn: 1800, bad:  5400 },  // 5 min poll
+  { id: 'space_weather', label: 'SWPC',      meta: true, warn: 1800, bad:  5400, hideFromChips: false },
 ];
+
+const FEED_BY_ID = Object.fromEntries(FEEDS.map(f => [f.id, f]));
 
 // One-time migration from legacy cupola.* localStorage keys after the
 // 2026-05-02 Cupola → Graticule rename. Read old, write new, delete old.
@@ -213,7 +218,7 @@ const settings = Object.assign({
   timeFormat: 'utc',                // 'utc' | 'local' | 'both'
   imageryBase: 'satellite',         // 'satellite' | 'streets' | 'topo' | 'night'
   showGraticule: false,
-  sunLighting: true,
+  sunLighting: false,
   atmosIntensity: 12,
   vignetteIntensity: 0.5,
   idleRotateSec: 60,                // 0 = disabled
@@ -307,7 +312,7 @@ async function initViewer() {
   viewer.scene.maximumScreenSpaceError = 1.5;
 
   viewer.scene.backgroundColor = Cesium.Color.BLACK;
-  viewer.scene.globe.enableLighting = true;
+  viewer.scene.globe.enableLighting = !!settings.sunLighting;
   viewer.scene.skyAtmosphere.show = true;
   // Richer atmospheric scattering — deepens the limb, cools the daylight band
   viewer.scene.skyAtmosphere.hueShift        = -0.04;
@@ -1182,11 +1187,16 @@ function refreshFeedChips() {
   document.querySelectorAll('.chip').forEach((el) => {
     const f = el.dataset.feed;
     const last = feedActivity[f];
+    const meta = FEED_BY_ID[f] || {};
     if (!last) { el.dataset.state = 'off'; return; }
+    // Static feeds load once and stay green forever.
+    if (meta.static) { el.dataset.state = 'ok'; return; }
     const ageSec = (now - last) / 1000;
-    if      (ageSec < 600)   el.dataset.state = 'ok';
-    else if (ageSec < 3600)  el.dataset.state = 'warn';
-    else                     el.dataset.state = 'bad';
+    const warnAt = meta.warn ?? 600;
+    const badAt  = meta.bad  ?? 3600;
+    if      (ageSec < warnAt)  el.dataset.state = 'ok';
+    else if (ageSec < badAt)   el.dataset.state = 'warn';
+    else                       el.dataset.state = 'bad';
   });
 }
 
@@ -2969,15 +2979,25 @@ function applyIdleRotate(seconds) {
     });
     reset();
   }
+  // Only rotate when the camera is at or above this altitude — zoomed-in views
+  // shouldn't drift away from whatever the user was looking at.
+  const ROTATE_MIN_ALT_M = 5_000_000;          // 5 Mm
+  // Slow, contemplative spin — ~1.5°/s gives a full revolution in ~4 minutes.
+  const ROTATE_DEG_PER_SEC = 1.5;
+
+  let lastFrameAt = performance.now();
   function tick() {
     const now = performance.now();
+    const dt = (now - lastFrameAt) / 1000;
+    lastFrameAt = now;
     const idleMs = now - _lastInteractionAt;
-    if (idleMs > sec * 1000) {
-      // Spin slowly: ~6° per second around Earth's axis
-      const dt = 1 / 60;
+    if (idleMs > sec * 1000 && viewer && viewer.camera) {
       try {
-        viewer.camera.rotateRight(Cesium.Math.toRadians(6) * dt);
-        viewer.scene.requestRender();
+        const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
+        if (carto && carto.height >= ROTATE_MIN_ALT_M) {
+          viewer.camera.rotateRight(Cesium.Math.toRadians(ROTATE_DEG_PER_SEC) * dt);
+          viewer.scene.requestRender();
+        }
       } catch {}
     }
     _idleHandle = requestAnimationFrame(tick);
