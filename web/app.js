@@ -167,6 +167,8 @@ const FEEDS = [
 
 // One-time migration from legacy cupola.* localStorage keys after the
 // 2026-05-02 Cupola → Graticule rename. Read old, write new, delete old.
+// Also flip 'metric' → 'us' on existing settings since the default changed
+// from metric to US Customary on 2026-05-02 night per user request.
 (function migrateLegacyKeys() {
   try {
     const pairs = [
@@ -180,14 +182,32 @@ const FEEDS = [
       }
       if (v != null) localStorage.removeItem(oldK);
     }
+    // Flip legacy metric default to US Customary, but only for entries that
+    // still match the literal old default — anyone who explicitly chose
+    // metric will have other fields set too and we leave them alone if the
+    // saved value already differs from 'metric'.
+    const FLIP_FLAG = 'graticule.settings.units_default_flipped';
+    if (!localStorage.getItem(FLIP_FLAG)) {
+      const raw = localStorage.getItem('graticule.settings.v1');
+      if (raw) {
+        try {
+          const obj = JSON.parse(raw);
+          if (obj && obj.units === 'metric') {
+            obj.units = 'us';
+            localStorage.setItem('graticule.settings.v1', JSON.stringify(obj));
+          }
+        } catch {}
+      }
+      localStorage.setItem(FLIP_FLAG, '1');
+    }
   } catch {}
 })();
 
 // User-tunable settings persisted in localStorage. Defaults reflect Don's
-// preferences: nothing checked, metric, globe view, 500 ms hover delay.
+// preferences: nothing checked, US Customary units, globe view, 500 ms hover.
 const SETTINGS_KEY = 'graticule.settings.v1';
 const settings = Object.assign(
-  { units: 'metric', view: 'globe', hoverDelayMs: 500 },
+  { units: 'us', view: 'globe', hoverDelayMs: 500 },
   loadSettings()
 );
 function loadSettings() {
