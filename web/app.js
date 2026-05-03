@@ -29,7 +29,7 @@ const CATEGORY = {
   planes: 'air', satellites: 'air', airports: 'air', tfrs: 'air',
   ships: 'sea', hurricanes: 'sea',
   quakes: 'earth', volcanoes: 'earth', fires: 'earth',
-  radar: 'weather', aurora: 'weather', nightlights: 'weather', terminator: 'weather',
+  radar: 'weather', aurora: 'weather', clouds: 'weather', terminator: 'weather',
   launches: 'space',
   tsunamis: 'alerts', severe: 'alerts', news: 'alerts',
   cables: 'reference',
@@ -224,7 +224,7 @@ const entitiesByLayer = {};
 const satelliteRecords = new Map();
 let satelliteTickHandle = null;
 let countdownTickHandle = null;
-let radarLayer = null, auroraLayer = null;
+let radarLayer = null, auroraLayer = null, cloudsLayer = null;
 let radarMeta = null, auroraMeta = null;
 let countriesDS = null, statesDS = null, airspaceDS = null, citiesDS = null;
 let countriesBuilt = false, statesBuilt = false, airspaceBuilt = false, citiesBuilt = false;
@@ -703,6 +703,7 @@ function bindUI() {
       const layer = cb.dataset.layer;
       const on = cb.checked;
       if (layer === 'radar')           toggleRadar(on);
+      else if (layer === 'clouds')     toggleClouds(on);
       else if (layer === 'aurora')     toggleAurora(on);
       else if (layer === 'buildings')  toggleBuildings(on);
       else if (layer === 'photoreal3d')togglePhotoreal3D(on);
@@ -1224,7 +1225,7 @@ function handleMessage(msg) {
       if (Object.keys(entries).length) noteFeed(layer);
     }
     const meta = msg.data.meta || {};
-    if (meta.radar)         { radarMeta = meta.radar;   noteFeed('radar');  if (isLayerOn('radar'))  toggleRadar(true); }
+    if (meta.radar)         { radarMeta = meta.radar;   noteFeed('radar');  if (isLayerOn('radar'))  toggleRadar(true); if (isLayerOn('clouds')) toggleClouds(true); }
     if (meta.aurora)        { auroraMeta = meta.aurora; noteFeed('aurora'); if (isLayerOn('aurora')) toggleAurora(true); }
     if (meta.space_weather) { applySpaceWeather(meta.space_weather); noteFeed('space_weather'); }
     if (meta.cables)        { cablesGeoJson = meta.cables.geojson; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
@@ -1236,7 +1237,7 @@ function handleMessage(msg) {
     resetLayer(layer, msg.data || {});
     noteFeed(layer);
   } else if (msg.type === 'meta') {
-    if      (msg.key === 'radar')         { radarMeta = msg.data;  noteFeed('radar');  if (isLayerOn('radar'))  toggleRadar(true); }
+    if      (msg.key === 'radar')         { radarMeta = msg.data;  noteFeed('radar');  if (isLayerOn('radar'))  toggleRadar(true);  if (isLayerOn('clouds')) toggleClouds(true); }
     else if (msg.key === 'aurora')        { auroraMeta = msg.data; noteFeed('aurora'); if (isLayerOn('aurora')) toggleAurora(true); }
     else if (msg.key === 'space_weather') { applySpaceWeather(msg.data); noteFeed('space_weather'); }
     else if (msg.key === 'cables')        { cablesGeoJson = msg.data.geojson; cablesBuilt = false; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
@@ -1719,6 +1720,30 @@ function toggleRadar(on) {
     minimumLevel: 0, maximumLevel: 7,
   }));
   fadeImageryLayer(radarLayer, 0, 0.7);
+}
+
+function toggleClouds(on) {
+  if (!on) {
+    if (cloudsLayer) {
+      const ref = cloudsLayer; cloudsLayer = null;
+      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
+    }
+    return;
+  }
+  if (!radarMeta || !radarMeta.host) return;
+  const sat = radarMeta.satellite || [];
+  if (sat.length === 0) return;
+  const latest = sat[sat.length - 1];
+  // RainViewer satellite IR — global cloud cover from geostationary satellites
+  // {host}/v2/satellite/{path}/256/{z}/{x}/{y}/{color}/{options}.png
+  // color=0 (infrared default), options=0_0 (smooth/normal)
+  const tpl = `${radarMeta.host}/v2/satellite/${latest.path}/256/{z}/{x}/{y}/0/0_0.png`;
+  if (cloudsLayer) viewer.imageryLayers.remove(cloudsLayer);
+  cloudsLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+    url: tpl, credit: 'Clouds © RainViewer',
+    minimumLevel: 0, maximumLevel: 7,
+  }));
+  fadeImageryLayer(cloudsLayer, 0, 0.55);
 }
 
 function toggleAurora(on) {

@@ -41,6 +41,7 @@
   --c-boundaries: #94a3b8;
   --c-airspace:   #a78bfa;
   --c-cities:     #fcd34d;
+  --c-clouds:     #e2e8f0;
   --c-mon_alerts: #ef4444;
   --c-mon_feed:   #38bdf8;
 
@@ -407,6 +408,7 @@ html, body {
 .dot[data-color=boundaries] { background: var(--c-boundaries); box-shadow: 0 0 5px var(--c-boundaries); }
 .dot[data-color=airspace]   { background: var(--c-airspace);   box-shadow: 0 0 5px var(--c-airspace); }
 .dot[data-color=cities]     { background: var(--c-cities);     box-shadow: 0 0 5px var(--c-cities); }
+.dot[data-color=clouds]     { background: var(--c-clouds);     box-shadow: 0 0 5px var(--c-clouds); }
 .dot[data-color=mon_alerts] { background: var(--c-mon_alerts); box-shadow: 0 0 5px var(--c-mon_alerts); }
 .dot[data-color=mon_feed]   { background: var(--c-mon_feed);   box-shadow: 0 0 5px var(--c-mon_feed); }
 
