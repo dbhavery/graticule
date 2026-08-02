@@ -281,6 +281,12 @@ const TICKER_MAX = 6;
   initFeedChips();
   await applyServerCapabilities();
   bindUI();
+  initTabs();
+  initTimeline();
+  initWeatherControls();
+  initSkyMirrors();
+  initWorldPane();
+  applyLegendFor('radar');
   applyInitialLayerState();
   initContextMenu();
   renderPresetsList();
@@ -746,6 +752,8 @@ function bindUI() {
       else if (layer === 'photoreal3d')togglePhotoreal3D(on);
       else if (layer === 'cables')     toggleCables(on);
       else if (layer === 'nightlights')toggleNightLights(on);
+      else if (layer === 'radar_site') toggleRadarSite(on);
+      else if (layer === 'spc_outlook')toggleSpcOutlook(on);
       else if (layer === 'terminator') toggleTerminator(on);
       else if (layer === 'parcels_us') toggleParcelsUS(on);
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
@@ -1805,25 +1813,19 @@ function startCountdownTicker() {
 
 // ---------- Imagery overlays: radar + aurora --------------------------------
 
+// Radar is a frame series, not a still. The timeline owns the imagery layers
+// (one per frame, cross-faded by alpha) so the loop can be scrubbed and played
+// past "now" into the nowcast frames.
 function toggleRadar(on) {
   if (!on) {
-    if (radarLayer) {
-      const ref = radarLayer; radarLayer = null;
-      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
-    }
+    stopTimeline();
+    clearFrameLayers();
+    TL.frames = [];
+    syncTimelineVisibility();
     return;
   }
   if (!radarMeta || !radarMeta.host) return;
-  const past = radarMeta.past || [];
-  if (past.length === 0) return;
-  const latest = past[past.length - 1];
-  const tpl = `${radarMeta.host}/v2/radar/${latest.path}/256/{z}/{x}/{y}/4/1_1.png`;
-  if (radarLayer) viewer.imageryLayers.remove(radarLayer);
-  radarLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: tpl, credit: 'Radar © RainViewer',
-    minimumLevel: 0, maximumLevel: 7,
-  }));
-  fadeImageryLayer(radarLayer, 0, 0.7);
+  refreshTimeline();
 }
 
 function toggleClouds(on) {
@@ -1834,20 +1836,10 @@ function toggleClouds(on) {
     }
     return;
   }
-  if (!radarMeta || !radarMeta.host) return;
-  const sat = radarMeta.satellite || [];
-  if (sat.length === 0) return;
-  const latest = sat[sat.length - 1];
-  // RainViewer satellite IR — global cloud cover from geostationary satellites
-  // {host}/v2/satellite/{path}/256/{z}/{x}/{y}/{color}/{options}.png
-  // color=0 (infrared default), options=0_0 (smooth/normal)
-  const tpl = `${radarMeta.host}/v2/satellite/${latest.path}/256/{z}/{x}/{y}/0/0_0.png`;
-  if (cloudsLayer) viewer.imageryLayers.remove(cloudsLayer);
-  cloudsLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: tpl, credit: 'Clouds © RainViewer',
-    minimumLevel: 0, maximumLevel: 7,
-  }));
-  fadeImageryLayer(cloudsLayer, 0, 0.55);
+  // Which product gets built is owned by the Satellite mode selector
+  // (infrared / true-colour / water vapour), so delegate rather than
+  // hard-coding the IR composite here.
+  rebuildCloudsLayer();
 }
 
 function toggleAurora(on) {
@@ -3164,8 +3156,14 @@ function applyImageryOpacity(which) {
           : which === 'aurora'  ? settings.opAurora
           : which === 'parcels' ? settings.opParcels
           : 1.0;
-  const layer = which === 'radar'   ? radarLayer
-              : which === 'clouds'  ? cloudsLayer
+  // Radar is a stack of per-frame layers owned by the timeline; only the
+  // frame currently on screen should carry the opacity, the rest stay at 0.
+  if (which === 'radar') {
+    for (const [idx, l] of TL.layers) l.alpha = idx === TL.index ? v : 0;
+    viewer.scene.requestRender();
+    return;
+  }
+  const layer = which === 'clouds'  ? cloudsLayer
               : which === 'aurora'  ? auroraLayer
               : which === 'parcels' ? parcelsUSLayer
               : null;
@@ -3764,4 +3762,655 @@ function refreshPlaneStatus() {
   if (ageSec == null)         lbl.textContent = 'Planes';
   else if (ageSec > 90)       lbl.textContent = 'Planes (rate-limited)';
   else                        lbl.textContent = 'Planes';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRO REWORK — tabs, mode chips, radar timeline, colour legend, WORLD pane
+//
+// Shape borrowed from the apps that scored highest in the 2026 radar-app
+// survey: a tabbed left rail, mode chips inside the weather tab, a transport
+// timeline for animating frames, and an always-visible colour scale.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ---------- Tabs + mode chips ----------------------------------------------
+
+function initTabs() {
+  const tabs  = Array.from(document.querySelectorAll('.hud-tab'));
+  const panes = Array.from(document.querySelectorAll('.hud-pane'));
+  tabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const name = tab.dataset.tab;
+      tabs.forEach((t) => {
+        const on = t === tab;
+        t.classList.toggle('is-active', on);
+        t.setAttribute('aria-selected', String(on));
+      });
+      panes.forEach((p) => p.classList.toggle('is-active', p.dataset.pane === name));
+      try { localStorage.setItem('graticule.tab', name); } catch {}
+      // The timeline only makes sense against an animatable imagery layer.
+      syncTimelineVisibility();
+    });
+  });
+
+  // Restore last tab.
+  let saved = null;
+  try { saved = localStorage.getItem('graticule.tab'); } catch {}
+  if (saved) {
+    const t = tabs.find((x) => x.dataset.tab === saved);
+    if (t) t.click();
+  }
+
+  // Mode chips inside the weather tab.
+  const chips  = Array.from(document.querySelectorAll('#wx-modes .chip'));
+  const bodies = Array.from(document.querySelectorAll('[data-mode-body]'));
+  chips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      chips.forEach((c) => c.classList.toggle('is-active', c === chip));
+      bodies.forEach((b) => b.classList.toggle('is-active', b.dataset.modeBody === chip.dataset.mode));
+      applyLegendFor(chip.dataset.mode);
+    });
+  });
+}
+
+// ---------- Radar / satellite timeline --------------------------------------
+//
+// RainViewer publishes both a past series and a nowcast series in one meta
+// blob. The survey singled out weather.com for making past-vs-future
+// ambiguous, so we keep them on one track with an explicit NOW marker and
+// label every frame with a relative offset.
+
+const TL = {
+  frames: [],        // [{ time:<epoch s>, path, kind:'past'|'forecast' }]
+  index: 0,
+  playing: false,
+  timer: null,
+  speedMs: 600,
+  layers: new Map(), // frame index -> Cesium ImageryLayer (lazily built)
+};
+
+function buildRadarFrames() {
+  if (!radarMeta || !radarMeta.host) return [];
+  const past = (radarMeta.past || []).map((f) => ({ ...f, kind: 'past' }));
+  const fut  = (radarMeta.nowcast || []).map((f) => ({ ...f, kind: 'forecast' }));
+  return past.concat(fut);
+}
+
+function initTimeline() {
+  const range = document.getElementById('tl-range');
+  const play  = document.getElementById('tl-play');
+  const prev  = document.getElementById('tl-prev');
+  const next  = document.getElementById('tl-next');
+  const speed = document.getElementById('tl-speed');
+  if (!range) return;
+
+  range.addEventListener('input', () => { stopTimeline(); showFrame(Number(range.value)); });
+  play.addEventListener('click', () => (TL.playing ? stopTimeline() : startTimeline()));
+  prev.addEventListener('click', () => { stopTimeline(); showFrame(TL.index - 1); });
+  next.addEventListener('click', () => { stopTimeline(); showFrame(TL.index + 1); });
+  speed.addEventListener('change', () => {
+    TL.speedMs = Number(speed.value) || 600;
+    if (TL.playing) { stopTimeline(); startTimeline(); }
+  });
+}
+
+function refreshTimeline() {
+  TL.frames = buildRadarFrames();
+  const range = document.getElementById('tl-range');
+  if (!range || !TL.frames.length) return;
+  range.max = String(TL.frames.length - 1);
+  // Default to the newest observed frame, not the furthest forecast.
+  const lastPast = TL.frames.map((f) => f.kind).lastIndexOf('past');
+  TL.index = lastPast >= 0 ? lastPast : TL.frames.length - 1;
+  range.value = String(TL.index);
+  positionNowMarker();
+  showFrame(TL.index);
+  syncTimelineVisibility();
+}
+
+function positionNowMarker() {
+  const el = document.getElementById('tl-now');
+  if (!el || !TL.frames.length) return;
+  const lastPast = TL.frames.map((f) => f.kind).lastIndexOf('past');
+  const pct = TL.frames.length > 1 ? (lastPast / (TL.frames.length - 1)) * 100 : 100;
+  el.style.left = `${pct}%`;
+}
+
+function syncTimelineVisibility() {
+  const tl = document.getElementById('timeline');
+  const fs = document.getElementById('frame-stamp');
+  const on = isLayerOn('radar') && TL.frames.length > 1;
+  if (tl) tl.classList.toggle('hidden', !on);
+  if (fs) fs.classList.toggle('hidden', !on);
+}
+
+// Frames are swapped by alpha rather than add/remove: rebuilding an imagery
+// provider per tick caused a visible black flash between frames.
+function showFrame(i) {
+  if (!TL.frames.length) return;
+  const n = TL.frames.length;
+  TL.index = ((i % n) + n) % n;
+  const frame = TL.frames[TL.index];
+
+  const layer = ensureFrameLayer(TL.index);
+  if (layer) {
+    for (const [idx, l] of TL.layers) l.alpha = idx === TL.index ? Number(settings.opRadar) : 0;
+  }
+
+  const range = document.getElementById('tl-range');
+  if (range) range.value = String(TL.index);
+  const fill = document.getElementById('tl-fill');
+  if (fill) fill.style.width = `${(TL.index / Math.max(1, n - 1)) * 100}%`;
+
+  const when = new Date(frame.time * 1000);
+  const rel  = Math.round((frame.time * 1000 - Date.now()) / 60000);
+  const relTxt = rel === 0 ? 'now' : rel > 0 ? `+${rel}m` : `${rel}m`;
+  const hh = String(when.getUTCHours()).padStart(2, '0');
+  const mm = String(when.getUTCMinutes()).padStart(2, '0');
+
+  const lbl = document.getElementById('tl-label');
+  if (lbl) lbl.textContent = `${hh}:${mm}Z ${relTxt}`;
+  const fsT = document.getElementById('fs-time');
+  const fsK = document.getElementById('fs-kind');
+  if (fsT) fsT.textContent = `${hh}:${mm} UTC`;
+  if (fsK) fsK.textContent = frame.kind === 'forecast' ? 'RADAR · FORECAST' : 'RADAR · OBSERVED';
+
+  viewer.scene.requestRender();
+}
+
+function ensureFrameLayer(i) {
+  if (TL.layers.has(i)) return TL.layers.get(i);
+  const frame = TL.frames[i];
+  if (!frame || !radarMeta || !radarMeta.host) return null;
+  // NOTE: frame.path already carries the "/v2/radar/<id>" prefix straight from
+  // RainViewer's index, so it must be concatenated onto the host as-is.
+  // Re-adding "/v2/radar/" here yields ".../v2/radar//v2/radar/<id>/..." and
+  // every tile 404s — which is exactly what the layer was silently doing.
+  const layer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+    url: `${radarMeta.host}${frame.path}/256/{z}/{x}/{y}/4/1_1.png`,
+    credit: 'Radar © RainViewer',
+    // RainViewer's radar cache stops at z7; without the cap Cesium requests
+    // deeper tiles as you zoom in and those 404 too.
+    minimumLevel: 0, maximumLevel: 7,
+  }));
+  layer.alpha = 0;
+  TL.layers.set(i, layer);
+  return layer;
+}
+
+function clearFrameLayers() {
+  for (const l of TL.layers.values()) {
+    try { viewer.imageryLayers.remove(l); } catch {}
+  }
+  TL.layers.clear();
+}
+
+function startTimeline() {
+  if (!TL.frames.length) return;
+  TL.playing = true;
+  const btn = document.getElementById('tl-play');
+  if (btn) btn.textContent = '❚❚';
+  TL.timer = setInterval(() => showFrame(TL.index + 1), TL.speedMs);
+}
+
+function stopTimeline() {
+  TL.playing = false;
+  const btn = document.getElementById('tl-play');
+  if (btn) btn.textContent = '▶';
+  if (TL.timer) { clearInterval(TL.timer); TL.timer = null; }
+}
+
+// ---------- Colour scale legend ---------------------------------------------
+//
+// NWS reflectivity ramp. Having the scale on screen is table stakes for every
+// app in the survey; without it the radar colours are unreadable.
+const SCALES = {
+  radar: {
+    title: 'REFLECTIVITY', unit: 'dBZ',
+    stops: ['#04e9e7', '#019ff4', '#0300f4', '#02fd02', '#01c501', '#008e00',
+            '#fdf802', '#e5bc00', '#fd9500', '#fd0000', '#d40000', '#bc0000',
+            '#f800fd', '#9854c6'],
+    ticks: ['5', '20', '35', '50', '65', '75'],
+  },
+  satellite: {
+    title: 'CLOUD TOP', unit: '°C',
+    stops: ['#000000', '#3b3b3b', '#7a7a7a', '#c8c8c8', '#ffffff',
+            '#00ffff', '#0080ff', '#00ff00', '#ffff00', '#ff0000'],
+    ticks: ['+40', '+10', '-20', '-50', '-80'],
+  },
+};
+
+function applyLegendFor(mode) {
+  const el = document.getElementById('legend');
+  if (!el) return;
+  const scale = SCALES[mode];
+  if (!scale) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  document.getElementById('lg-title').textContent = scale.title;
+  document.getElementById('lg-unit').textContent  = scale.unit;
+  document.getElementById('lg-bar').style.background =
+    `linear-gradient(90deg, ${scale.stops.join(', ')})`;
+  document.getElementById('lg-ticks').innerHTML =
+    scale.ticks.map((t) => `<span>${t}</span>`).join('');
+}
+
+// ---------- WORLD pane -------------------------------------------------------
+//
+// Live world-population telemetry, matching the reference dashboard: a running
+// total, today's births/deaths/growth, per-continent and per-country ranks, and
+// a next-milestone tracker.
+//
+// Provenance matters here. There is no public real-time population feed — the
+// dashboards that show one are all extrapolating a demographic projection
+// forward at a constant rate, and so are we. Baselines below are UN World
+// Population Prospects 2024 (medium variant) mid-2025 estimates with their
+// published annual rates; the counters interpolate from a fixed epoch. That
+// makes the running digits an honest projection, not a measurement, which is
+// why the pane labels its source.
+
+const WPP_EPOCH = Date.UTC(2025, 6, 1) / 1000;   // 2025-07-01, UN reference date
+
+// [name, mid-2025 population, annual growth rate]
+const WORLD_BASE = { pop: 8_231_613_070, rate: 0.0085 };
+
+const CONTINENTS = [
+  ['Asia',          4_827_100_000, 0.0060],
+  ['Africa',        1_549_700_000, 0.0230],
+  ['Europe',          744_800_000, -0.0009],
+  ['Latin America',   669_600_000, 0.0069],
+  ['North America',   388_500_000, 0.0056],
+  ['Oceania',          46_600_000, 0.0113],
+];
+
+const COUNTRIES = [
+  ['India',        1_463_900_000, 0.0089],
+  ['China',        1_416_100_000, -0.0023],
+  ['United States',  347_300_000, 0.0054],
+  ['Indonesia',      285_700_000, 0.0079],
+  ['Pakistan',       255_200_000, 0.0157],
+  ['Nigeria',        237_500_000, 0.0241],
+  ['Brazil',         212_800_000, 0.0041],
+  ['Bangladesh',     175_700_000, 0.0111],
+  ['Russia',         143_997_000, -0.0043],
+  ['Ethiopia',       135_500_000, 0.0255],
+  ['Mexico',         131_900_000, 0.0084],
+  ['Japan',          123_100_000, -0.0051],
+  ['Egypt',          118_400_000, 0.0154],
+  ['Philippines',    116_800_000, 0.0139],
+  ['DR Congo',       112_800_000, 0.0321],
+];
+
+// Vital rates, UN WPP 2024: ~4.2 births and ~2.5 deaths per second worldwide.
+const BIRTHS_PER_SEC = 4.24;
+const DEATHS_PER_SEC = 2.51;
+
+// Compound the annual rate over elapsed years since the epoch.
+function project(base, rate, nowSec) {
+  const years = (nowSec - WPP_EPOCH) / 31_556_952;   // mean tropical year
+  return base * Math.pow(1 + rate, years);
+}
+
+function fmtInt(n) { return Math.floor(n).toLocaleString('en-US'); }
+
+function secondsIntoUtcDay(d) {
+  return d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
+}
+
+let _worldTimer = null;
+function initWorldPane() {
+  renderWorldStatic();
+  if (_worldTimer) clearInterval(_worldTimer);
+  _worldTimer = setInterval(updateWorldPane, 1000);
+  updateWorldPane();
+}
+
+function renderWorldStatic() {
+  const src = document.getElementById('wp-src');
+  if (src) {
+    src.textContent =
+      'Projected from UN World Population Prospects 2024 (medium variant), ' +
+      'mid-2025 baseline. Counters interpolate the published growth rate — ' +
+      'a projection, not a live census.';
+  }
+}
+
+function updateWorldPane() {
+  // Only compute while the pane is on screen; this ticks every second.
+  const pane = document.querySelector('.hud-pane[data-pane="world"]');
+  if (!pane || !pane.classList.contains('is-active')) return;
+
+  const now = Date.now() / 1000;
+  const d   = new Date();
+  const dayS = secondsIntoUtcDay(d);
+
+  const total = project(WORLD_BASE.pop, WORLD_BASE.rate, now);
+  setText('wp-total', fmtInt(total));
+
+  const births = dayS * BIRTHS_PER_SEC;
+  const deaths = dayS * DEATHS_PER_SEC;
+  setText('wp-births', fmtInt(births));
+  setText('wp-deaths', fmtInt(deaths));
+  setText('wp-growth', fmtInt(births - deaths));
+
+  renderRank('wp-continents', CONTINENTS, now);
+  renderRank('wp-countries',  COUNTRIES,  now);
+  renderMilestone(total);
+}
+
+function setText(id, txt) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== txt) el.textContent = txt;
+}
+
+function renderRank(containerId, rows, nowSec) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const html = rows.map((r, i) => {
+    const [name, base, rate] = r;
+    const v = project(base, rate, nowSec);
+    const dir = rate >= 0 ? 'up' : 'down';
+    const arrow = rate >= 0 ? '▲' : '▼';
+    return `<li><span class="r-i">${i + 1}</span>` +
+           `<span class="r-n">${name}</span>` +
+           `<span class="r-v">${fmtInt(v)}</span>` +
+           `<span class="r-d ${dir}">${arrow}</span></li>`;
+  }).join('');
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+// Next round-billion milestone, with time-to-arrival from the current rate.
+function renderMilestone(total) {
+  const el = document.getElementById('wp-milestone');
+  if (!el) return;
+  const next = (Math.floor(total / 1e8) + 1) * 1e8;      // next 100 M step
+  const perSec = total * WORLD_BASE.rate / 31_556_952;
+  const etaSec = perSec > 0 ? (next - total) / perSec : 0;
+  const days = etaSec / 86400;
+  const prevStep = next - 1e8;
+  const pct = Math.max(0, Math.min(100, ((total - prevStep) / 1e8) * 100));
+  const eta = days >= 1 ? `${days.toFixed(1)} d` : `${(days * 24).toFixed(1)} h`;
+  el.innerHTML =
+    `<div class="wp-ms-row"><span class="wp-ms-name">${fmtInt(next)}</span>` +
+    `<span class="wp-ms-val">ETA ${eta}</span></div>` +
+    `<div class="wp-ms-bar"><div class="wp-ms-fill" style="width:${pct.toFixed(2)}%"></div></div>`;
+}
+
+// ---------- SKY tab celestial mirrors ---------------------------------------
+// The realism switches live in Settings but are also surfaced on the SKY tab,
+// so bind both to the same handlers and keep them in sync.
+function initSkyMirrors() {
+  const pairs = [
+    ['sky-moon',        'showMoon',      applyMoon],
+    ['sky-stars',       'showStars',     applyStars],
+    ['sky-nightlights', 'nightLights',   toggleNightLights],
+    ['sky-sunlighting', 'sunLighting',   applySunLighting],
+  ];
+  for (const [id, key, fn] of pairs) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.checked = !!settings[key];
+    el.addEventListener('change', () => {
+      settings[key] = el.checked;
+      saveSettings();
+      fn(el.checked);
+      const twin = document.getElementById(
+        { showMoon: 'show-moon', showStars: 'show-stars',
+          nightLights: 'night-lights', sunLighting: 'sun-lighting' }[key]);
+      if (twin) twin.checked = el.checked;
+    });
+  }
+}
+
+// ---------- Weather-tab control wiring --------------------------------------
+
+// A handful of NEXRAD sites covering the CONUS + Alaska/Hawaii/PR. The survey
+// treats "Local Hi-Res Radar" as a separate capability from national mosaic
+// because the single-site product is higher resolution and lower latency.
+const NEXRAD_SITES = [
+  ['KTLX', 'Oklahoma City, OK',   35.333, -97.278],
+  ['KFWS', 'Dallas/Fort Worth, TX', 32.573, -97.303],
+  ['KHGX', 'Houston, TX',         29.472, -95.079],
+  ['KLCH', 'Lake Charles, LA',    30.125, -93.216],
+  ['KLIX', 'New Orleans, LA',     30.337, -89.826],
+  ['KRAX', 'Raleigh-Durham, NC',  35.666, -78.490],
+  ['KLWX', 'Washington, DC',      38.975, -77.478],
+  ['KOKX', 'New York, NY',        40.866, -72.864],
+  ['KBOX', 'Boston, MA',          41.956, -71.137],
+  ['KCLE', 'Cleveland, OH',       41.413, -81.860],
+  ['KLOT', 'Chicago, IL',         41.605, -88.085],
+  ['KMPX', 'Minneapolis, MN',     44.849, -93.565],
+  ['KDMX', 'Des Moines, IA',      41.731, -93.723],
+  ['KEAX', 'Kansas City, MO',     38.810, -94.264],
+  ['KFTG', 'Denver, CO',          39.787, -104.546],
+  ['KABX', 'Albuquerque, NM',     35.150, -106.824],
+  ['KIWA', 'Phoenix, AZ',         33.289, -111.670],
+  ['KVTX', 'Los Angeles, CA',     34.412, -119.179],
+  ['KMUX', 'San Francisco, CA',   37.155, -121.898],
+  ['KATX', 'Seattle, WA',         48.195, -122.496],
+  ['KRTX', 'Portland, OR',        45.715, -122.965],
+  ['KMLB', 'Melbourne, FL',       28.113, -80.654],
+  ['KAMX', 'Miami, FL',           25.611, -80.413],
+  ['KTBW', 'Tampa, FL',           27.706, -82.402],
+  ['KFFC', 'Atlanta, GA',         33.364, -84.566],
+  ['KOHX', 'Nashville, TN',       36.247, -86.563],
+  ['KSHV', 'Shreveport, LA',      32.451, -93.841],
+  ['PHKI', 'Kauai, HI',           21.894, -159.552],
+  ['PAHG', 'Anchorage, AK',       60.726, -151.351],
+  ['TJUA', 'San Juan, PR',        18.116, -66.078],
+];
+
+let radarSiteLayer = null;
+
+function populateRadarSites() {
+  const sel = document.getElementById('radar-site');
+  if (!sel || sel.dataset.filled) return;
+  sel.dataset.filled = '1';
+  for (const [id, name] of NEXRAD_SITES) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = `${id} — ${name}`;
+    sel.appendChild(o);
+  }
+}
+
+// Nearest site to the current camera centre, so "— nearest —" does something
+// sensible instead of defaulting to an arbitrary station.
+function nearestRadarSite() {
+  try {
+    const c = Cesium.Cartographic.fromCartesian(viewer.camera.position);
+    const lat = Cesium.Math.toDegrees(c.latitude);
+    const lon = Cesium.Math.toDegrees(c.longitude);
+    let best = NEXRAD_SITES[0], bestD = Infinity;
+    for (const s of NEXRAD_SITES) {
+      const d = (s[2] - lat) ** 2 + (s[3] - lon) ** 2;
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best[0];
+  } catch { return 'KTLX'; }
+}
+
+// Iowa State Mesonet serves per-site NEXRAD as public XYZ tiles — no key, and
+// separate layers for reflectivity (N0Q) and velocity (N0U).
+function toggleRadarSite(on) {
+  if (!on) {
+    if (radarSiteLayer) {
+      const ref = radarSiteLayer; radarSiteLayer = null;
+      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
+    }
+    return;
+  }
+  rebuildRadarSiteLayer();
+}
+
+function rebuildRadarSiteLayer() {
+  if (!viewer) return;
+  if (radarSiteLayer) {
+    try { viewer.imageryLayers.remove(radarSiteLayer); } catch {}
+    radarSiteLayer = null;
+  }
+  const sel  = document.getElementById('radar-site');
+  const prod = document.getElementById('radar-product');
+  const site = (sel && sel.value) || nearestRadarSite();
+  const kind = (prod && prod.value) === 'velocity' ? 'N0U' : 'N0Q';
+  radarSiteLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+    url: `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${site}-${kind}/{z}/{x}/{y}.png`,
+    credit: 'NEXRAD © Iowa State Mesonet',
+    maximumLevel: 9,
+  }));
+  fadeImageryLayer(radarSiteLayer, 0, Number(settings.opRadar) || 0.7);
+
+  const stamp = document.getElementById('fs-kind');
+  if (stamp && isLayerOn('radar_site')) {
+    stamp.textContent = `${site} · ${kind === 'N0U' ? 'VELOCITY' : 'REFLECTIVITY'}`;
+  }
+}
+
+// Satellite product switch. RainViewer carries infrared; NOAA GIBS carries the
+// true-colour composite, so the selector spans both providers.
+function rebuildCloudsLayer() {
+  const sel = document.getElementById('sat-product');
+  const product = (sel && sel.value) || 'ir';
+  if (cloudsLayer) {
+    try { viewer.imageryLayers.remove(cloudsLayer); } catch {}
+    cloudsLayer = null;
+  }
+  let provider;
+  if (product === 'geocolor') {
+    // GIBS true-colour corrected reflectance, updated daily.
+    const day = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    provider = new Cesium.UrlTemplateImageryProvider({
+      url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${day}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
+      tilingScheme: new Cesium.WebMercatorTilingScheme(),
+      maximumLevel: 9,
+      credit: 'NASA GIBS · MODIS True Color',
+    });
+  } else if (product === 'wv') {
+    const day = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    provider = new Cesium.UrlTemplateImageryProvider({
+      url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MERRA2_Total_Precipitable_Water_Vapor_Monthly/default/${day}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`,
+      tilingScheme: new Cesium.WebMercatorTilingScheme(),
+      maximumLevel: 6,
+      credit: 'NASA GIBS · Precipitable Water Vapor',
+    });
+  } else {
+    if (!radarMeta || !radarMeta.host) return;
+    const sat = radarMeta.satellite || [];
+    if (!sat.length) return;
+    const latest = sat[sat.length - 1];
+    // Same as radar: latest.path already includes the "/v2/satellite/<id>"
+    // prefix, so concatenate it onto the host rather than rebuilding it.
+    provider = new Cesium.UrlTemplateImageryProvider({
+      url: `${radarMeta.host}${latest.path}/256/{z}/{x}/{y}/0/0_0.png`,
+      credit: 'Clouds © RainViewer',
+      minimumLevel: 0, maximumLevel: 7,
+    });
+  }
+  cloudsLayer = viewer.imageryLayers.addImageryProvider(provider);
+  fadeImageryLayer(cloudsLayer, 0, Number(settings.opClouds) || 0.55);
+}
+
+function initWeatherControls() {
+  populateRadarSites();
+
+  const bind = (id, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', fn);
+  };
+  bind('radar-site',    () => { if (isLayerOn('radar_site')) rebuildRadarSiteLayer(); });
+  bind('radar-product', () => { if (isLayerOn('radar_site')) rebuildRadarSiteLayer(); });
+  bind('sat-product',   () => { if (isLayerOn('clouds'))     rebuildCloudsLayer(); });
+  bind('spc-day',       () => { if (isLayerOn('spc_outlook')) rebuildSpcOutlook(); });
+
+  // Opacity sliders in the weather tab mirror the ones in Settings; both write
+  // the same setting so the two panels can never disagree.
+  const mirror = (id, key, twinId, apply) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = String(settings[key]);
+    const out = document.getElementById(`${id}-val`);
+    if (out) out.textContent = Number(settings[key]).toFixed(2);
+    el.addEventListener('input', () => {
+      settings[key] = Number(el.value);
+      saveSettings();
+      if (out) out.textContent = Number(el.value).toFixed(2);
+      const twin = document.getElementById(twinId);
+      if (twin) {
+        twin.value = el.value;
+        const tOut = document.getElementById(`${twinId}-val`);
+        if (tOut) tOut.textContent = Number(el.value).toFixed(2);
+      }
+      apply();
+    });
+  };
+  mirror('op-radar-2',  'opRadar',  'op-radar',  () => {
+    applyImageryOpacity('radar');
+    if (radarSiteLayer) radarSiteLayer.alpha = Number(settings.opRadar);
+  });
+  mirror('op-clouds-2', 'opClouds', 'op-clouds', () => applyImageryOpacity('clouds'));
+}
+
+// ---------- SPC convective outlook ------------------------------------------
+//
+// Served through our own backend rather than fetched straight from spc.noaa.gov
+// because SPC does not send CORS headers, so a direct browser fetch is blocked.
+
+let spcDS = null;
+
+const SPC_COLORS = {
+  TSTM: '#c1e9c1', MRGL: '#66a366', SLGT: '#ffe066',
+  ENH:  '#e6a23c', MDT:  '#e06666', HIGH: '#ee82ee',
+};
+
+function toggleSpcOutlook(on) {
+  if (!spcDS) {
+    spcDS = new Cesium.CustomDataSource('spc_outlook');
+    viewer.dataSources.add(spcDS);
+  }
+  if (!on) { spcDS.show = false; return; }
+  spcDS.show = true;
+  rebuildSpcOutlook();
+}
+
+async function rebuildSpcOutlook() {
+  if (!spcDS) return;
+  const daySel = document.getElementById('spc-day');
+  const day = (daySel && daySel.value) || '1';
+  spcDS.entities.removeAll();
+  let gj;
+  try {
+    const r = await fetch(`/api/spc/outlook?day=${encodeURIComponent(day)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    gj = await r.json();
+  } catch (err) {
+    pushEvent('SPC', `Outlook day ${day} unavailable (${err.message})`, Date.now());
+    return;
+  }
+  for (const f of (gj.features || [])) {
+    const label = (f.properties && (f.properties.LABEL || f.properties.label)) || '';
+    const color = SPC_COLORS[label] || '#8899aa';
+    addSpcGeometry(f.geometry, color, label);
+  }
+  viewer.scene.requestRender();
+}
+
+function addSpcGeometry(geom, color, label) {
+  if (!geom) return;
+  const rings = geom.type === 'Polygon' ? [geom.coordinates]
+              : geom.type === 'MultiPolygon' ? geom.coordinates
+              : [];
+  for (const poly of rings) {
+    const outer = poly[0];
+    if (!outer || outer.length < 3) continue;
+    spcDS.entities.add({
+      polygon: {
+        hierarchy: new Cesium.PolygonHierarchy(
+          Cesium.Cartesian3.fromDegreesArray(outer.flatMap(([x, y]) => [x, y]))
+        ),
+        material: Cesium.Color.fromCssColorString(color).withAlpha(0.28),
+        outline: true,
+        outlineColor: Cesium.Color.fromCssColorString(color).withAlpha(0.9),
+        height: 0,
+      },
+      properties: { kind: 'spc', label },
+    });
+  }
 }

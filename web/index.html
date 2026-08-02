@@ -74,20 +74,132 @@
 
   <!-- ─────────  LEFT LAYER PANEL  ───────── -->
   <aside id="hud">
-    <div class="hud-head">
-      <span class="hud-tag">LAYERS</span>
-      <span class="hud-rule"></span>
-    </div>
+    <!-- Tab rail. Weather leads because that is the app's centre of gravity. -->
+    <nav id="hud-tabs" role="tablist">
+      <button class="hud-tab is-active" data-tab="weather" role="tab" aria-selected="true">WEATHER</button>
+      <button class="hud-tab" data-tab="earth"   role="tab" aria-selected="false">EARTH</button>
+      <button class="hud-tab" data-tab="sky"     role="tab" aria-selected="false">SKY</button>
+      <button class="hud-tab" data-tab="world"   role="tab" aria-selected="false">WORLD</button>
+    </nav>
 
-    <div id="layers">
+    <div id="hud-panes">
 
-      <details open class="cat" data-cat="air">
-        <summary><span class="cat-name">AIR</span><span class="cat-count" id="cat-count-air">0</span></summary>
-        <label><input type="checkbox" data-layer="planes"><span class="dot" data-color="planes"></span><span class="lbl">Planes</span><span class="count" id="count-planes">0</span></label>
-        <label><input type="checkbox" data-layer="satellites"><span class="dot" data-color="satellites"></span><span class="lbl">Satellites</span><span class="count" id="count-satellites">0</span></label>
-        <label><input type="checkbox" data-layer="airports"><span class="dot" data-color="airports"></span><span class="lbl">Airports</span><span class="count" id="count-airports">0</span></label>
-        <label><input type="checkbox" data-layer="tfrs"><span class="dot" data-color="tfrs"></span><span class="lbl">TFRs</span><span class="count" id="count-tfrs">0</span></label>
-      </details>
+    <!-- ═══════════  WEATHER  ═══════════ -->
+    <section class="hud-pane is-active" data-pane="weather">
+
+      <!-- Mode chips: mirrors the Radar/Model/Satellite/Observations/Outlooks
+           row that the highest-scoring apps in the survey all converge on. -->
+      <div class="mode-chips" id="wx-modes">
+        <button class="chip is-active" data-mode="radar">Radar</button>
+        <button class="chip" data-mode="satellite">Satellite</button>
+        <button class="chip" data-mode="model">Model</button>
+        <button class="chip" data-mode="obs">Observations</button>
+        <button class="chip" data-mode="outlooks">Outlooks</button>
+      </div>
+
+      <!-- ---- RADAR ---- -->
+      <div class="mode-body is-active" data-mode-body="radar">
+        <label class="sw"><input type="checkbox" data-layer="radar"><span class="sw-t"></span><span class="sw-l">National Radar</span></label>
+        <label class="sw"><input type="checkbox" data-layer="radar_site"><span class="sw-t"></span><span class="sw-l">Local Hi-Res Site</span></label>
+        <div class="ctl">
+          <span class="ctl-l">Site</span>
+          <select id="radar-site" class="ctl-sel"><option value="">— nearest —</option></select>
+        </div>
+        <div class="ctl">
+          <span class="ctl-l">Product</span>
+          <select id="radar-product" class="ctl-sel">
+            <option value="reflectivity">Base Reflectivity</option>
+            <option value="velocity">Base Velocity</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <span class="ctl-l">Opacity</span>
+          <input type="range" id="op-radar-2" min="0" max="1" step="0.05" value="0.70">
+          <span class="ctl-v mono" id="op-radar-2-val">0.70</span>
+        </div>
+        <label class="sw"><input type="checkbox" data-layer="lightning" disabled><span class="sw-t"></span><span class="sw-l">Lightning</span></label>
+      </div>
+
+      <!-- ---- SATELLITE ---- -->
+      <div class="mode-body" data-mode-body="satellite">
+        <label class="sw"><input type="checkbox" data-layer="clouds"><span class="sw-t"></span><span class="sw-l">Satellite / Clouds</span></label>
+        <div class="ctl">
+          <span class="ctl-l">Product</span>
+          <select id="sat-product" class="ctl-sel">
+            <option value="geocolor">GeoColor</option>
+            <option value="ir">Infrared</option>
+            <option value="wv">Water Vapor</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <span class="ctl-l">Opacity</span>
+          <input type="range" id="op-clouds-2" min="0" max="1" step="0.05" value="0.55">
+          <span class="ctl-v mono" id="op-clouds-2-val">0.55</span>
+        </div>
+      </div>
+
+      <!-- ---- MODEL ---- -->
+      <div class="mode-body" data-mode-body="model">
+        <div class="ctl">
+          <span class="ctl-l">Model</span>
+          <select id="model-name" class="ctl-sel">
+            <option value="gfs">GFS</option>
+            <option value="hrrr">HRRR</option>
+            <option value="nam">NAM</option>
+            <option value="ecmwf">ECMWF</option>
+            <option value="icon">ICON</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <span class="ctl-l">Field</span>
+          <select id="model-field" class="ctl-sel">
+            <option value="temperature_2m">2 m Temperature</option>
+            <option value="precipitation">Precipitation</option>
+            <option value="wind_speed_10m">10 m Wind</option>
+            <option value="cape">CAPE</option>
+            <option value="pressure_msl">MSLP</option>
+          </select>
+        </div>
+        <label class="sw"><input type="checkbox" data-layer="model" disabled><span class="sw-t"></span><span class="sw-l">Show model field</span></label>
+        <p class="pane-note" id="model-note">Point sounding: click anywhere on the globe.</p>
+      </div>
+
+      <!-- ---- OBSERVATIONS ---- -->
+      <div class="mode-body" data-mode-body="obs">
+        <label class="sw"><input type="checkbox" data-layer="metar" disabled><span class="sw-t"></span><span class="sw-l">Surface Obs (METAR)</span></label>
+        <div class="ctl">
+          <span class="ctl-l">Plot</span>
+          <select id="obs-field" class="ctl-sel">
+            <option value="temp">Temperature</option>
+            <option value="dewpoint">Dewpoint</option>
+            <option value="wind">Wind</option>
+            <option value="gust">Wind Gust</option>
+            <option value="visibility">Visibility</option>
+          </select>
+        </div>
+        <label class="sw"><input type="checkbox" data-layer="airquality" disabled><span class="sw-t"></span><span class="sw-l">Air Quality (AQI)</span></label>
+        <label class="sw"><input type="checkbox" data-layer="webcams" disabled><span class="sw-t"></span><span class="sw-l">Webcams</span></label>
+      </div>
+
+      <!-- ---- OUTLOOKS ---- -->
+      <div class="mode-body" data-mode-body="outlooks">
+        <label class="sw"><input type="checkbox" data-layer="spc_outlook"><span class="sw-t"></span><span class="sw-l">SPC Convective Outlook</span></label>
+        <div class="ctl">
+          <span class="ctl-l">Day</span>
+          <select id="spc-day" class="ctl-sel">
+            <option value="1">Day 1</option>
+            <option value="2">Day 2</option>
+            <option value="3">Day 3</option>
+          </select>
+        </div>
+        <label class="sw"><input type="checkbox" data-layer="hurricanes"><span class="sw-t"></span><span class="sw-l">Tropical / Hurricanes</span></label>
+        <label class="sw"><input type="checkbox" data-layer="aurora"><span class="sw-t"></span><span class="sw-l">Aurora Forecast</span></label>
+      </div>
+    </section>
+
+    <!-- ═══════════  EARTH  ═══════════ -->
+    <section class="hud-pane" data-pane="earth">
+      <div id="layers-earth">
 
       <details open class="cat" data-cat="sea">
         <summary><span class="cat-name">SEA</span><span class="cat-count" id="cat-count-sea">0</span></summary>
@@ -100,14 +212,6 @@
         <label><input type="checkbox" data-layer="quakes"><span class="dot" data-color="quakes"></span><span class="lbl">Earthquakes</span><span class="count" id="count-quakes">0</span></label>
         <label><input type="checkbox" data-layer="volcanoes"><span class="dot" data-color="volcanoes"></span><span class="lbl">Volcanoes</span><span class="count" id="count-volcanoes">0</span></label>
         <label><input type="checkbox" data-layer="fires"><span class="dot" data-color="fires"></span><span class="lbl">Wildfires</span><span class="count" id="count-fires">0</span></label>
-      </details>
-
-      <details open class="cat" data-cat="weather">
-        <summary><span class="cat-name">WEATHER</span><span class="cat-count" id="cat-count-weather">0</span></summary>
-        <label><input type="checkbox" data-layer="radar"><span class="dot" data-color="radar"></span><span class="lbl">Radar</span><span class="count" id="count-radar">—</span></label>
-        <label><input type="checkbox" data-layer="clouds"><span class="dot" data-color="clouds"></span><span class="lbl">Clouds</span><span class="count" id="count-clouds">—</span></label>
-        <label><input type="checkbox" data-layer="aurora"><span class="dot" data-color="aurora"></span><span class="lbl">Aurora</span><span class="count" id="count-aurora">—</span></label>
-        <label><input type="checkbox" data-layer="terminator"><span class="dot" data-color="terminator"></span><span class="lbl">Day/Night</span><span class="count" id="count-terminator">—</span></label>
       </details>
 
       <details open class="cat" data-cat="reference">
@@ -135,11 +239,6 @@
         <label><input type="checkbox" data-layer="photoreal3d" disabled><span class="dot" data-color="photoreal3d"></span><span class="lbl">Photoreal 3D</span><span class="count" id="count-photoreal3d">—</span></label>
       </details>
 
-      <details open class="cat" data-cat="space">
-        <summary><span class="cat-name">SPACE</span><span class="cat-count" id="cat-count-space">0</span></summary>
-        <label><input type="checkbox" data-layer="launches"><span class="dot" data-color="launches"></span><span class="lbl">Launches</span><span class="count" id="count-launches">0</span></label>
-      </details>
-
       <details open class="cat" data-cat="alerts">
         <summary><span class="cat-name">ALERTS</span><span class="cat-count" id="cat-count-alerts">0</span></summary>
         <label><input type="checkbox" data-layer="tsunamis"><span class="dot" data-color="tsunamis"></span><span class="lbl">Tsunami</span><span class="count" id="count-tsunamis">0</span></label>
@@ -147,8 +246,107 @@
         <label><input type="checkbox" data-layer="news"><span class="dot" data-color="news"></span><span class="lbl">Events</span><span class="count" id="count-news">0</span></label>
       </details>
 
+      </div>
+    </section>
+
+    <!-- ═══════════  SKY  ═══════════ -->
+    <section class="hud-pane" data-pane="sky">
+      <div id="layers-sky">
+
+        <details open class="cat" data-cat="air">
+          <summary><span class="cat-name">AIR</span><span class="cat-count" id="cat-count-air">0</span></summary>
+          <label><input type="checkbox" data-layer="planes"><span class="dot" data-color="planes"></span><span class="lbl">Planes</span><span class="count" id="count-planes">0</span></label>
+          <label><input type="checkbox" data-layer="airports"><span class="dot" data-color="airports"></span><span class="lbl">Airports</span><span class="count" id="count-airports">0</span></label>
+          <label><input type="checkbox" data-layer="tfrs"><span class="dot" data-color="tfrs"></span><span class="lbl">TFRs</span><span class="count" id="count-tfrs">0</span></label>
+          <label><input type="checkbox" data-layer="airspace"><span class="dot" data-color="airspace"></span><span class="lbl">Airspace (US)</span><span class="count" id="count-airspace">—</span></label>
+        </details>
+
+        <details open class="cat" data-cat="space">
+          <summary><span class="cat-name">SPACE</span><span class="cat-count" id="cat-count-space">0</span></summary>
+          <label><input type="checkbox" data-layer="satellites"><span class="dot" data-color="satellites"></span><span class="lbl">Satellites</span><span class="count" id="count-satellites">0</span></label>
+          <label><input type="checkbox" data-layer="launches"><span class="dot" data-color="launches"></span><span class="lbl">Launches</span><span class="count" id="count-launches">0</span></label>
+        </details>
+
+        <details open class="cat" data-cat="celestial">
+          <summary><span class="cat-name">CELESTIAL</span><span class="cat-count"></span></summary>
+          <label><input type="checkbox" data-layer="terminator"><span class="dot" data-color="terminator"></span><span class="lbl">Terminator line</span><span class="count" id="count-terminator">—</span></label>
+          <label><input type="checkbox" id="sky-moon"><span class="dot" data-color="nightlights"></span><span class="lbl">Moon</span></label>
+          <label><input type="checkbox" id="sky-stars"><span class="dot" data-color="satellites"></span><span class="lbl">Stars</span></label>
+          <label><input type="checkbox" id="sky-nightlights"><span class="dot" data-color="nightlights"></span><span class="lbl">City lights (night side)</span></label>
+          <label><input type="checkbox" id="sky-sunlighting"><span class="dot" data-color="launches"></span><span class="lbl">Real-time sun</span></label>
+        </details>
+
+      </div>
+    </section>
+
+    <!-- ═══════════  WORLD  ═══════════ -->
+    <!-- Live world-population telemetry. Structure follows the reference
+         dashboard: running counters, per-continent and per-country ranks,
+         and a next-milestone tracker. -->
+    <section class="hud-pane" data-pane="world">
+      <div id="world-pane">
+
+        <div class="wp-hero">
+          <div class="wp-hero-label">WORLD POPULATION <span class="wp-live">LIVE</span></div>
+          <div class="wp-odometer mono" id="wp-total">—</div>
+        </div>
+
+        <div class="wp-grid3">
+          <div class="wp-stat"><span class="wp-k">Births today</span><span class="wp-v mono up" id="wp-births">—</span></div>
+          <div class="wp-stat"><span class="wp-k">Deaths today</span><span class="wp-v mono down" id="wp-deaths">—</span></div>
+          <div class="wp-stat"><span class="wp-k">Growth today</span><span class="wp-v mono up" id="wp-growth">—</span></div>
+        </div>
+
+        <div class="wp-sec-label">BY CONTINENT</div>
+        <ol class="wp-rank" id="wp-continents"></ol>
+
+        <div class="wp-sec-label">TOP COUNTRIES</div>
+        <ol class="wp-rank" id="wp-countries"></ol>
+
+        <div class="wp-sec-label">NEXT MILESTONE</div>
+        <div id="wp-milestone" class="wp-milestone"></div>
+
+        <p class="pane-note" id="wp-src">—</p>
+      </div>
+    </section>
+
     </div>
   </aside>
+
+  <!-- ─────────  FRAME TIMESTAMP CHIP  ─────────
+       Every app in the survey pins the valid-time of the displayed frame to
+       the top-left of the map. Without it an animating radar loop is
+       ambiguous about whether you are looking at past or forecast data —
+       the exact complaint levelled at weather.com in the review. -->
+  <div id="frame-stamp" class="hidden">
+    <span id="fs-time" class="mono">—</span>
+    <span id="fs-kind">RADAR</span>
+  </div>
+
+  <!-- ─────────  RADAR / SATELLITE TIMELINE  ───────── -->
+  <div id="timeline" class="hidden">
+    <button id="tl-prev"  class="tl-btn" aria-label="Previous frame">◀</button>
+    <button id="tl-play"  class="tl-btn tl-play" aria-label="Play/pause">▶</button>
+    <button id="tl-next"  class="tl-btn" aria-label="Next frame">▶|</button>
+    <div id="tl-track">
+      <div id="tl-fill"></div>
+      <div id="tl-now" title="now"></div>
+      <input type="range" id="tl-range" min="0" max="0" step="1" value="0">
+    </div>
+    <span id="tl-label" class="mono">—</span>
+    <select id="tl-speed" class="tl-speed">
+      <option value="600">1x</option>
+      <option value="300">2x</option>
+      <option value="150">4x</option>
+    </select>
+  </div>
+
+  <!-- ─────────  COLOUR SCALE LEGEND  ───────── -->
+  <div id="legend" class="hidden">
+    <div class="lg-head"><span id="lg-title">REFLECTIVITY</span><span id="lg-unit" class="mono">dBZ</span></div>
+    <div id="lg-bar"></div>
+    <div id="lg-ticks" class="mono"></div>
+  </div>
 
   <!-- ─────────  HOVER TOOLTIP  ───────── -->
   <div id="hover-tip" class="hidden">

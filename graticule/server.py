@@ -7,6 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -87,6 +88,42 @@ async def config() -> JSONResponse:
         "fires_enabled":       bool(os.environ.get("FIRMS_MAP_KEY", "").strip()),
         "ships_enabled":       bool(os.environ.get("AISSTREAM_KEY", "").strip()),
     })
+
+
+#: SPC convective-outlook GeoJSON, cached briefly. Proxied rather than fetched
+#: from the browser because spc.noaa.gov sends no Access-Control-Allow-Origin
+#: header, so a direct front-end fetch is blocked by CORS.
+_SPC_CACHE: dict[str, tuple[float, dict]] = {}
+_SPC_TTL_S = 600.0
+
+
+@app.get("/api/spc/outlook")
+async def spc_outlook(day: str = "1") -> JSONResponse:
+    """Day 1-3 SPC categorical convective outlook as GeoJSON."""
+    if day not in {"1", "2", "3"}:
+        return JSONResponse({"error": "day must be 1, 2 or 3"}, status_code=400)
+
+    now = asyncio.get_event_loop().time()
+    hit = _SPC_CACHE.get(day)
+    if hit and now - hit[0] < _SPC_TTL_S:
+        return JSONResponse(hit[1])
+
+    url = f"https://www.spc.noaa.gov/products/outlook/day{day}otlk_cat.nolyr.geojson"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(url, headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:  # network, HTTP, or JSON decode
+        logger.warning(f"SPC outlook day {day} fetch failed: {exc}")
+        # Serve stale rather than nothing — an outlook valid 20 minutes ago is
+        # far more useful than an empty map during a severe-weather event.
+        if hit:
+            return JSONResponse(hit[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    _SPC_CACHE[day] = (now, data)
+    return JSONResponse(data)
 
 
 @app.websocket("/ws")

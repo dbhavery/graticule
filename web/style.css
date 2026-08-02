@@ -1140,3 +1140,288 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 #hud::-webkit-scrollbar-thumb, #panel::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,0.08); border-radius: 3px;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PRO REWORK — tabbed HUD, mode chips, timeline, legend, world panel
+   Visual target: the high-scoring apps in the 2026 radar-app survey — a
+   single dark left rail, tabs over mode chips over contextual controls,
+   a transport timeline pinned bottom-centre, and a colour-scale legend.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+#hud { padding: 0; display: flex; flex-direction: column; width: 264px; overflow: hidden; }
+
+/* ---- Tab rail ---- */
+#hud-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(0, 0, 0, 0.35);
+  flex: 0 0 auto;
+}
+.hud-tab {
+  flex: 1;
+  appearance: none;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-mute);
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  padding: 11px 2px 9px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.hud-tab:hover { color: var(--text-dim); background: rgba(255,255,255,0.03); }
+.hud-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: rgba(77, 210, 255, 0.07);
+}
+
+#hud-panes { flex: 1 1 auto; overflow-y: auto; }
+.hud-pane { display: none; padding: 12px 14px 16px; }
+.hud-pane.is-active { display: block; }
+
+/* ---- Mode chips ---- */
+.mode-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+.chip {
+  appearance: none;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+.chip:hover { color: var(--text); border-color: rgba(255,255,255,0.16); }
+.chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #041016;
+  font-weight: 600;
+}
+.mode-body { display: none; }
+.mode-body.is-active { display: block; }
+
+/* ---- Switch rows ---- */
+.sw {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 4px; cursor: pointer;
+  font-size: 12px; color: var(--text-dim);
+  border-radius: 3px; transition: background 140ms ease, color 140ms ease;
+}
+.sw:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+.sw input { position: absolute; opacity: 0; pointer-events: none; }
+.sw-t {
+  flex: 0 0 auto; width: 26px; height: 14px; border-radius: 7px;
+  background: rgba(255,255,255,0.12); position: relative;
+  transition: background 160ms ease;
+}
+.sw-t::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--text-mute); transition: transform 160ms ease, background 160ms ease;
+}
+.sw input:checked + .sw-t { background: rgba(77,210,255,0.35); }
+.sw input:checked + .sw-t::after { transform: translateX(12px); background: var(--accent); }
+.sw input:checked ~ .sw-l { color: var(--text); }
+.sw-l { flex: 1; }
+
+/* ---- Labelled control rows ---- */
+.ctl { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 11px; }
+.ctl-l { flex: 0 0 62px; color: var(--text-mute); letter-spacing: 0.4px; }
+.ctl-sel {
+  flex: 1; appearance: none;
+  background: rgba(0,0,0,0.45);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  color: var(--text); font-family: var(--sans); font-size: 11px;
+  padding: 4px 6px; cursor: pointer;
+}
+.ctl-sel:focus { outline: none; border-color: var(--accent); }
+.ctl input[type=range] { flex: 1; }
+.ctl-v { flex: 0 0 32px; text-align: right; color: var(--text-dim); font-size: 10px; }
+.pane-note { font-size: 10px; color: var(--text-mute); line-height: 1.5; margin: 8px 4px 0; }
+
+/* ---- Frame timestamp chip ---- */
+#frame-stamp {
+  position: absolute; top: 66px; left: 296px; z-index: 12;
+  display: flex; align-items: center; gap: 9px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px; padding: 6px 11px;
+  backdrop-filter: blur(8px);
+}
+#fs-time { font-size: 12px; color: var(--text); font-weight: 500; }
+#fs-kind { font-size: 8.5px; letter-spacing: 1.6px; color: var(--text-mute); }
+
+/* ---- Timeline ---- */
+#timeline {
+  position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+  z-index: 12; display: flex; align-items: center; gap: 9px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px; padding: 8px 13px;
+  backdrop-filter: blur(8px); min-width: 520px;
+}
+.tl-btn {
+  appearance: none; background: none; border: 0;
+  color: var(--text-dim); cursor: pointer; font-size: 12px;
+  padding: 3px 5px; border-radius: 3px; transition: all 140ms ease;
+}
+.tl-btn:hover { color: var(--text); background: rgba(255,255,255,0.07); }
+.tl-play { color: var(--accent); font-size: 14px; }
+#tl-track { flex: 1; position: relative; height: 18px; display: flex; align-items: center; }
+#tl-track::before {
+  content: ''; position: absolute; left: 0; right: 0; height: 3px;
+  background: rgba(255,255,255,0.1); border-radius: 2px;
+}
+/* Past frames tint cyan; the marker shows where "now" sits so forecast
+   frames past it are unmistakable. */
+#tl-fill {
+  position: absolute; left: 0; height: 3px; border-radius: 2px;
+  background: linear-gradient(90deg, rgba(77,210,255,0.25), rgba(77,210,255,0.75));
+  pointer-events: none;
+}
+#tl-now {
+  position: absolute; top: 1px; width: 1px; height: 16px;
+  background: var(--c-launches); opacity: 0.85; pointer-events: none;
+}
+#tl-now::after {
+  content: 'NOW'; position: absolute; top: -11px; left: 50%;
+  transform: translateX(-50%); font-size: 7px; letter-spacing: 1px;
+  color: var(--c-launches); font-family: var(--sans);
+}
+#tl-range {
+  appearance: none; width: 100%; background: none; margin: 0;
+  position: relative; z-index: 2; cursor: pointer;
+}
+#tl-range::-webkit-slider-thumb {
+  appearance: none; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--accent); border: 2px solid #04141c; cursor: pointer;
+}
+#tl-label { font-size: 11px; color: var(--text-dim); flex: 0 0 auto; min-width: 92px; text-align: right; }
+.tl-speed {
+  appearance: none; background: rgba(0,0,0,0.4);
+  border: 1px solid var(--panel-border); border-radius: 3px;
+  color: var(--text-dim); font-family: var(--mono); font-size: 10px;
+  padding: 2px 4px; cursor: pointer;
+}
+
+/* ---- Colour scale legend ---- */
+#legend {
+  position: absolute; right: 16px; bottom: 150px; z-index: 12;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px; padding: 9px 11px 7px;
+  backdrop-filter: blur(8px); width: 172px;
+}
+.lg-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+#lg-title { font-size: 8.5px; letter-spacing: 1.5px; color: var(--text-mute); }
+#lg-unit { font-size: 9px; color: var(--text-dim); }
+#lg-bar { height: 9px; border-radius: 2px; }
+#lg-ticks { display: flex; justify-content: space-between; margin-top: 3px; font-size: 8.5px; color: var(--text-mute); }
+
+/* ---- WORLD pane ---- */
+.wp-hero { text-align: center; padding: 4px 0 12px; border-bottom: 1px solid var(--panel-rule); }
+.wp-hero-label {
+  font-size: 8.5px; letter-spacing: 2px; color: var(--text-mute);
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+}
+.wp-live {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--ok); letter-spacing: 1.2px;
+}
+.wp-live::before {
+  content: ''; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--ok); box-shadow: 0 0 6px var(--ok);
+  animation: wp-pulse 1.8s ease-in-out infinite;
+}
+@keyframes wp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+.wp-odometer {
+  font-size: 23px; font-weight: 600; color: var(--ok);
+  letter-spacing: 0.5px; margin-top: 7px;
+  text-shadow: 0 0 18px rgba(34, 204, 102, 0.35);
+  font-variant-numeric: tabular-nums;
+}
+.wp-grid3 { display: grid; gap: 5px; margin: 11px 0 4px; }
+.wp-stat {
+  display: flex; justify-content: space-between; align-items: baseline;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--panel-rule);
+  border-radius: 3px; padding: 6px 9px;
+}
+.wp-k { font-size: 10.5px; color: var(--text-dim); }
+.wp-v { font-size: 12px; font-variant-numeric: tabular-nums; }
+.wp-v.up { color: var(--ok); }
+.wp-v.down { color: var(--c-quakes); }
+.wp-sec-label {
+  font-size: 8.5px; letter-spacing: 2px; color: var(--c-hurricanes);
+  margin: 15px 0 7px; text-align: center;
+}
+.wp-rank { list-style: none; margin: 0; padding: 0; }
+.wp-rank li {
+  display: flex; align-items: baseline; gap: 7px;
+  padding: 4px 6px; border-radius: 3px; font-size: 11px;
+}
+.wp-rank li:nth-child(odd) { background: rgba(255,255,255,0.025); }
+.wp-rank .r-i { flex: 0 0 14px; color: var(--text-mute); font-size: 9.5px; }
+.wp-rank .r-n { flex: 1; color: var(--text-dim); }
+.wp-rank .r-v { font-family: var(--mono); font-size: 10.5px; color: var(--text); font-variant-numeric: tabular-nums; }
+.wp-rank .r-d { flex: 0 0 9px; font-size: 9px; }
+.wp-rank .r-d.up { color: var(--ok); }
+.wp-rank .r-d.down { color: var(--c-quakes); }
+.wp-milestone {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--panel-rule);
+  border-radius: 3px; padding: 9px;
+}
+.wp-ms-row { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 6px; }
+.wp-ms-name { color: var(--text); }
+.wp-ms-val { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); }
+.wp-ms-bar { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+.wp-ms-fill { height: 100%; background: var(--ok); border-radius: 2px; transition: width 600ms ease; }
+
+/* ---- Range inputs: kill the UA accent (was rendering bright red) ---- */
+input[type=range] {
+  appearance: none;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  appearance: none;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #04141c;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 3px; border-radius: 2px; background: transparent;
+}
+
+/* ---- Bottom-right stack: legend over feeds over timeline ----
+   The timeline is centred on the map area (not the window) so it clears the
+   left rail, and the feed strip and legend are lifted above it so nothing
+   overlaps at 1600px or below. */
+#timeline {
+  left: auto;
+  right: 16px;
+  transform: none;
+  bottom: 16px;
+  min-width: 0;
+  width: clamp(420px, 46vw, 620px);
+}
+#feedstrip { bottom: 74px; }
+#legend    { bottom: 178px; }
+
+/* Legend sits lower-left of the map area, clear of the feed strip and
+   timeline, mirroring where the desktop radar apps put their colour bar. */
+#legend { right: auto; left: 296px; bottom: 16px; }
