@@ -39,6 +39,15 @@
       </div>
       <div class="tm tm-sep"></div>
       <div class="tm">
+        <span class="tm-label">SUN</span>
+        <span class="tm-val mono" id="tm-sun">—</span>
+      </div>
+      <div class="tm">
+        <span class="tm-label">MOON</span>
+        <span class="tm-val mono" id="tm-moon">—</span>
+      </div>
+      <div class="tm tm-sep"></div>
+      <div class="tm">
         <span class="tm-label">KP</span>
         <span class="tm-val mono" id="tm-kp">—</span>
       </div>
@@ -268,10 +277,22 @@
         </section>
 
         <section class="sm-section">
+          <div class="sm-section-label">REALISTIC EARTH</div>
+          <div class="sm-checkgroup">
+            <label class="sm-check"><input type="checkbox" id="sun-lighting"><span>Real-time sun &amp; day/night terminator</span></label>
+            <label class="sm-check"><input type="checkbox" id="night-lights"><span>City lights on the night side</span><span class="sm-hint">NASA VIIRS Black Marble</span></label>
+            <label class="sm-check"><input type="checkbox" id="show-moon"><span>Moon (true position &amp; phase)</span></label>
+            <label class="sm-check"><input type="checkbox" id="show-stars"><span>Stars</span></label>
+            <label class="sm-check"><input type="checkbox" id="hdr"><span>HDR tone mapping</span><span class="sm-hint">stops the daylight limb clipping to white</span></label>
+            <label class="sm-check"><input type="checkbox" id="lens-flare"><span>Sun glow / lens flare</span></label>
+            <label class="sm-check"><input type="checkbox" id="lock-na"><span>Stay centred on North America</span><span class="sm-hint">re-centres after 12 s idle; sun still sweeps in real time</span></label>
+          </div>
+        </section>
+
+        <section class="sm-section">
           <div class="sm-section-label">VIEW</div>
           <div class="sm-checkgroup">
             <label class="sm-check"><input type="checkbox" id="show-graticule"><span>Show graticule (meridian / parallel grid)</span></label>
-            <label class="sm-check"><input type="checkbox" id="sun-lighting"><span>Sun-following surface lighting</span></label>
           </div>
           <div class="sm-row">
             <label class="sm-row-lbl">Atmosphere intensity</label>

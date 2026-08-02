@@ -218,10 +218,21 @@ const settings = Object.assign({
   timeFormat: 'utc',                // 'utc' | 'local' | 'both'
   imageryBase: 'satellite',         // 'satellite' | 'streets' | 'topo' | 'night'
   showGraticule: false,
-  sunLighting: false,
+  // ---- Realistic Earth (Wave 1) --------------------------------------------
+  // Defaults ON: Don's brief is "I want the Earth completely realistic — real
+  // time sun and moon, nighttime and daytime". A flat fully-lit globe was the
+  // single biggest reason the app read as amateurish, so realism is no longer
+  // an opt-in toggle buried in settings.
+  sunLighting: true,                // real-time solar terminator shading
+  nightLights: true,                // VIIRS Black Marble on the dark side only
+  showMoon: true,                   // real-time lunar position + phase
+  showStars: true,                  // celestial sphere
+  hdr: true,                        // high dynamic range tone mapping
+  lensFlare: true,                  // sun glow when the star is in frame
+  lockNorthAmerica: true,           // hold NA centred; let the sun sweep across
   atmosIntensity: 12,
   vignetteIntensity: 0.5,
-  idleRotateSec: 60,                // 0 = disabled
+  idleRotateSec: 0,                 // 0 = disabled (NA lock owns the camera)
   opCountries: 0.45,
   opStates: 0.30,
   opCities: 1.00,
@@ -242,6 +253,11 @@ function loadSettings() {
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
 }
+
+// Camera home. Declared up here (not beside applyNorthAmericaLock) because
+// initViewer's setView reads it during bootstrap, before the bottom of the
+// module has evaluated.
+const NA_HOME = { lon: -98.0, lat: 39.5, alt: 22_000_000 };
 
 let viewer;
 const dataSources = {};
@@ -312,15 +328,18 @@ async function initViewer() {
   viewer.scene.maximumScreenSpaceError = 1.5;
 
   viewer.scene.backgroundColor = Cesium.Color.BLACK;
-  viewer.scene.globe.enableLighting = !!settings.sunLighting;
-  viewer.scene.skyAtmosphere.show = true;
-  // Richer atmospheric scattering — deepens the limb, cools the daylight band
-  viewer.scene.skyAtmosphere.hueShift        = -0.04;
-  viewer.scene.skyAtmosphere.saturationShift =  0.18;
-  viewer.scene.skyAtmosphere.brightnessShift = -0.06;
-  // Ground atmosphere too — softens day/night terminator with a warm bleed
-  viewer.scene.globe.showGroundAtmosphere = true;
-  viewer.scene.globe.atmosphereLightIntensity = 12.0;
+
+  // ---- Real-time celestial clock ------------------------------------------
+  // The whole "sunlight rotating in real time" behaviour hangs off this. Cesium
+  // defaults to a frozen clock, which is why the globe used to sit evenly lit:
+  // with no time advancing, the sun vector never moved. SYSTEM_CLOCK slaves the
+  // scene to the wall clock, so the terminator sweeps westward on its own and
+  // matches real UTC to the second.
+  viewer.clock.clockStep     = Cesium.ClockStep.SYSTEM_CLOCK;
+  viewer.clock.shouldAnimate = true;
+  viewer.clock.currentTime   = Cesium.JulianDate.now();
+
+  initRealisticEarth();
 
   // 3D buildings — OSM Buildings (Cesium ion) and Google Photorealistic 3D Tiles
   // are both gated on user-supplied free keys. They auto-attach when present.
@@ -328,7 +347,7 @@ async function initViewer() {
   await maybeAttachGoogle3DTiles(cfg);
 
   viewer.camera.setView({
-    destination: Cesium.Cartesian3.fromDegrees(-98.0, 38.0, 22000000),
+    destination: Cesium.Cartesian3.fromDegrees(NA_HOME.lon, NA_HOME.lat, NA_HOME.alt),
   });
   // Allow the camera to descend into the surface band where 3D buildings live
   viewer.scene.screenSpaceCameraController.minimumZoomDistance = 50;
@@ -1986,18 +2005,22 @@ function toggleNightLights(on) {
     return;
   }
   if (nightLightsLayer) return;
-  // VIIRS Black Marble — annual composite, free, no key, no rate limit.
-  // GIBS WMTS in EPSG:4326 ("best/VIIRS_Black_Marble") with a baked-in date
-  // because Black Marble is a yearly product.
-  const url = 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_Black_Marble/default/2016-01-01/500m/{TileMatrix}/{TileRow}/{TileCol}.jpg';
+  // VIIRS city lights — free, keyless, no rate limit.
+  //
+  // Two traps here, both of which produced silent all-400 tile storms:
+  //   1. "VIIRS_Black_Marble" is not a served GIBS layer id. The night-lights
+  //      composite is published as VIIRS_CityLights_2012, and the date segment
+  //      must be that product's year.
+  //   2. GIBS's EPSG:4326 "500m" TileMatrixSet is NOT a power-of-two grid
+  //      (its levels are 2,3,5,10,20… tiles wide), so it cannot be addressed
+  //      with Cesium's GeographicTilingScheme — every request off the doubling
+  //      grid 400s. The EPSG:3857 GoogleMapsCompatible set IS standard XYZ,
+  //      so we use Web Mercator and let Cesium reproject onto the globe.
   nightLightsLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: url
-      .replace('{TileMatrix}', '{z}')
-      .replace('{TileRow}', '{y}')
-      .replace('{TileCol}', '{x}'),
-    tilingScheme: new Cesium.GeographicTilingScheme(),
+    url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg',
+    tilingScheme: new Cesium.WebMercatorTilingScheme(),
     maximumLevel: 8,
-    credit: 'NASA Earthdata · VIIRS Black Marble',
+    credit: 'NASA Earthdata · VIIRS City Lights',
   }));
   // Show only on the night side using Cesium's day/night alpha — Cesium 1.98+
   // supports per-imagery dayAlpha/nightAlpha when the globe has lighting.
@@ -2748,6 +2771,12 @@ function initSettings() {
 
   checkbox('show-graticule',  'showGraticule',  applyGraticule);
   checkbox('sun-lighting',    'sunLighting',    applySunLighting);
+  checkbox('night-lights',    'nightLights',    toggleNightLights);
+  checkbox('show-moon',       'showMoon',       applyMoon);
+  checkbox('show-stars',      'showStars',      applyStars);
+  checkbox('hdr',             'hdr',            applyHdr);
+  checkbox('lens-flare',      'lensFlare',      applyLensFlare);
+  checkbox('lock-na',         'lockNorthAmerica', applyNorthAmericaLock);
   checkbox('diagnostics',     'diagnostics',    applyDiagnostics);
   checkbox('ambient-sound',   'ambientSound',   applyAmbientSound);
   checkbox('sound-alerts',    'soundAlerts');
@@ -2787,6 +2816,7 @@ function initSettings() {
   applyDiagnostics(settings.diagnostics);
   applyAmbientSound(settings.ambientSound);
   applyIdleRotate(settings.idleRotateSec);
+  applyNorthAmericaLock(settings.lockNorthAmerica);
 }
 
 function applyUnits() {
@@ -2794,6 +2824,153 @@ function applyUnits() {
   if (lbl) lbl.textContent = settings.units === 'us' ? 'ALT (US)' : 'ALT';
   // formatAltitude reads settings.units directly on every tick, so the header
   // value catches up within ~1s on its own.
+}
+
+// ---------- Realistic Earth -------------------------------------------------
+//
+// Everything that makes the globe read as a real planet rather than a lit
+// sphere lives here. Four independent pieces, all driven by viewer.clock, which
+// runs on SYSTEM_CLOCK (see initViewer):
+//
+//   1. Solar lighting  — globe.enableLighting shades the night hemisphere from
+//                        the true sun vector. This is the terminator; the old
+//                        dashed polyline was only ever a cosmetic annotation
+//                        drawn on top of a uniformly-lit globe.
+//   2. Night lights    — VIIRS Black Marble composited with nightAlpha=1 /
+//                        dayAlpha=0 so cities glow only on the dark side.
+//   3. Moon + stars    — real ephemeris position and phase from Cesium.
+//   4. Atmosphere      — ground + sky scattering, HDR tone mapping, and a
+//                        lens flare stage so the sun blooms when in frame.
+//
+function initRealisticEarth() {
+  const scene = viewer.scene;
+  const globe = scene.globe;
+
+  // 1. Solar lighting. dynamicAtmosphereLighting ties the ground-atmosphere
+  //    glow to the sun vector too, so the limb brightens on the day side and
+  //    goes deep blue-black at the anti-solar point.
+  globe.enableLighting                 = !!settings.sunLighting;
+  globe.dynamicAtmosphereLighting      = true;
+  globe.dynamicAtmosphereLightingFromSun = true;
+  // Softens the day/night boundary. Cesium's default terminator is a hard
+  // ~1px cut; real dusk is a wide band, so we widen the falloff.
+  globe.atmosphereBrightnessShift = 0.05;
+
+  // 4. Atmosphere — sky + ground scattering.
+  scene.skyAtmosphere.show             = true;
+  scene.skyAtmosphere.hueShift         = -0.04;
+  scene.skyAtmosphere.saturationShift  =  0.18;
+  scene.skyAtmosphere.brightnessShift  = -0.06;
+  globe.showGroundAtmosphere           = true;
+  globe.atmosphereLightIntensity       = Number(settings.atmosIntensity) || 12.0;
+
+  // HDR keeps the sunlit limb from blowing out to flat white while still
+  // letting the night side sit near black. Without it the daylight band
+  // clips and the planet looks like plastic.
+  scene.highDynamicRange = !!settings.hdr;
+
+  // 3. Sun, moon, stars. Cesium computes all three from viewer.clock, so the
+  //    moon shows its true phase and libration for the current instant.
+  scene.sun            = scene.sun || new Cesium.Sun();
+  scene.sun.show       = true;
+  scene.sun.glowFactor = 1.4;
+  scene.moon           = new Cesium.Moon({ onlySunLighting: true });
+  scene.moon.show      = !!settings.showMoon;
+  scene.skyBox.show    = !!settings.showStars;
+
+  applyLensFlare(settings.lensFlare);
+
+  // 2. Night lights ride on the same lighting model.
+  toggleNightLights(!!settings.nightLights);
+
+  // Keep the header's sun/moon readout honest — recompute on a slow tick
+  // rather than per-frame; the subsolar point moves 0.25°/minute.
+  setInterval(updateCelestialReadout, 30_000);
+  updateCelestialReadout();
+}
+
+let _lensFlareStage = null;
+function applyLensFlare(on) {
+  if (!viewer) return;
+  const stages = viewer.scene.postProcessStages;
+  if (on && !_lensFlareStage) {
+    try {
+      _lensFlareStage = stages.add(Cesium.PostProcessStageLibrary.createLensFlareStage());
+      _lensFlareStage.uniforms.intensity  = 2.2;
+      _lensFlareStage.uniforms.distortion = 10.0;
+      _lensFlareStage.uniforms.dirtAmount = 0.02;
+    } catch { _lensFlareStage = null; }
+  } else if (!on && _lensFlareStage) {
+    stages.remove(_lensFlareStage);
+    _lensFlareStage = null;
+  }
+  viewer.scene.requestRender();
+}
+
+function applyMoon(on) {
+  if (!viewer || !viewer.scene.moon) return;
+  viewer.scene.moon.show = !!on;
+  viewer.scene.requestRender();
+}
+
+function applyStars(on) {
+  if (!viewer || !viewer.scene.skyBox) return;
+  viewer.scene.skyBox.show = !!on;
+  viewer.scene.requestRender();
+}
+
+function applyHdr(on) {
+  if (!viewer) return;
+  viewer.scene.highDynamicRange = !!on;
+  viewer.scene.requestRender();
+}
+
+// Subsolar + sublunar readout for the telemetry bar. Sun position comes from
+// the same Cesium ephemeris that drives the lighting, so the number in the
+// header and the shading on the globe can never disagree.
+function updateCelestialReadout() {
+  if (!viewer) return;
+  const t = viewer.clock.currentTime;
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+
+  // Subsolar point. computeIcrfToFixedMatrix needs EOP data that Cesium loads
+  // lazily and returns undefined until it arrives, so fall back to the closed
+  // -form solar position rather than showing a dash forever. The two agree to
+  // well under a degree, which is far finer than this readout displays.
+  let lat = null, lon = null;
+  try {
+    const inertial = Cesium.Simon1994PlanetaryPositions
+      .computeSunPositionInEarthInertialFrame(t, new Cesium.Cartesian3());
+    const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(t);
+    if (icrfToFixed) {
+      const fixed = Cesium.Matrix3.multiplyByVector(icrfToFixed, inertial, new Cesium.Cartesian3());
+      const c = Cesium.Cartographic.fromCartesian(fixed);
+      if (c) {
+        lat = Cesium.Math.toDegrees(c.latitude);
+        lon = Cesium.Math.toDegrees(c.longitude);
+      }
+    }
+  } catch {}
+  if (lat === null) [lat, lon] = subsolarLatLon(Cesium.JulianDate.toDate(t));
+
+  set('tm-sun', `${lat >= 0 ? 'N' : 'S'}${Math.abs(lat).toFixed(1)}° ${lon >= 0 ? 'E' : 'W'}${Math.abs(lon).toFixed(1)}°`);
+  set('tm-moon', moonPhaseLabel(Cesium.JulianDate.toDate(t)));
+}
+
+// Illuminated fraction + name from the synodic month. Good to ~0.5 day, which
+// is well inside the resolution of the 8 phase names.
+function moonPhaseLabel(d) {
+  const SYNODIC = 29.530588853;
+  // 2000-01-06 18:14 UTC — a known new moon.
+  const KNOWN_NEW = Date.UTC(2000, 0, 6, 18, 14) / 86400000;
+  const age = (((d.getTime() / 86400000 - KNOWN_NEW) % SYNODIC) + SYNODIC) % SYNODIC;
+  const frac = (1 - Math.cos(2 * Math.PI * age / SYNODIC)) / 2;   // 0=new 1=full
+  const names = ['New', 'Waxing Cres', 'First Qtr', 'Waxing Gib',
+                 'Full', 'Waning Gib', 'Last Qtr', 'Waning Cres'];
+  const glyphs = ['●', '◖', '◑', '◗',
+                  '○', '◖', '◐', '◗'];
+  const i = Math.floor((age / SYNODIC) * 8 + 0.5) % 8;
+  return `${glyphs[i]} ${names[i]} ${(frac * 100).toFixed(0)}%`;
 }
 
 // ---------- Atmosphere / vignette / sun lighting ----------------------------
@@ -3010,6 +3187,59 @@ function applyPerfPreset(preset) {
     viewer.scene.maximumScreenSpaceError = 1.5;
   }
   viewer.scene.requestRender();
+}
+
+// ---------- North America lock ---------------------------------------------
+//
+// Don's brief: "I want it to stay centered on North America ... with the
+// sunlight and darkness rotating in real time around the Earth."
+//
+// Those two requirements only coexist because Cesium renders in an
+// earth-fixed frame: the continents are nailed to the globe, and the *sun*
+// is what moves. So holding the camera over NA costs nothing and the
+// terminator still sweeps across at the true 15°/hour. The lock exists to
+// stop idle-rotate and stray inertia from drifting off-continent; it
+// re-centres only after the user has stopped interacting, so panning and
+// zooming still feel free.
+let _naLockHandle = null;
+
+function applyNorthAmericaLock(on) {
+  if (_naLockHandle) { clearInterval(_naLockHandle); _naLockHandle = null; }
+  if (!on || !viewer) return;
+
+  // Any interaction defers the re-centre so we never fight the user's hand.
+  if (!applyNorthAmericaLock._installed) {
+    applyNorthAmericaLock._installed = true;
+    const reset = () => { _lastInteractionAt = performance.now(); };
+    ['mousedown','wheel','keydown','touchstart','pointerdown'].forEach(ev => {
+      document.addEventListener(ev, reset, { passive: true });
+    });
+    reset();
+  }
+
+  const SETTLE_MS   = 12_000;   // hands-off grace period before re-centring
+  const DRIFT_DEG   = 12;       // only correct once we're this far off centre
+  const MIN_ALT_M   = 3_000_000; // zoomed in? leave the user where they are
+
+  _naLockHandle = setInterval(() => {
+    if (!viewer || !viewer.camera) return;
+    if (performance.now() - _lastInteractionAt < SETTLE_MS) return;
+    let carto;
+    try { carto = Cesium.Cartographic.fromCartesian(viewer.camera.position); } catch { return; }
+    if (!carto || carto.height < MIN_ALT_M) return;
+
+    const lon = Cesium.Math.toDegrees(carto.longitude);
+    const lat = Cesium.Math.toDegrees(carto.latitude);
+    const dLon = Math.abs(((lon - NA_HOME.lon + 540) % 360) - 180);
+    const dLat = Math.abs(lat - NA_HOME.lat);
+    if (dLon < DRIFT_DEG && dLat < DRIFT_DEG) return;   // close enough
+
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(NA_HOME.lon, NA_HOME.lat, carto.height),
+      duration: 2.2,
+      easingFunction: Cesium.EasingFunction.QUADRATIC_IN_OUT,
+    });
+  }, 4000);
 }
 
 // ---------- Auto-rotate when idle ------------------------------------------
