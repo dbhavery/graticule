@@ -365,6 +365,21 @@ async function initViewer() {
     timeline: false, animation: false, fullscreenButton: false,
     navigationHelpButton: false, selectionIndicator: false, infoBox: false,
     creditContainer: document.createElement('div'),
+
+    // Explicit-render mode. Cesium's default is to redraw at display refresh
+    // forever, even on a globe nobody is touching — that is a full GPU
+    // rasterisation of the Earth 60 times a second to produce an identical
+    // frame. The codebase was already written for this: ~20 requestRender()
+    // calls sit in the layer, timeline and camera paths, they were just never
+    // switched on, so every one of them was a no-op.
+    //
+    // Cesium re-renders on its own for camera motion, input, tile loads and
+    // entity changes. maximumRenderTimeChange covers the one thing it cannot
+    // infer: our clock runs in real time to drive the sun, so the scene must
+    // still redraw as the terminator advances. 0.5s is well under the point
+    // where terminator movement is visible and still cuts idle work by ~97%.
+    requestRenderMode: true,
+    maximumRenderTimeChange: 0.5,
   });
 
   // Test-only handle so Playwright (and the dev console) can drive the camera
