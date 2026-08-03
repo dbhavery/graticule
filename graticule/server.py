@@ -254,90 +254,143 @@ async def local_storm_reports(hours: int = 12) -> JSONResponse:
     return JSONResponse(data)
 
 
-#: Wildfire cameras — ALERTCalifornia / UC San Diego, keyless and public.
-#: This is the "Webcams" row of the survey chart without a Windy API key.
+#: Public camera networks. All keyless, all fetched concurrently and merged.
+#:
+#:   ALERTCalifornia  ~1,280 wildfire-detection cameras (UC San Diego / CAL FIRE)
+#:   Caltrans CWWP2   ~3,480 highway CCTV across all 12 districts. Caltrans
+#:                    states plainly there is no charge and documents no key.
+#:                    Each record also carries 12 previous frames and an HLS
+#:                    stream, so a camera can be looped or watched live.
+#:   NYC DOT          ~970 city traffic cameras
+#:
+#: Images are handed to the client as absolute upstream URLs rather than
+#: proxied. An <img> tag needs no CORS header, so proxying would only add a
+#: hop and latency; only the camera *lists* need the server, because those are
+#: fetched with fetch() and do need CORS.
 _CAM_CACHE: tuple[float, dict] | None = None
 _CAM_TTL_S = 1800.0
-_CAM_LIST = "https://cameras.alertcalifornia.org/public-camera-data/all_cameras-v3.json"
-_CAM_FRAME = "https://cameras.alertcalifornia.org/public-camera-data/{cid}/latest-frame.jpg"
+
+_ALERTCA_LIST = "https://cameras.alertcalifornia.org/public-camera-data/all_cameras-v3.json"
+_ALERTCA_FRAME = "https://cameras.alertcalifornia.org/public-camera-data/{cid}/latest-frame.jpg"
+_CALTRANS_LIST = "https://cwwp2.dot.ca.gov/data/d{d}/cctv/cctvStatusD{dd}.json"
+_NYC_LIST = "https://webcams.nyctmc.org/api/cameras"
+
+
+async def _fetch_alertca(client: httpx.AsyncClient) -> list[dict]:
+    r = await client.get(_ALERTCA_LIST, headers={"User-Agent": "graticule/1.0"})
+    r.raise_for_status()
+    out = []
+    for f in r.json().get("features", []):
+        c = (f.get("geometry") or {}).get("coordinates") or []
+        # ~900 of ~2,180 records carry [null, null]. A NaN position corrupts
+        # Cesium's frustum computation, so they never reach the client.
+        if len(c) < 2 or c[0] is None or c[1] is None:
+            continue
+        p = f.get("properties") or {}
+        cid = p.get("id")
+        out.append({
+            "lon": c[0], "lat": c[1], "network": "ALERTCalifornia",
+            "id": cid, "name": p.get("name") or cid,
+            "place": (p.get("county") or "").title(), "state": p.get("state") or "CA",
+            "image": _ALERTCA_FRAME.format(cid=cid),
+            "az_current": p.get("az_current"), "tilt_current": p.get("tilt_current"),
+            "last_frame_ts": p.get("last_frame_ts"),
+        })
+    return out
+
+
+async def _fetch_caltrans_district(client: httpx.AsyncClient, d: int) -> list[dict]:
+    r = await client.get(_CALTRANS_LIST.format(d=d, dd=f"{d:02d}"),
+                         headers={"User-Agent": "graticule/1.0"})
+    r.raise_for_status()
+    out = []
+    for rec in r.json().get("data", []):
+        c = rec.get("cctv") or {}
+        loc = c.get("location") or {}
+        img = ((c.get("imageData") or {}).get("static") or {}).get("currentImageURL")
+        if not img:
+            continue
+        try:
+            lon, lat = float(loc["longitude"]), float(loc["latitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (-180 <= lon <= 180 and -90 <= lat <= 90) or (lon == 0 and lat == 0):
+            continue
+        out.append({
+            "lon": lon, "lat": lat, "network": "Caltrans",
+            "id": f"ct-{loc.get('district')}-{loc.get('index', '')}-{c.get('index', '')}",
+            "name": loc.get("locationName") or loc.get("nearbyPlace") or "Caltrans CCTV",
+            "place": loc.get("county") or loc.get("nearbyPlace") or "", "state": "CA",
+            "route": loc.get("route") or "", "direction": loc.get("direction") or "",
+            "image": img,
+            "stream": (c.get("imageData") or {}).get("streamingVideoURL") or "",
+            "in_service": c.get("inService") == "true",
+        })
+    return out
+
+
+async def _fetch_nyc(client: httpx.AsyncClient) -> list[dict]:
+    r = await client.get(_NYC_LIST, headers={"User-Agent": "graticule/1.0"})
+    r.raise_for_status()
+    out = []
+    for c in r.json():
+        try:
+            lon, lat = float(c["longitude"]), float(c["latitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append({
+            "lon": lon, "lat": lat, "network": "NYC DOT",
+            "id": c.get("id"), "name": c.get("name") or "NYC camera",
+            "place": c.get("area") or "New York City", "state": "NY",
+            "image": c.get("imageUrl") or "",
+            "in_service": str(c.get("isOnline", "")).lower() == "true",
+        })
+    return out
 
 
 @app.get("/api/cameras")
-async def wildfire_cameras() -> JSONResponse:
-    """Public wildfire-camera sites as GeoJSON.
-
-    The upstream file carries ~2,180 entries but roughly 900 have null
-    coordinates (indoor test units and cameras awaiting survey), and a point
-    at [null, null] becomes NaN in Cesium and corrupts frustum computation.
-    Those are dropped here rather than in the client.
-    """
+async def public_cameras() -> JSONResponse:
+    """Every public camera network we can reach without a key, as GeoJSON."""
     global _CAM_CACHE
     now = asyncio.get_event_loop().time()
     if _CAM_CACHE and now - _CAM_CACHE[0] < _CAM_TTL_S:
         return JSONResponse(_CAM_CACHE[1])
 
-    try:
-        async with httpx.AsyncClient(timeout=40.0, follow_redirects=True) as client:
-            r = await client.get(_CAM_LIST, headers={"User-Agent": "graticule/1.0"})
-            r.raise_for_status()
-            raw = r.json()
-    except Exception as exc:
-        logger.warning(f"wildfire camera list fetch failed: {exc}")
+    async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+        jobs = [_fetch_alertca(client), _fetch_nyc(client)]
+        jobs += [_fetch_caltrans_district(client, d) for d in range(1, 13)]
+        # One dead network must not take the layer down with it.
+        results = await asyncio.gather(*jobs, return_exceptions=True)
+
+    cams, networks, failures = [], {}, []
+    for res in results:
+        if isinstance(res, Exception):
+            failures.append(str(res))
+            continue
+        cams.extend(res)
+    for c in cams:
+        networks[c["network"]] = networks.get(c["network"], 0) + 1
+
+    if not cams:
+        logger.warning(f"all camera networks failed: {failures}")
         if _CAM_CACHE:
             return JSONResponse(_CAM_CACHE[1])
-        return JSONResponse({"error": str(exc)}, status_code=502)
+        return JSONResponse({"error": "all camera sources unavailable"}, status_code=502)
 
-    feats = []
-    for f in raw.get("features", []):
-        coords = (f.get("geometry") or {}).get("coordinates") or []
-        if len(coords) < 2 or coords[0] is None or coords[1] is None:
-            continue
-        p = f.get("properties") or {}
-        feats.append({
+    data = {
+        "type": "FeatureCollection",
+        "networks": networks,
+        "credit": "ALERTCalifornia / UC San Diego · Caltrans CWWP2 · NYC DOT",
+        "features": [{
             "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [coords[0], coords[1]]},
-            "properties": {
-                "kind": "cameras",
-                "id": p.get("id"),
-                "name": p.get("name") or p.get("id"),
-                "county": (p.get("county") or "").title(),
-                "state": p.get("state") or "",
-                "sponsor": p.get("sponsor") or "",
-                "az_current": p.get("az_current"),
-                "tilt_current": p.get("tilt_current"),
-                "last_frame_ts": p.get("last_frame_ts"),
-                "image": f"/api/camera/{p.get('id')}",
-            },
-        })
-
-    data = {"type": "FeatureCollection", "features": feats,
-            "credit": "ALERTCalifornia / UC San Diego"}
+            "geometry": {"type": "Point", "coordinates": [c.pop("lon"), c.pop("lat")]},
+            "properties": {"kind": "cameras", **c},
+        } for c in cams],
+    }
     _CAM_CACHE = (now, data)
-    logger.info(f"wildfire cameras: {len(feats)} geolocated of {len(raw.get('features', []))}")
+    logger.info(f"cameras: {len(cams)} from {networks}"
+                + (f" ({len(failures)} sources failed)" if failures else ""))
     return JSONResponse(data)
-
-
-@app.get("/api/camera/{cid}")
-async def wildfire_camera_frame(cid: str) -> Response:
-    """Proxy one camera's current frame.
-
-    Proxied rather than hot-linked so the browser makes a same-origin request
-    (the upstream host sets no CORS headers), and so a dead camera returns a
-    clean 502 instead of a broken image.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", cid):
-        return JSONResponse({"error": "bad camera id"}, status_code=400)
-    try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            r = await client.get(_CAM_FRAME.format(cid=cid),
-                                 headers={"User-Agent": "graticule/1.0"})
-            r.raise_for_status()
-    except Exception as exc:
-        logger.warning(f"camera frame {cid} failed: {exc}")
-        return JSONResponse({"error": str(exc)}, status_code=502)
-    return Response(content=r.content,
-                    media_type=r.headers.get("content-type", "image/jpeg"),
-                    headers={"Cache-Control": "public, max-age=60"})
 
 
 #: Storm spotter reports — Spotter Network's public GRLevelX placefile.

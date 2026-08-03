@@ -46,7 +46,7 @@ const KIND_LABEL = {
   airports: 'AIRPORT', tfrs: 'FLIGHT RESTRICTION',
   parcels_wa: 'PARCEL',
   metar: 'SURFACE OBS', lsr: 'STORM REPORT', warning: 'NWS ALERT',
-  cameras: 'WILDFIRE CAMERA', spotters: 'SPOTTER REPORT',
+  cameras: 'LIVE CAMERA', spotters: 'SPOTTER REPORT',
   spc: 'SPC OUTLOOK', model: 'MODEL FIELD', aqi: 'AIR QUALITY',
 };
 
@@ -2739,7 +2739,7 @@ function showPanel(entity) {
   else if (kind === 'launches')   { title = props.name || 'Launch'; subtitle = `${props.vehicle || ''} · ${props.pad_location || ''}`; }
   else if (kind === 'news')       { title = props.name || 'Natural event'; subtitle = (props.categories && props.categories.join(' · ')) || ''; }
   else if (kind === 'parcels_wa') { title = props.address || `Parcel ${props.parcel_id || ''}`; subtitle = `${props.city || 'Washington'} · APN ${props.parcel_id || '—'}`; }
-  else if (kind === 'cameras')    { title = props.name || props.id; subtitle = `${props.county ? props.county + ' County, ' : ''}${props.state || 'CA'}`; }
+  else if (kind === 'cameras')    { title = props.name || props.id; subtitle = [props.place, props.state, props.network].filter(Boolean).join(' · '); }
   else if (kind === 'spotters')   { title = props.report || 'Spotter report'; subtitle = props.reporter ? `Reported by ${props.reporter}` : 'Spotter Network'; }
   else if (kind === 'metar')      { title = props.id || 'Station'; subtitle = props.name || 'Surface observation'; }
   else if (kind === 'lsr')        { title = `${props.type}${props.magnitude ? ` ${props.magnitude}` : ''}`; subtitle = `${props.city || ''}${props.state ? `, ${props.state}` : ''}`; }
@@ -2877,7 +2877,13 @@ const FIELD_META = {
   magnitude:      { label: 'Magnitude' },
   magnitude_value: { label: 'Magnitude',  num: true },
   magnitude_unit: { label: 'Unit' },
-  // wildfire cameras
+  // cameras
+  network:        { label: 'Network' },
+  place:          { label: 'Place' },
+  route:          { label: 'Route' },
+  direction:      { label: 'Facing' },
+  in_service:     { label: 'In service', chip: true, goodWhenTrue: true },
+  stream:         { label: 'Live video', link: 'Open HLS' },
   county:         { label: 'County' },
   sponsor:        { label: 'Sponsor' },
   az_current:     { label: 'Azimuth',    fmt: (v) => `${Number(v).toFixed(1)}°` },
@@ -2951,8 +2957,10 @@ function detailRow(key, value) {
     // Booleans read as YES/NO. "TSUNAMI FLAG: FALSE" is a database value, not
     // an answer to the question the reader is asking.
     const raw = typeof value === 'boolean' ? (value ? 'yes' : 'no') : String(value);
+    // Booleans are not universally alarming: "tsunami: yes" is bad news,
+    // "in service: yes" is good news. The field declares which way it reads.
     const tone = typeof value === 'boolean'
-      ? (value ? 'bad' : 'dim')
+      ? (meta.goodWhenTrue ? (value ? 'ok' : 'bad') : (value ? 'bad' : 'dim'))
       : (CHIP_TONE[raw.toLowerCase()] || 'dim');
     chip.className = `dt-chip is-${tone}`;
     chip.textContent = raw.toUpperCase();
@@ -6647,6 +6655,14 @@ function drawCompareChart(series, def) {
    null coordinates that would become NaN positions and corrupt Cesium's
    frustum computation. */
 
+/* Three fleets that answer different questions, so they read differently:
+   wildfire lookouts, highway CCTV, city intersections. */
+const CAMERA_TONE = {
+  'ALERTCalifornia': '#fb923c',
+  'Caltrans': '#67e8f9',
+  'NYC DOT': '#a78bfa',
+};
+
 let camerasDS = null;
 let spottersDS = null;
 
@@ -6679,11 +6695,13 @@ async function refreshCameras() {
     const [lon, lat] = f.geometry.coordinates;
     if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
     const p = f.properties;
+    const tone = CAMERA_TONE[p.network] || '#67e8f9';
     camerasDS.entities.add({
       position: Cesium.Cartesian3.fromDegrees(lon, lat),
       point: {
-        pixelSize: 6,
-        color: Cesium.Color.fromCssColorString('#67e8f9'),
+        pixelSize: p.in_service === false ? 4 : 6,
+        color: Cesium.Color.fromCssColorString(tone)
+          .withAlpha(p.in_service === false ? 0.45 : 1.0),
         outlineColor: Cesium.Color.BLACK.withAlpha(0.7),
         outlineWidth: 1,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
@@ -6693,7 +6711,7 @@ async function refreshCameras() {
       label: {
         text: p.name || p.id,
         font: '600 10px Inter, sans-serif',
-        fillColor: Cesium.Color.fromCssColorString('#67e8f9'),
+        fillColor: Cesium.Color.fromCssColorString(tone),
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 3,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
