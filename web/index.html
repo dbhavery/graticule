@@ -14,6 +14,10 @@
 <body>
   <div id="cesiumContainer"></div>
 
+  <!-- Pane grid. Cell 0 is deliberately empty so the live globe shows through
+       it; cells 1..n hold snapshot canvases. -->
+  <div id="panegrid" class="hidden"></div>
+
   <!-- Vignette + scanline overlay (cosmetic) -->
   <div id="overlay-vignette"></div>
 
@@ -426,6 +430,15 @@
               title="Clear all strokes">&#9003;</button>
       <button id="draw-color"  class="tool-swatch" aria-label="Cycle stroke colour"
               title="Cycle stroke colour"></button>
+    </div>
+    <!-- RadarScope's pane control. One location, several products at once. -->
+    <div id="panebar" role="group" aria-label="Pane layout">
+      <span class="bar-cap">PANES</span>
+      <div class="seg">
+        <button class="seg-b is-active" data-panes="single" aria-pressed="true" title="Single pane">1</button>
+        <button class="seg-b" data-panes="dual"   aria-pressed="false" title="Dual pane">2</button>
+        <button class="seg-b" data-panes="quad"   aria-pressed="false" title="Quad pane">4</button>
+      </div>
     </div>
     <div id="basemapbar" role="group" aria-label="Base map">
       <span class="bar-cap">BASE</span>

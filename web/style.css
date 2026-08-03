@@ -1658,7 +1658,7 @@ input[type=range]::-webkit-slider-runnable-track {
   position: absolute; top: 66px; right: 16px; z-index: 13;
   display: flex; align-items: stretch; gap: 10px;
 }
-#drawbar, #basemapbar {
+#drawbar, #basemapbar, #panebar {
   display: flex; align-items: center; gap: 5px;
   background: var(--panel-bg-strong);
   border: 1px solid var(--panel-border);
@@ -2163,3 +2163,83 @@ body.is-pointing #present-exit { opacity: 1; }
   font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
   letter-spacing: var(--tr-tight);
 }
+
+/* ─────────  SINGLE / DUAL / QUAD PANE  ─────────
+   The live Cesium canvas is shrunk into the first cell and the grid overlays
+   the rest. Cell 0 has no canvas of its own: the globe shows through it, so
+   the interactive pane is the real scene rather than a picture of it. */
+body.panes-dual #cesiumContainer { inset: 0 50% 0 0; }
+body.panes-quad #cesiumContainer { inset: 0 50% 50% 0; }
+
+#panegrid {
+  position: absolute; inset: 0; z-index: 6;
+  display: grid;
+  /* Nothing here may swallow a click: the globe underneath cell 0 has to stay
+     draggable. Only the per-pane controls opt back in. */
+  pointer-events: none;
+}
+#panegrid.hidden { display: none; }
+body.panes-dual #panegrid { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+body.panes-quad #panegrid { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+.pane-cell {
+  position: relative;
+  overflow: hidden;
+  /* A hairline, not a border: at broadcast size a 2px rule between panes reads
+     as a frame around each one. */
+  box-shadow: inset 0 0 0 1px var(--panel-rule);
+}
+.pane-cell.is-live { box-shadow: inset 0 0 0 1px var(--accent); }
+.pane-canvas { display: block; width: 100%; height: 100%; background: var(--bg); }
+
+.pane-bar {
+  position: absolute; top: 8px; left: 8px;
+  z-index: 2;
+  display: flex; align-items: center; gap: 7px;
+  padding: 4px 7px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+.pane-live {
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); color: var(--accent);
+}
+.pane-hint {
+  font-family: var(--sans); font-size: var(--fs-micro);
+  color: var(--text-mute);
+}
+.pane-sel {
+  appearance: none;
+  background: none; border: 0; color: var(--text);
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide);
+  cursor: pointer;
+}
+.pane-sel:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.pane-sel option { background: #0a0d12; color: var(--text); letter-spacing: normal; }
+
+/* Presentation mode keeps the panes -- they are the broadcast -- but drops the
+   per-pane chrome that only exists to configure them. */
+body.is-presenting .pane-bar { visibility: hidden; }
+
+/* The pane control reuses .seg, whose margins are tuned for a settings pane,
+   not a toolbar strip. */
+#panebar .seg { margin: 0; }
+#panebar .seg-b { min-width: 24px; }
+
+/* The top row sits under the telemetry bar, which is 44px tall and owns a
+   higher stacking context, so a bar at 8px there is simply invisible. */
+body.panes-dual .pane-bar,
+body.panes-quad .pane-cell:nth-child(-n+2) .pane-bar { top: 52px; }
+
+/* Cell 0 has no product selector and its accent outline already marks it, so
+   its tag moves to the inner corner rather than fighting the HUD for the same
+   52px of top-left that the layer panel occupies. */
+.pane-cell.is-live .pane-bar {
+  top: auto; bottom: 10px; left: auto; right: 10px;
+}
+body.panes-dual .pane-cell.is-live .pane-bar,
+body.panes-quad .pane-cell.is-live .pane-bar { top: auto; }

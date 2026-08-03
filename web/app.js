@@ -290,6 +290,8 @@ const settings = Object.assign({
   adFilterLabels: false,
   adCounties: [],                   // FIPS strings; drives a 2.8 MB lazy load
   presenting: false,                // broadcast framing; chrome hidden
+  paneMode: 'single',               // 'single' | 'dual' | 'quad'
+  paneProducts: ['live', 'satellite', 'warnings', 'model'],
   renderEpoch: 0,                   // bumped when visual defaults change
 }, loadSettings());
 function loadSettings() {
@@ -353,6 +355,7 @@ const TICKER_MAX = 6;
   initModelCompare();
   initAreaDarkening();
   initPresentation();
+  initPanes();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -386,6 +389,13 @@ async function initViewer() {
     timeline: false, animation: false, fullscreenButton: false,
     navigationHelpButton: false, selectionIndicator: false, infoBox: false,
     creditContainer: document.createElement('div'),
+
+    // Multi-pane snapshots read pixels back off this canvas with drawImage,
+    // and they have to wait for the pane's imagery tiles to load first. That
+    // wait crosses a task boundary, and the browser clears an unpreserved
+    // drawing buffer at composite time, so without this every secondary pane
+    // captures a blank frame.
+    contextOptions: { webgl: { preserveDrawingBuffer: true } },
 
     // Explicit-render mode. Cesium's default is to redraw at display refresh
     // forever, even on a globe nobody is touching — that is a full GPU
@@ -7917,4 +7927,320 @@ function initPresentation() {
   });
 
   if (settings.presenting) applyPresenting(true);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SINGLE / DUAL / QUAD PANE
+//  RadarScope's pane control: one location, several products at once, so a
+//  storm can be read across reflectivity, satellite and the warning polygons
+//  without switching back and forth and holding the last frame in your head.
+//
+//  ★ This does NOT create a WebGL context per pane. An earlier plan assumed it
+//  had to, and that was wrong. There is one Cesium scene; pane 1 IS that live
+//  scene, and every other pane is a snapshot of it taken with a different set
+//  of overlays showing and blitted into a 2D canvas. Same camera, same
+//  geometry, one context, and the secondary panes cost nothing between
+//  updates because they are still images until something changes.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PANES = {
+  mode: 'single',            // 'single' | 'dual' | 'quad'
+  products: ['live', 'satellite', 'warnings', 'model'],
+  canvases: [],
+  busy: false,
+  queued: false,
+  // Completed refreshes. A pane is only meaningful after one has finished,
+  // and nothing else on the object distinguishes 'not started' from 'done'.
+  refreshes: 0,
+  settle: null,
+};
+
+/* Each product declares which of the controlled overlays it wants ON. Anything
+   in the controlled set that a product does not name is hidden for that pane,
+   which is what makes a pane a single product rather than a copy of whatever
+   the HUD happens to have switched on.
+
+   'live' is the exception and only ever belongs to pane 1: it means "whatever
+   the user has configured", so the interactive pane never fights the HUD. */
+const PANE_PRODUCTS = {
+  live:      { label: 'LIVE' },
+  radar:     { label: 'RADAR',       want: { radar: true },              needs: ['radar'] },
+  satellite: { label: 'SATELLITE',   want: { clouds: true },             needs: ['clouds'] },
+  warnings:  { label: 'WARNINGS',    want: { warn: true, radar: true },  needs: ['warnings', 'radar'] },
+  model:     { label: 'MODEL FIELD', want: { model: true },              needs: ['model'] },
+  outlooks:  { label: 'SPC OUTLOOK', want: { spc: true },                needs: ['spc_outlook'] },
+  obs:       { label: 'SURFACE OBS', want: { metar: true },              needs: ['metar'] },
+  reports:   { label: 'STORM REPORTS', want: { lsr: true, radar: true }, needs: ['lsr', 'radar'] },
+  base:      { label: 'BASE MAP',    want: {},                           needs: [] },
+};
+
+/* Toggling `.show` on a layer that was never switched on shows nothing: the
+   ImageryLayer does not exist yet and the DataSource is empty. The first
+   attempt at this produced four byte-identical panes for exactly that reason,
+   and every one of them looked like a working screenshot.
+
+   So assigning a product switches its layer on for real, through the same HUD
+   checkbox a user would click. That does mean the live pane picks the layer up
+   too, which is correct rather than a compromise: pane 1 is defined as
+   "whatever the HUD says", and a product silently loading behind the user's
+   back with no checkbox to show for it would be the chrome lying about state
+   again. */
+async function paneEnsure(product) {
+  const needs = (PANE_PRODUCTS[product] || {}).needs || [];
+  let waited = false;
+  for (const layer of needs) {
+    const cb = document.querySelector(`input[data-layer="${layer}"]`);
+    if (!cb || cb.disabled || cb.checked) continue;
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    waited = true;
+  }
+  // Feeds fetch on toggle. Nothing here exposes a completion promise, so this
+  // is a fixed grace period rather than a real await; a pane that misses it
+  // fills in on the next refresh.
+  if (waited) await new Promise((r) => setTimeout(r, 2600));
+}
+
+const PANE_COUNT = { single: 1, dual: 2, quad: 4 };
+
+/* The overlays a pane can turn on and off. Read through accessors because
+   every one of them is null until its layer is first enabled, and several are
+   replaced wholesale when their product selector changes. */
+const PANE_OVERLAYS = {
+  radar:  () => radarLayer,
+  clouds: () => cloudsLayer,
+  aurora: () => auroraLayer,
+  model:  () => modelDS,
+  warn:   () => warnDS,
+  spc:    () => spcDS,
+  lsr:    () => lsrDS,
+  metar:  () => metarDS,
+};
+
+/* The animated radar loop does NOT draw through radarLayer. Once the timeline
+   is running, every frame is its own ImageryLayer in TL.layers and radarLayer
+   is null, so a pane controller that only knew about radarLayer left radar
+   burned into all four panes while reporting that it had switched it off. */
+function paneFrameLayers() {
+  return TL && TL.layers ? [...TL.layers.values()] : [];
+}
+
+function paneCaptureState() {
+  const out = {};
+  for (const [key, get] of Object.entries(PANE_OVERLAYS)) {
+    const o = get();
+    if (o) out[key] = o.show;
+  }
+  const frames = paneFrameLayers();
+  if (frames.length) out.frames = frames.map((l) => l.show);
+  return out;
+}
+
+function paneApplyState(state) {
+  for (const [key, get] of Object.entries(PANE_OVERLAYS)) {
+    const o = get();
+    if (o && key in state) o.show = state[key];
+  }
+  const frames = paneFrameLayers();
+  if (Array.isArray(state.frames)) {
+    frames.forEach((l, i) => { if (i < state.frames.length) l.show = state.frames[i]; });
+  } else if (typeof state.frames === 'boolean') {
+    // A want-state carries one flag for the whole loop: the pane either has
+    // radar or it does not.
+    frames.forEach((l) => { l.show = state.frames; });
+  }
+}
+
+function paneWantState(product) {
+  const want = (PANE_PRODUCTS[product] || {}).want || {};
+  const out = {};
+  for (const key of Object.keys(PANE_OVERLAYS)) out[key] = !!want[key];
+  out.frames = !!want.radar;
+  return out;
+}
+
+/* Tiles for a newly-shown imagery layer are not in memory yet, so a snapshot
+   taken immediately captures the pane mid-load. Waiting on tilesLoaded costs a
+   few frames and is the difference between a pane and a grey rectangle. */
+function paneWaitForTiles(timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const tick = () => {
+      if (viewer.scene.globe.tilesLoaded || performance.now() - started > timeoutMs) {
+        resolve();
+        return;
+      }
+      viewer.scene.requestRender();
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+}
+
+async function paneRefresh() {
+  if (PANES.mode === 'single') return;
+  // One refresh at a time. A camera drag fires moveEnd repeatedly and each
+  // refresh mutates global layer visibility, so overlapping runs would restore
+  // each other's saved state and leave the live view showing a pane's product.
+  if (PANES.busy) { PANES.queued = true; return; }
+  PANES.busy = true;
+
+  const saved = paneCaptureState();
+  try {
+    const n = PANE_COUNT[PANES.mode];
+    for (let i = 1; i < n; i++) {
+      const cv = PANES.canvases[i];
+      if (!cv || !cv.width) continue;
+      paneApplyState(paneWantState(PANES.products[i]));
+      viewer.scene.requestRender();
+      viewer.render();
+      await paneWaitForTiles();
+      viewer.scene.requestRender();
+      viewer.render();
+      const ctx = cv.getContext('2d');
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      // The Cesium canvas is the pane's own size in this mode, so this is a
+      // 1:1 blit rather than a rescale.
+      ctx.drawImage(viewer.canvas, 0, 0, cv.width, cv.height);
+    }
+  } finally {
+    paneApplyState(saved);
+    viewer.scene.requestRender();
+    viewer.render();
+    PANES.busy = false;
+    PANES.refreshes++;
+    if (PANES.queued) { PANES.queued = false; paneRefresh(); }
+  }
+}
+
+function paneSizeCanvases() {
+  const grid = document.getElementById('panegrid');
+  if (!grid) return;
+  for (let i = 1; i < PANES.canvases.length; i++) {
+    const cv = PANES.canvases[i];
+    if (!cv) continue;
+    const r = cv.getBoundingClientRect();
+    const w = Math.max(1, Math.round(r.width));
+    const h = Math.max(1, Math.round(r.height));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  }
+}
+
+function paneBuild() {
+  const grid = document.getElementById('panegrid');
+  if (!grid) return;
+  grid.textContent = '';
+  PANES.canvases = [null];
+
+  const n = PANE_COUNT[PANES.mode];
+  // Cell 0 is left empty: the live Cesium canvas shows through it.
+  for (let i = 0; i < n; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'pane-cell';
+    if (i === 0) cell.classList.add('is-live');
+
+    if (i > 0) {
+      const cv = document.createElement('canvas');
+      cv.className = 'pane-canvas';
+      cell.appendChild(cv);
+      PANES.canvases.push(cv);
+    }
+
+    const bar = document.createElement('div');
+    bar.className = 'pane-bar';
+    if (i === 0) {
+      const tag = document.createElement('span');
+      tag.className = 'pane-live';
+      tag.textContent = 'LIVE';
+      bar.appendChild(tag);
+      const hint = document.createElement('span');
+      hint.className = 'pane-hint';
+      hint.textContent = 'the interactive view';
+      bar.appendChild(hint);
+    } else {
+      const sel = document.createElement('select');
+      sel.className = 'pane-sel';
+      sel.setAttribute('aria-label', `Pane ${i + 1} product`);
+      for (const [key, def] of Object.entries(PANE_PRODUCTS)) {
+        if (key === 'live') continue;
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = def.label;
+        sel.appendChild(opt);
+      }
+      sel.value = PANES.products[i];
+      sel.addEventListener('change', async () => {
+        PANES.products[i] = sel.value;
+        settings.paneProducts = PANES.products.slice();
+        saveSettings();
+        await paneEnsure(sel.value);
+        paneRefresh();
+      });
+      bar.appendChild(sel);
+    }
+    cell.appendChild(bar);
+    grid.appendChild(cell);
+  }
+}
+
+function applyPaneMode(mode) {
+  if (!PANE_COUNT[mode]) mode = 'single';
+  PANES.mode = mode;
+  settings.paneMode = mode;
+  saveSettings();
+
+  document.body.classList.remove('panes-dual', 'panes-quad');
+  if (mode !== 'single') document.body.classList.add(`panes-${mode}`);
+  document.getElementById('panegrid')?.classList.toggle('hidden', mode === 'single');
+
+  document.querySelectorAll('#panebar .seg-b').forEach((b) => {
+    const on = b.dataset.panes === mode;
+    b.classList.toggle('is-active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+
+  if (mode === 'single') {
+    PANES.canvases = [null];
+    document.getElementById('panegrid').textContent = '';
+  } else {
+    paneBuild();
+  }
+
+  // The live canvas changes size with the layout, and Cesium only notices on
+  // its own resize check. Force it, then let the panes size to the new cells.
+  requestAnimationFrame(async () => {
+    try { viewer.resize(); } catch {}
+    viewer.scene.requestRender();
+    paneSizeCanvases();
+    if (mode !== 'single') {
+      for (let i = 1; i < PANE_COUNT[mode]; i++) await paneEnsure(PANES.products[i]);
+    }
+    paneRefresh();
+  });
+}
+
+function initPanes() {
+  const saved = Array.isArray(settings.paneProducts) ? settings.paneProducts : null;
+  if (saved && saved.length === 4) {
+    PANES.products = saved.map((p, i) => (i === 0 ? 'live' : (PANE_PRODUCTS[p] ? p : 'base')));
+  }
+
+  document.querySelectorAll('#panebar .seg-b').forEach((b) => {
+    b.addEventListener('click', () => applyPaneMode(b.dataset.panes));
+  });
+
+  // The panes are snapshots, so they go stale the moment the camera moves or
+  // the radar loop advances. Refresh on settle rather than per frame.
+  viewer.camera.moveEnd.addEventListener(() => {
+    if (PANES.mode === 'single') return;
+    clearTimeout(PANES.settle);
+    PANES.settle = setTimeout(paneRefresh, 260);
+  });
+  window.addEventListener('resize', () => {
+    if (PANES.mode === 'single') return;
+    clearTimeout(PANES.settle);
+    PANES.settle = setTimeout(() => { paneSizeCanvases(); paneRefresh(); }, 260);
+  });
+
+  applyPaneMode(settings.paneMode || 'single');
 }
