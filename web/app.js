@@ -332,6 +332,7 @@ const TICKER_MAX = 6;
   initViewResampling();
   initSkyMirrors();
   initWorldPane();
+  initWorldDash();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -5901,5 +5902,355 @@ function initMapTheme() {
       const radio = document.querySelector(`input[name="imageryBase"][value="${settings.imageryBase}"]`);
       if (radio) radio.checked = true;
     });
+  });
+}
+
+/* ===========================================================================
+   WORLD POPULATION DASHBOARD
+   ===========================================================================
+   A replica of the LiveStream07 board, built from a 1920x1080 frame of it.
+
+   Data, all free and keyless:
+     countries   World Bank SP.POP.TOTL + SP.POP.GROW, baked to
+                 web/data/world_population.json by scripts/build_world_population.py.
+                 Baked rather than fetched live because this ticks at 10Hz and
+                 must not wait on an API.
+     flags       flagcdn.com/w40/<iso2>.png — free, no key, no attribution rule
+     religion    Pew Research Center, Global Religious Landscape. Pew publishes
+                 a size and a projected growth rate per group; there is no live
+                 feed for religion and there cannot be one, so these are the
+                 published figures projected forward the same way the countries
+                 are. Sourced in RELIGIONS below.
+     vitals      UN WPP 2024 crude rates.
+
+   ★ One deliberate departure from the source. The board's TODAY panel and its
+   THIS YEAR panel disagree with each other: at 14:35:57 UTC it showed 131,918
+   births today, which is ~217k/day, while its own "Birth 2026" of 77,514,185
+   over 214 elapsed days implies ~362k/day. The second figure is the correct
+   one (UN WPP puts world births near 132M/year). Reproducing the layout is the
+   goal; reproducing an arithmetic bug is not, so both panels here derive from
+   the same rate and agree.
+   ------------------------------------------------------------------------- */
+
+const WD = {
+  open: false,
+  timer: null,
+  data: null,          // { countries: [...] } from world_population.json
+  rest: [],            // countries ranked 16+, rotated through
+  restAt: 0,
+  restTurn: 0,
+  msAt: 0,             // which country the milestone strip is tracking
+  msStarted: 0,
+  prev: new Map(),     // element id -> last rendered string, for tick flashes
+};
+
+// Seconds in a mean Gregorian year, matching the projection in the HUD pane.
+const WD_YEAR_S = 31_556_952;
+
+// UN WPP 2024: ~132M births and ~62M deaths a year.
+const WD_BIRTHS_PER_S = 132_000_000 / WD_YEAR_S;
+const WD_DEATHS_PER_S = 62_000_000 / WD_YEAR_S;
+
+const WD_CONTINENT_ICON = {
+  'Asia': '🌏', 'Africa': '🌍', 'Europe': '🌍',
+  'Latin America': '🌎', 'North America': '🌎', 'Oceania': '🌏',
+};
+
+/* Pew Research Center, Global Religious Landscape (2020 baseline, published
+   2025) with Pew's projected annual growth to 2050. Epoch is 2020-01-01. */
+const WD_RELIGION_EPOCH = Date.UTC(2020, 0, 1) / 1000;
+const RELIGIONS = [
+  ['Christian', '✝',  2_300_000_000, 0.0104],
+  ['Muslim',    '☪',  2_000_000_000, 0.0176],
+  ['Hindu',     '🕉',  1_200_000_000, 0.0100],
+  ['Buddhist',  '☸',    324_000_000, -0.0005],
+  ['Sikh',      '🪯',    28_000_000, 0.0103],
+  ['Jews',      '✡',     14_800_000, 0.0072],
+];
+
+const WD_HORIZONS = [
+  ['30 Seconds', 30], ['1 Minute', 60], ['2 Minutes', 120],
+  ['5 Minutes', 300], ['10 Minutes', 600], ['20 Minutes', 1200],
+];
+
+function wdFlag(iso2) { return `https://flagcdn.com/w40/${iso2}.png`; }
+
+/* Compound an annual rate from the dataset's epoch (1 July of the data year,
+   the World Bank's mid-year reference) to now. */
+function wdProject(base, rate, nowSec, epochSec) {
+  return base * Math.pow(1 + rate, (nowSec - epochSec) / WD_YEAR_S);
+}
+
+/* Write text and flash the element green if it actually changed. This is the
+   source board's only motion besides the LIVE dot, and it is what makes a wall
+   of numbers read as live rather than as a screenshot. */
+function wdSet(el, txt) {
+  if (!el) return;
+  const id = el.dataset.wdk || el.id;
+  if (WD.prev.get(id) === txt) return;
+  WD.prev.set(id, txt);
+  el.textContent = txt;
+  el.classList.remove('wd-tick');
+  void el.offsetWidth;          // restart the transition
+  el.classList.add('wd-tick');
+  setTimeout(() => el.classList.remove('wd-tick'), 480);
+}
+
+async function initWorldDash() {
+  const openBtn = document.getElementById('wd-open');
+  const closeBtn = document.getElementById('wd-close');
+  if (!openBtn) return;
+  openBtn.addEventListener('click', openWorldDash);
+  closeBtn.addEventListener('click', closeWorldDash);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && WD.open) closeWorldDash();
+  });
+}
+
+async function loadWorldData() {
+  if (WD.data) return WD.data;
+  // StaticFiles is mounted at /static, not at the document root — a bare
+  // 'data/...' resolves to /data/... and 404s.
+  const res = await fetch('/static/data/world_population.json');
+  if (!res.ok) throw new Error(`world_population.json: HTTP ${res.status}`);
+  WD.data = await res.json();
+  // World Bank figures are mid-year estimates for the data year.
+  WD.epoch = Date.UTC(WD.data.year, 6, 1) / 1000;
+  WD.rest = WD.data.countries.slice(15);
+  buildWorldDashStatic();
+  return WD.data;
+}
+
+async function openWorldDash() {
+  const el = document.getElementById('worlddash');
+  try {
+    await loadWorldData();
+  } catch (err) {
+    console.warn('world dashboard data failed:', err);
+    document.getElementById('wd-src').textContent =
+      'Population data unavailable — run scripts/build_world_population.py';
+    return;
+  }
+  WD.open = true;
+  WD.msStarted = Date.now() / 1000;
+  el.classList.remove('hidden');
+  tickWorldDash();
+  // 10Hz. Fast enough that the odometer reads as continuous, slow enough that
+  // it is nowhere near a frame budget — and the globe behind it is in
+  // explicit-render mode, so this costs no GPU work at all.
+  WD.timer = setInterval(tickWorldDash, 100);
+}
+
+function closeWorldDash() {
+  WD.open = false;
+  document.getElementById('worlddash').classList.add('hidden');
+  if (WD.timer) { clearInterval(WD.timer); WD.timer = null; }
+}
+
+/* Rows that never change are built once. Only their values are touched on
+   each tick, so a 10Hz loop never rebuilds a node. */
+function buildWorldDashStatic() {
+  const conts = {};
+  for (const c of WD.data.countries) {
+    const t = conts[c.continent] || (conts[c.continent] = { pop: 0, w: 0 });
+    t.pop += c.pop;
+    t.w += c.pop * c.rate;
+  }
+  WD.continents = Object.entries(conts)
+    .map(([name, t]) => ({ name, pop: t.pop, rate: t.w / t.pop }))
+    .sort((a, b) => b.pop - a.pop);
+
+  const cEl = document.getElementById('wd-continents');
+  cEl.textContent = '';
+  WD.continents.forEach((c, i) => {
+    cEl.appendChild(wdRankRow(i + 1, WD_CONTINENT_ICON[c.name] || '🌐',
+                              c.name, `wd-cont-${i}`));
+  });
+
+  const rEl = document.getElementById('wd-religions');
+  rEl.textContent = '';
+  RELIGIONS.forEach(([name, icon], i) => {
+    rEl.appendChild(wdRankRow(i + 1, icon, name, `wd-rel-${i}`));
+  });
+
+  const tEl = document.getElementById('wd-top15');
+  tEl.textContent = '';
+  WD.data.countries.slice(0, 15).forEach((c, i) => {
+    tEl.appendChild(wdCountryRow(i + 1, c, `wd-top-${i}`));
+  });
+
+  const msEl = document.getElementById('wd-ms-cols');
+  msEl.textContent = '';
+  WD_HORIZONS.forEach(([label], i) => {
+    const col = document.createElement('div');
+    col.className = 'wd-ms-col';
+    const h = document.createElement('span');
+    h.className = 'wd-ms-hz'; h.textContent = label;
+    const v = document.createElement('span');
+    v.className = 'wd-ms-proj'; v.id = `wd-ms-proj-${i}`;
+    const bar = document.createElement('div');
+    bar.className = 'wd-ms-bar';
+    const fill = document.createElement('div');
+    fill.className = 'wd-ms-fill'; fill.id = `wd-ms-fill-${i}`;
+    bar.appendChild(fill);
+    const done = document.createElement('span');
+    done.className = 'wd-ms-done'; done.id = `wd-ms-done-${i}`;
+    col.append(h, v, bar, done);
+    msEl.appendChild(col);
+  });
+
+  document.getElementById('wd-src').textContent =
+    `Population: World Bank ${WD.data.year} · Religion: Pew Research Center · Vitals: UN WPP`;
+  const y = new Date().getUTCFullYear();
+  document.getElementById('wd-year-h').textContent = 'THIS YEAR';
+  document.getElementById('wd-birth-yk').textContent = `Birth ${y}`;
+  document.getElementById('wd-death-yk').textContent = `Death ${y}`;
+  document.getElementById('wd-growth-yk').textContent = `Growth ${y}`;
+}
+
+function wdRankRow(n, icon, name, valId) {
+  const row = document.createElement('div');
+  row.className = 'wd-r';
+  const nEl = document.createElement('span');
+  nEl.className = 'wd-r-n'; nEl.textContent = String(n);
+  const iEl = document.createElement('span');
+  iEl.className = 'wd-r-ico'; iEl.textContent = icon;
+  const box = document.createElement('div');
+  const nm = document.createElement('span');
+  nm.className = 'wd-r-name'; nm.textContent = name;
+  const v = document.createElement('span');
+  v.className = 'wd-r-val'; v.id = valId;
+  box.append(nm, v);
+  row.append(nEl, iEl, box);
+  return row;
+}
+
+function wdCountryRow(rank, c, valId) {
+  const row = document.createElement('div');
+  row.className = 'wd-c';
+  const n = document.createElement('span');
+  n.className = 'wd-c-n'; n.textContent = String(rank);
+  const f = document.createElement('img');
+  f.className = 'wd-flag'; f.src = wdFlag(c.iso2); f.alt = '';
+  f.loading = 'lazy'; f.decoding = 'async';
+  // flagcdn has no tile for a few World Bank entries that are not ISO-3166
+  // countries (Channel Islands, Kosovo). Fall back to the empty plate rather
+  // than a broken-image glyph.
+  f.addEventListener('error', () => { f.removeAttribute('src'); }, { once: true });
+  const nm = document.createElement('span');
+  nm.className = 'wd-c-name'; nm.textContent = c.name;
+  const v = document.createElement('span');
+  v.className = 'wd-c-val'; v.id = valId;
+  const a = document.createElement('span');
+  a.className = `wd-c-arw is-${c.rate >= 0 ? 'up' : 'down'}`;
+  a.textContent = c.rate >= 0 ? '↑' : '↓';
+  a.title = `${(c.rate * 100).toFixed(2)}% per year`;
+  row.append(n, f, nm, v, a);
+  return row;
+}
+
+function tickWorldDash() {
+  if (!WD.open || !WD.data) return;
+  const now = Date.now() / 1000;
+  const d = new Date();
+
+  let world = 0, worldW = 0;
+  for (const c of WD.data.countries) {
+    const v = wdProject(c.pop, c.rate, now, WD.epoch);
+    world += v;
+    worldW += v * c.rate;
+  }
+  wdSet(document.getElementById('wd-total'), fmtInt(world));
+
+  // Elapsed seconds since 00:00 UTC today, and since 1 Jan UTC this year.
+  const dayS = (d.getTime() - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(),
+                                       d.getUTCDate())) / 1000;
+  const yearS = (d.getTime() - Date.UTC(d.getUTCFullYear(), 0, 1)) / 1000;
+  const vitals = (secs, ids) => {
+    const b = secs * WD_BIRTHS_PER_S, dd = secs * WD_DEATHS_PER_S;
+    wdSet(document.getElementById(ids[0]), fmtInt(b));
+    wdSet(document.getElementById(ids[1]), fmtInt(dd));
+    wdSet(document.getElementById(ids[2]), fmtInt(b - dd));
+  };
+  vitals(dayS,  ['wd-birth-day', 'wd-death-day', 'wd-growth-day']);
+  vitals(yearS, ['wd-birth-year', 'wd-death-year', 'wd-growth-year']);
+
+  WD.continents.forEach((c, i) => {
+    wdSet(document.getElementById(`wd-cont-${i}`),
+          fmtInt(wdProject(c.pop, c.rate, now, WD.epoch)));
+  });
+  RELIGIONS.forEach(([, , base, rate], i) => {
+    wdSet(document.getElementById(`wd-rel-${i}`),
+          fmtInt(wdProject(base, rate, now, WD_RELIGION_EPOCH)));
+  });
+  WD.data.countries.slice(0, 15).forEach((c, i) => {
+    wdSet(document.getElementById(`wd-top-${i}`),
+          fmtInt(wdProject(c.pop, c.rate, now, WD.epoch)));
+  });
+
+  tickWorldRest(now);
+  tickWorldMilestone(now);
+
+  wdSet(document.getElementById('wd-clock'),
+        `${d.toISOString().slice(0, 10)} | ${d.toISOString().slice(11, 19)} UTC`);
+}
+
+/* REST OF COUNTRIES cycles a window of five through the tail of the ranking,
+   the way the source board does. Rebuild only when the window moves. */
+function tickWorldRest(now) {
+  const turn = Math.floor(now / 12);           // a new window every 12s
+  const el = document.getElementById('wd-rest');
+  if (turn !== WD.restTurn || !el.childElementCount) {
+    WD.restTurn = turn;
+    const span = 5;
+    const windows = Math.max(1, Math.ceil(WD.rest.length / span));
+    WD.restAt = (turn % windows) * span;
+    el.textContent = '';
+    WD.rest.slice(WD.restAt, WD.restAt + span).forEach((c, i) => {
+      el.appendChild(wdCountryRow(16 + WD.restAt + i, c, `wd-rest-${i}`));
+    });
+  }
+  WD.rest.slice(WD.restAt, WD.restAt + 5).forEach((c, i) => {
+    wdSet(document.getElementById(`wd-rest-${i}`),
+          fmtInt(wdProject(c.pop, c.rate, now, WD.epoch)));
+  });
+}
+
+/* The milestone strip tracks one country and projects it at +30s, +1m, +2m,
+   +5m, +10m and +20m. Each column's bar fills as real time reaches that
+   horizon, then flips to ACHIEVED. When all six are achieved it advances to
+   the next country — which is what NEXT names. */
+function tickWorldMilestone(now) {
+  const list = WD.data.countries;
+  let elapsed = now - WD.msStarted;
+  if (elapsed > WD_HORIZONS[WD_HORIZONS.length - 1][1]) {
+    WD.msAt = (WD.msAt + 1) % list.length;
+    WD.msStarted = now;
+    elapsed = 0;
+  }
+  const c = list[WD.msAt];
+  const next = list[(WD.msAt + 1) % list.length];
+
+  const flag = document.getElementById('wd-ms-flag');
+  if (flag.dataset.iso !== c.iso2) {
+    flag.dataset.iso = c.iso2; flag.src = wdFlag(c.iso2);
+    document.getElementById('wd-ms-name').textContent = c.name;
+  }
+  const nf = document.getElementById('wd-ms-nextflag');
+  if (nf.dataset.iso !== next.iso2) {
+    nf.dataset.iso = next.iso2; nf.src = wdFlag(next.iso2);
+    document.getElementById('wd-ms-nextname').textContent = next.name;
+  }
+  wdSet(document.getElementById('wd-ms-val'),
+        fmtInt(wdProject(c.pop, c.rate, now, WD.epoch)));
+
+  WD_HORIZONS.forEach(([, secs], i) => {
+    wdSet(document.getElementById(`wd-ms-proj-${i}`),
+          fmtInt(wdProject(c.pop, c.rate, now + secs, WD.epoch)));
+    const pct = Math.min(100, (elapsed / secs) * 100);
+    document.getElementById(`wd-ms-fill-${i}`).style.width = `${pct.toFixed(1)}%`;
+    const done = document.getElementById(`wd-ms-done-${i}`);
+    const txt = pct >= 100 ? '✓ ACHIEVED' : '';
+    if (done.textContent !== txt) done.textContent = txt;
   });
 }

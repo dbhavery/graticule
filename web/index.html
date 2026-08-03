@@ -328,6 +328,8 @@
         <div class="wp-sec-label">NEXT MILESTONE</div>
         <div id="wp-milestone" class="wp-milestone"></div>
 
+        <button id="wd-open" class="wp-open">OPEN FULL DASHBOARD</button>
+
         <p class="pane-note" id="wp-src">—</p>
       </div>
     </section>
@@ -493,6 +495,96 @@
   </div>
 
   <!-- ─────────  SETTINGS MODAL  ───────── -->
+  <!-- ─────────  WORLD POPULATION DASHBOARD  ─────────
+       A full-screen replica of the LiveStream07 world-population board:
+       TODAY / odometer / THIS YEAR across the top, CONTINENT and BIG RELIGION
+       side by side, the milestone countdown strip, then TOP 15 COUNTRIES in
+       three columns of five beside a rotating REST OF COUNTRIES, and a UTC
+       footer. It is full-screen rather than in the 264px HUD because that is
+       the shape the source is; it will not compress into the side panel. -->
+  <div id="worlddash" class="hidden" role="dialog" aria-modal="true"
+       aria-label="World population dashboard">
+    <button id="wd-close" aria-label="Close dashboard">×</button>
+
+    <div class="wd-top">
+      <section class="wd-side">
+        <h2 class="wd-h">TODAY</h2>
+        <div class="wd-vital"><span class="wd-ico" data-ico="birth"></span>
+          <div><span class="wd-vk">Birth Today</span>
+               <span class="wd-vv is-up mono" id="wd-birth-day">—</span></div></div>
+        <div class="wd-vital"><span class="wd-ico" data-ico="death"></span>
+          <div><span class="wd-vk">Death Today</span>
+               <span class="wd-vv is-down mono" id="wd-death-day">—</span></div></div>
+        <div class="wd-vital"><span class="wd-ico" data-ico="growth"></span>
+          <div><span class="wd-vk">Growth Today</span>
+               <span class="wd-vv is-up mono" id="wd-growth-day">—</span></div></div>
+      </section>
+
+      <section class="wd-hero">
+        <h1 class="wd-hero-h">WORLD POPULATION</h1>
+        <div class="wd-odo mono" id="wd-total">—</div>
+        <div class="wd-live"><span class="wd-live-dot"></span>LIVE</div>
+      </section>
+
+      <section class="wd-side">
+        <h2 class="wd-h" id="wd-year-h">THIS YEAR</h2>
+        <div class="wd-vital"><span class="wd-ico" data-ico="birth"></span>
+          <div><span class="wd-vk" id="wd-birth-yk">Birth</span>
+               <span class="wd-vv is-up mono" id="wd-birth-year">—</span></div></div>
+        <div class="wd-vital"><span class="wd-ico" data-ico="death"></span>
+          <div><span class="wd-vk" id="wd-death-yk">Death</span>
+               <span class="wd-vv is-down mono" id="wd-death-year">—</span></div></div>
+        <div class="wd-vital"><span class="wd-ico" data-ico="growth"></span>
+          <div><span class="wd-vk" id="wd-growth-yk">Growth</span>
+               <span class="wd-vv is-up mono" id="wd-growth-year">—</span></div></div>
+      </section>
+    </div>
+
+    <div class="wd-mid">
+      <section class="wd-block">
+        <h2 class="wd-h is-gold">CONTINENT</h2>
+        <div class="wd-rank2" id="wd-continents"></div>
+      </section>
+      <section class="wd-block">
+        <h2 class="wd-h is-gold">BIG RELIGION</h2>
+        <div class="wd-rank2" id="wd-religions"></div>
+      </section>
+    </div>
+
+    <section class="wd-block wd-ms">
+      <h2 class="wd-h is-gold">POPULATION NEXT MILESTONE</h2>
+      <div class="wd-ms-row">
+        <div class="wd-ms-subject">
+          <div class="wd-ms-now">
+            <img class="wd-flag" id="wd-ms-flag" alt="">
+            <div><span class="wd-ms-name" id="wd-ms-name">—</span>
+                 <span class="wd-ms-val mono" id="wd-ms-val">—</span></div>
+          </div>
+          <div class="wd-ms-next"><span class="wd-next-chip">NEXT</span>
+            <img class="wd-flag" id="wd-ms-nextflag" alt="">
+            <span id="wd-ms-nextname">—</span></div>
+        </div>
+        <div class="wd-ms-cols" id="wd-ms-cols"></div>
+      </div>
+    </section>
+
+    <div class="wd-bot">
+      <section class="wd-block">
+        <h2 class="wd-h is-gold">TOP 15 COUNTRIES</h2>
+        <div class="wd-top15" id="wd-top15"></div>
+      </section>
+      <section class="wd-block">
+        <h2 class="wd-h is-gold">REST OF COUNTRIES</h2>
+        <div class="wd-rest" id="wd-rest"></div>
+      </section>
+    </div>
+
+    <footer class="wd-foot">
+      <span class="mono" id="wd-clock">—</span>
+      <span id="wd-src">—</span>
+    </footer>
+  </div>
+
   <div id="settings-overlay" class="hidden">
     <div id="settings-modal">
       <header class="sm-head">
