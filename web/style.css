@@ -2015,3 +2015,62 @@ input[type=range]::-webkit-slider-runnable-track {
   font-family: var(--mono);
 }
 .mc-leg i { width: 10px; height: 2px; border-radius: 1px; display: inline-block; }
+
+/* ─────────  AREA DARKENING  ─────────
+   The settings modal covers the globe, so arming county selection closes it
+   and moves the controls that must survive the gesture out to this bar. It
+   sits bottom-centre, clear of the toolstrip and the detail panel, and it is
+   the only chrome on screen that says the pointer has been repurposed. */
+#countybar {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 92px;
+  z-index: 16;
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 1px rgba(77, 210, 255, 0.18), 0 8px 26px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+}
+#countybar.hidden { display: none; }
+
+#cb-hint {
+  font-family: var(--sans); font-size: var(--fs-xs);
+  color: var(--text-dim); white-space: nowrap;
+}
+/* Fixed width so the bar does not jitter sideways as the pointer crosses from
+   a short county name to a long one. */
+#cb-hover {
+  font-size: var(--fs-xs); color: var(--text);
+  min-width: 150px; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#cb-count {
+  font-size: var(--fs-xs); color: var(--accent);
+  min-width: 74px; text-align: right;
+}
+#countybar .tool-btn {
+  border: 1px solid var(--panel-border);
+  font-family: var(--sans); font-size: var(--fs-xs); font-weight: 600;
+  letter-spacing: var(--tr-tight);
+}
+#countybar .tool-btn.is-primary {
+  background: var(--accent); color: #041016; border-color: var(--accent);
+}
+#countybar .tool-btn[disabled] { opacity: 0.4; cursor: default; }
+#countybar .tool-btn[disabled]:hover { background: none; color: var(--text-dim); }
+
+/* A settings row whose control is a button rather than a slider. */
+.sm-row-btn { justify-content: space-between; }
+.sm-btn {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-family: var(--sans); font-size: var(--fs-sm); font-weight: 600;
+  letter-spacing: var(--tr-tight);
+  padding: 5px 10px; border-radius: var(--r-sm); cursor: pointer;
+}
+.sm-btn:hover { background: rgba(255, 255, 255, 0.09); border-color: var(--accent); }
+.sm-btn[disabled] { opacity: 0.4; cursor: default; }
+.sm-btn[disabled]:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--panel-border); }

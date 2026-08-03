@@ -417,6 +417,20 @@
     </div>
   </div>
 
+  <!-- ─────────  COUNTY SELECTION BAR  ─────────
+       Only visible while selection is armed. The reference app can leave its
+       settings sidebar open next to the map; this one is a modal over the
+       globe, so the controls that have to stay reachable during selection
+       move out here. -->
+  <div id="countybar" class="hidden" role="group" aria-label="County selection">
+    <span class="bar-cap">SELECT COUNTIES</span>
+    <span id="cb-hint">Click or drag to add. Click a selected county to remove.</span>
+    <span id="cb-hover" class="mono">—</span>
+    <span id="cb-count" class="mono">0</span>
+    <button id="cb-clear" class="tool-btn" title="Clear the whole selection">Clear</button>
+    <button id="cb-done" class="tool-btn is-primary" title="Finish selecting">Done</button>
+  </div>
+
   <!-- ─────────  COLOUR SCALE LEGEND  ───────── -->
   <div id="legend" class="hidden">
     <div class="lg-head"><span id="lg-title">REFLECTIVITY</span><span id="lg-unit" class="mono">dBZ</span></div>
@@ -734,6 +748,33 @@
             <label class="sm-row-lbl">Parcels</label>
             <input type="range" id="op-parcels" min="0" max="1" step="0.05" value="0.85">
             <span id="op-parcels-val" class="mono">0.85</span>
+          </div>
+        </section>
+
+        <!-- Area darkening. Weatherfront 2 puts this under Settings > Maps:
+             pick a set of counties, everything outside them dims, and the
+             broadcast frame is scoped to the area being talked about. The
+             selection happens on the globe, so arming it closes this modal. -->
+        <section class="sm-section">
+          <div class="sm-section-label">AREA DARKENING</div>
+          <div class="sm-checkgroup">
+            <label class="sm-check"><input type="checkbox" id="ad-enabled"><span>Enabled</span><span class="sm-hint">Dims everything outside the selected counties</span></label>
+          </div>
+          <div class="sm-row sm-row-btn">
+            <label class="sm-row-lbl">Select counties</label>
+            <button id="ad-select" class="sm-btn">Select on globe</button>
+          </div>
+          <div class="sm-row sm-row-btn">
+            <label class="sm-row-lbl">Selected counties</label>
+            <button id="ad-clear" class="sm-btn" disabled>Clear (0)</button>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl">Darkening opacity</label>
+            <input type="range" id="ad-opacity" min="0.1" max="0.95" step="0.05" value="0.6">
+            <span id="ad-opacity-val" class="mono">0.60</span>
+          </div>
+          <div class="sm-checkgroup">
+            <label class="sm-check"><input type="checkbox" id="ad-filter-labels"><span>Filter labels to area</span><span class="sm-hint">Hides city labels outside the selection</span></label>
           </div>
         </section>
 

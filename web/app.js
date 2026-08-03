@@ -279,6 +279,11 @@ const settings = Object.assign({
   diagnostics: false,
   ambientSound: false,
   soundAlerts: false,
+  // ---- Area darkening ------------------------------------------------------
+  areaDarkening: false,
+  adOpacity: 0.6,                   // matches the reference app's default
+  adFilterLabels: false,
+  adCounties: [],                   // FIPS strings; drives a 2.8 MB lazy load
   renderEpoch: 0,                   // bumped when visual defaults change
 }, loadSettings());
 function loadSettings() {
@@ -335,6 +340,7 @@ const TICKER_MAX = 6;
   initWorldPane();
   initWorldDash();
   initModelCompare();
+  initAreaDarkening();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -2673,7 +2679,8 @@ async function buildCities() {
       });
       cityRecords.push({
         entity: citiesDS.entities.values[citiesDS.entities.values.length - 1],
-        name: p.name || '', farM,
+        name: p.name || '', farM, lon: c[0], lat: c[1],
+        shown: '',   // last text actually written to the label
       });
       added++;
     }
@@ -2711,14 +2718,26 @@ function relabelCities() {
     if (carto) camHeight = carto.height;
   } catch { /* keep Infinity: falls back to the highest-rank cities only */ }
 
+  // "Filter labels to area": with a county selection active, a label outside it
+  // is describing the part of the map the darkening is trying to push back.
+  const clip = typeof adLabelsFiltered === 'function' && adLabelsFiltered();
+
   let shown = 0;
   for (const rec of cityRecords) {
-    const inRange = camHeight <= rec.farM;
+    const inRange = camHeight <= rec.farM
+      && (!clip || adInsideSelection(rec.lon, rec.lat));
     const want = inRange && shown < CITY_LABEL_CAP ? rec.name : '';
     if (want) shown++;
     // Only touch Cesium when the value actually changes; assigning text is
     // what triggers glyph work.
-    if (rec.entity.label.text !== want) rec.entity.label.text = want;
+    //
+    // Compare against our own copy, not against entity.label.text. That is a
+    // Cesium Property, never a string, so `!== want` was true on every record
+    // of every call and this guard had never once skipped an assignment.
+    if (rec.shown !== want) {
+      rec.entity.label.text = want;
+      rec.shown = want;
+    }
   }
   viewer.scene.requestRender();
 }
@@ -6794,4 +6813,484 @@ async function refreshSpotters() {
   setCount('spotters', feats.length);
   updateCategoryCounts();
   viewer.scene.requestRender();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AREA DARKENING  —  county selection + inverse mask
+//  Weatherfront 2, Settings > Maps > Area Darkening. Pick counties on the map,
+//  everything outside them dims to a set opacity, and labels can be clipped to
+//  the same area. It is a framing tool: a frame that says "this is the part of
+//  the map I am talking about" without the viewer having to hunt for it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const AD = {
+  counties: [],           // records straight out of ne_counties.json
+  byFips: new Map(),
+  selected: new Set(),    // FIPS strings
+  loading: null,          // in-flight load promise, so two callers share one fetch
+  loaded: false,
+  arming: false,          // selection mode engaged
+  handler: null,
+  ds: null,
+  mask: null,
+  outlines: [],
+  hoverFips: null,
+  hoverSelected: false,
+  hoverEnt: null,
+  dragging: false,
+  dragMoved: false,
+  dragTouched: null,      // counties already handled during this drag
+  downFips: null,         // county under the press that started this gesture
+  downWasSelected: false,
+  rebuildTimer: null,
+  camSaved: null,
+};
+
+// The mask cannot simply be the whole globe: a polygon wider than 180 degrees
+// of longitude has no unambiguous interior and Cesium's triangulator will pick
+// the wrong one. Every county except the Aleutian rings that cross the
+// antimeridian lives inside this box, which is 128 degrees wide.
+const AD_BOX = { w: -180, s: 5, e: -52, n: 78 };
+const AD_COUNTIES_URL = '/static/data/ne_counties.json';
+const AD_ACCENT = '#4dd2ff';
+// Rebuilding the mask is the expensive half of a selection change. Outlines
+// repaint immediately so a drag still feels direct; the mask catches up once
+// the pointer settles.
+const AD_REBUILD_DEBOUNCE_MS = 140;
+
+async function adLoad() {
+  if (AD.loaded) return true;
+  if (AD.loading) return AD.loading;
+  AD.loading = (async () => {
+    try {
+      const r = await fetch(AD_COUNTIES_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      AD.counties = data.counties || [];
+      AD.byFips = new Map(AD.counties.map((c) => [c.f, c]));
+      AD.loaded = AD.counties.length > 0;
+      if (!AD.loaded) throw new Error('file parsed but held no counties');
+      console.log(`Counties: ${AD.counties.length} loaded`);
+      return true;
+    } catch (err) {
+      // 2.8 MB of geometry that never arrived is not something to fail
+      // silently on: every downstream symptom (nothing highlights, nothing
+      // darkens) looks like a bug in the selection code instead.
+      console.warn('Counties failed to load:', err);
+      pushEvent('AREA', `County data unavailable (${err.message})`, Date.now());
+      AD.loading = null;
+      return false;
+    }
+  })();
+  return AD.loading;
+}
+
+// ---------- hit test --------------------------------------------------------
+
+// Even-odd ray cast. Mirrored by _point_in_rings() in scripts/build_counties.py,
+// which runs it over all 3,223 label points as a build-time control.
+function adPointInRings(rings, x, y) {
+  let hit = false;
+  for (const flat of rings) {
+    const n = flat.length / 2;
+    let j = n - 1;
+    for (let i = 0; i < n; i++) {
+      const xi = flat[2 * i], yi = flat[2 * i + 1];
+      const xj = flat[2 * j], yj = flat[2 * j + 1];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+      j = i;
+    }
+  }
+  return hit;
+}
+
+function adHitTest(lon, lat) {
+  for (const c of AD.counties) {
+    const b = c.b;
+    if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) continue;
+    if (adPointInRings(c.r, lon, lat)) return c;
+  }
+  return null;
+}
+
+function adPickLatLon(screenPos) {
+  const cart = pickGlobe(screenPos);
+  if (!cart) return null;
+  const carto = Cesium.Cartographic.fromCartesian(cart);
+  return {
+    lon: Cesium.Math.toDegrees(carto.longitude),
+    lat: Cesium.Math.toDegrees(carto.latitude),
+  };
+}
+
+// ---------- geometry --------------------------------------------------------
+
+function adEnsureDS() {
+  if (!AD.ds) {
+    AD.ds = new Cesium.CustomDataSource('area-darkening');
+    viewer.dataSources.add(AD.ds);
+  }
+  return AD.ds;
+}
+
+function adRingPositions(flat) {
+  return Cesium.Cartesian3.fromDegreesArray(flat);
+}
+
+// True when every vertex sits inside AD_BOX. The one county that fails this is
+// Aleutians West, whose western rings sit past the antimeridian; a hole outside
+// its own outer ring is undefined, so those rings stay out of the mask. The
+// county still selects, highlights and hit-tests normally.
+function adRingInBox(flat) {
+  for (let i = 0; i < flat.length; i += 2) {
+    if (flat[i] < AD_BOX.w || flat[i] > AD_BOX.e) return false;
+    if (flat[i + 1] < AD_BOX.s || flat[i + 1] > AD_BOX.n) return false;
+  }
+  return true;
+}
+
+function adBoxRing() {
+  // Densified along parallels and meridians. A four-corner ring gets
+  // triangulated across great circles and bows away from the box edges by
+  // hundreds of kilometres at these spans.
+  const step = 4, out = [];
+  for (let lon = AD_BOX.w; lon < AD_BOX.e; lon += step) out.push(lon, AD_BOX.s);
+  for (let lat = AD_BOX.s; lat < AD_BOX.n; lat += step) out.push(AD_BOX.e, lat);
+  for (let lon = AD_BOX.e; lon > AD_BOX.w; lon -= step) out.push(lon, AD_BOX.n);
+  for (let lat = AD_BOX.n; lat > AD_BOX.s; lat -= step) out.push(AD_BOX.w, lat);
+  return out;
+}
+
+function adMaskColor() {
+  return Cesium.Color.BLACK.withAlpha(Number(settings.adOpacity) || 0.6);
+}
+
+function adRebuildMask() {
+  const ds = adEnsureDS();
+  if (AD.mask) { ds.entities.remove(AD.mask); AD.mask = null; }
+
+  if (!settings.areaDarkening || AD.selected.size === 0) {
+    viewer.scene.requestRender();
+    return;
+  }
+
+  const holes = [];
+  for (const fips of AD.selected) {
+    const c = AD.byFips.get(fips);
+    if (!c) continue;
+    for (const flat of c.r) {
+      if (!adRingInBox(flat)) continue;
+      holes.push(new Cesium.PolygonHierarchy(adRingPositions(flat)));
+    }
+  }
+  AD.mask = ds.entities.add({
+    polygon: {
+      hierarchy: new Cesium.PolygonHierarchy(adRingPositions(adBoxRing()), holes),
+      material: adMaskColor(),
+      // No height, so this drapes on the globe as a ground primitive rather
+      // than floating as a shell above it.
+      arcType: Cesium.ArcType.RHUMB,
+      classificationType: Cesium.ClassificationType.TERRAIN,
+    },
+  });
+  viewer.scene.requestRender();
+}
+
+function adRebuildOutlines() {
+  const ds = adEnsureDS();
+  for (const e of AD.outlines) ds.entities.remove(e);
+  AD.outlines = [];
+  if (!AD.selected.size) { viewer.scene.requestRender(); return; }
+  const colour = Cesium.Color.fromCssColorString(AD_ACCENT).withAlpha(0.9);
+  for (const fips of AD.selected) {
+    const c = AD.byFips.get(fips);
+    if (!c) continue;
+    for (const flat of c.r) {
+      const pos = adRingPositions(flat);
+      if (pos.length < 2) continue;
+      AD.outlines.push(ds.entities.add({
+        polyline: {
+          positions: pos.concat([pos[0]]),
+          width: 1.5,
+          material: colour,
+          clampToGround: true,
+        },
+      }));
+    }
+  }
+  viewer.scene.requestRender();
+}
+
+function adScheduleRebuild() {
+  adRebuildOutlines();
+  adSyncUI();
+  clearTimeout(AD.rebuildTimer);
+  AD.rebuildTimer = setTimeout(() => {
+    adRebuildMask();
+    if (settings.adFilterLabels) relabelCities();
+  }, AD_REBUILD_DEBOUNCE_MS);
+}
+
+function adSetHover(county) {
+  const fips = county ? county.f : null;
+  const sel = county ? AD.selected.has(fips) : false;
+  // The selected-state is part of the identity, not just the paint. Comparing
+  // FIPS alone left the strong "would add" wash sitting on a county the press
+  // had just added, so the county read as still unselected.
+  if (fips === AD.hoverFips && sel === AD.hoverSelected) return;
+  AD.hoverFips = fips;
+  AD.hoverSelected = sel;
+  const ds = adEnsureDS();
+  if (AD.hoverEnt) { ds.entities.remove(AD.hoverEnt); AD.hoverEnt = null; }
+  if (county) {
+    AD.hoverEnt = ds.entities.add({
+      polygon: {
+        hierarchy: new Cesium.PolygonHierarchy(adRingPositions(county.r[0])),
+        material: Cesium.Color.fromCssColorString(AD_ACCENT).withAlpha(sel ? 0.08 : 0.18),
+        arcType: Cesium.ArcType.RHUMB,
+        classificationType: Cesium.ClassificationType.TERRAIN,
+      },
+    });
+  }
+  const el = document.getElementById('cb-hover');
+  if (el) el.textContent = county ? `${county.n}, ${county.s}` : '—';
+  viewer.scene.requestRender();
+}
+
+// ---------- selection -------------------------------------------------------
+
+function adPersist() {
+  settings.adCounties = [...AD.selected];
+  saveSettings();
+}
+
+function adClear() {
+  if (!AD.selected.size) return;
+  AD.selected.clear();
+  adPersist();
+  adScheduleRebuild();
+}
+
+// ---------- pointer mode ----------------------------------------------------
+
+async function adSetSelecting(on) {
+  on = !!on;
+  if (on && !(await adLoad())) return;
+  AD.arming = on;
+
+  document.getElementById('countybar')?.classList.toggle('hidden', !on);
+  const btn = document.getElementById('ad-select');
+  if (btn) btn.textContent = on ? 'Selecting on globe' : 'Select on globe';
+
+  // Left-drag has to paint counties, so the camera cannot also own it. Zoom
+  // stays live: a selection spanning two states is unreachable otherwise.
+  const c = viewer.scene.screenSpaceCameraController;
+  if (on) {
+    if (!AD.camSaved) {
+      AD.camSaved = {
+        rotate: c.enableRotate, translate: c.enableTranslate,
+        tilt: c.enableTilt, look: c.enableLook,
+      };
+    }
+    c.enableRotate = c.enableTranslate = c.enableTilt = c.enableLook = false;
+  } else if (AD.camSaved) {
+    c.enableRotate = AD.camSaved.rotate;
+    c.enableTranslate = AD.camSaved.translate;
+    c.enableTilt = AD.camSaved.tilt;
+    c.enableLook = AD.camSaved.look;
+    AD.camSaved = null;
+  }
+
+  if (on && !AD.handler) {
+    AD.handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    AD.handler.setInputAction((e) => adPointerDown(e.position),
+      Cesium.ScreenSpaceEventType.LEFT_DOWN);
+    AD.handler.setInputAction((e) => adPointerMove(e.endPosition),
+      Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+    AD.handler.setInputAction(() => adPointerUp(),
+      Cesium.ScreenSpaceEventType.LEFT_UP);
+  } else if (!on && AD.handler) {
+    AD.handler.destroy();
+    AD.handler = null;
+    adSetHover(null);
+  }
+
+  // Arming selection with darkening switched off shows nothing at all, which
+  // reads as a broken button. Turn it on rather than making the user find it.
+  if (on && !settings.areaDarkening) {
+    settings.areaDarkening = true;
+    saveSettings();
+    const cb = document.getElementById('ad-enabled');
+    if (cb) cb.checked = true;
+    adScheduleRebuild();
+  }
+  adSyncUI();
+}
+
+function adPointerDown(screenPos) {
+  const ll = adPickLatLon(screenPos);
+  AD.dragging = true;
+  AD.dragMoved = false;
+  AD.dragTouched = new Set();
+  AD.downFips = null;
+  AD.downWasSelected = false;
+  if (!ll) return;
+  const c = adHitTest(ll.lon, ll.lat);
+  if (!c) return;
+  AD.downFips = c.f;
+  AD.downWasSelected = AD.selected.has(c.f);
+  AD.dragTouched.add(c.f);
+  // A press on an unselected county starts an add-drag straight away. Removal
+  // is resolved on mouse-up instead, because a drag that began on a selected
+  // county is far more likely to be someone extending the selection.
+  if (!AD.downWasSelected) {
+    AD.selected.add(c.f);
+    adPersist();
+    adScheduleRebuild();
+  }
+  adSetHover(c);
+}
+
+function adPointerMove(screenPos) {
+  const ll = adPickLatLon(screenPos);
+  if (!ll) { adSetHover(null); return; }
+  const c = adHitTest(ll.lon, ll.lat);
+  if (AD.dragging) {
+    AD.dragMoved = true;
+    if (c && !AD.dragTouched.has(c.f)) {
+      AD.dragTouched.add(c.f);
+      if (!AD.selected.has(c.f)) {
+        AD.selected.add(c.f);
+        adPersist();
+        adScheduleRebuild();
+      }
+    }
+  }
+  // Last, and during the drag as well. Setting hover first painted the strong
+  // "would add" wash over a county this same event had just selected; freezing
+  // it during a drag left it stuck wherever the gesture started.
+  adSetHover(c);
+}
+
+function adPointerUp() {
+  if (!AD.dragging) return;
+  const wasClick = !AD.dragMoved;
+  AD.dragging = false;
+  AD.dragMoved = false;
+  AD.dragTouched = null;
+  // A click on a county that was already selected before this gesture means
+  // remove. Anything else was handled on the way down or during the drag.
+  if (wasClick && AD.downFips && AD.downWasSelected) {
+    AD.selected.delete(AD.downFips);
+    adPersist();
+    adScheduleRebuild();
+  }
+  AD.downFips = null;
+  AD.downWasSelected = false;
+}
+
+function adSyncUI() {
+  const n = AD.selected.size;
+  const clear = document.getElementById('ad-clear');
+  if (clear) { clear.textContent = `Clear (${n})`; clear.disabled = n === 0; }
+  const count = document.getElementById('cb-count');
+  if (count) count.textContent = `${n} selected`;
+  const cbClear = document.getElementById('cb-clear');
+  if (cbClear) cbClear.disabled = n === 0;
+}
+
+// True when city labels should be clipped to the selection. Read by
+// relabelCities() on every camera settle.
+function adLabelsFiltered() {
+  return !!(settings.adFilterLabels && settings.areaDarkening && AD.selected.size);
+}
+
+function adInsideSelection(lon, lat) {
+  for (const fips of AD.selected) {
+    const c = AD.byFips.get(fips);
+    if (!c) continue;
+    const b = c.b;
+    if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) continue;
+    if (adPointInRings(c.r, lon, lat)) return true;
+  }
+  return false;
+}
+
+// ---------- boot ------------------------------------------------------------
+
+function initAreaDarkening() {
+  const enabled = document.getElementById('ad-enabled');
+  if (enabled) {
+    enabled.checked = !!settings.areaDarkening;
+    enabled.addEventListener('change', async () => {
+      settings.areaDarkening = enabled.checked;
+      saveSettings();
+      if (enabled.checked && !(await adLoad())) return;
+      adRebuildMask();
+      adRebuildOutlines();
+      relabelCities();
+    });
+  }
+
+  const opacity = document.getElementById('ad-opacity');
+  const opacityVal = document.getElementById('ad-opacity-val');
+  if (opacity) {
+    opacity.value = String(settings.adOpacity);
+    if (opacityVal) opacityVal.textContent = Number(settings.adOpacity).toFixed(2);
+    opacity.addEventListener('input', () => {
+      settings.adOpacity = Number(opacity.value);
+      if (opacityVal) opacityVal.textContent = settings.adOpacity.toFixed(2);
+      saveSettings();
+      // Recolour in place. Rebuilding the hierarchy to change an alpha would
+      // re-triangulate every hole on every step of the slider.
+      if (AD.mask) AD.mask.polygon.material = adMaskColor();
+      viewer.scene.requestRender();
+    });
+  }
+
+  const filter = document.getElementById('ad-filter-labels');
+  if (filter) {
+    filter.checked = !!settings.adFilterLabels;
+    filter.addEventListener('change', () => {
+      settings.adFilterLabels = filter.checked;
+      saveSettings();
+      relabelCities();
+    });
+  }
+
+  document.getElementById('ad-select')?.addEventListener('click', () => {
+    document.getElementById('settings-overlay')?.classList.add('hidden');
+    adSetSelecting(true);
+  });
+  document.getElementById('ad-clear')?.addEventListener('click', adClear);
+  document.getElementById('cb-clear')?.addEventListener('click', adClear);
+  document.getElementById('cb-done')?.addEventListener('click', () => adSetSelecting(false));
+
+  // Cesium's ScreenSpaceEventHandler has no leave event, so the last hover
+  // highlight would stay lit on the globe the whole time the pointer is over
+  // the bar or the HUD.
+  viewer.scene.canvas.addEventListener('mouseleave', () => {
+    if (AD.arming) adSetHover(null);
+  });
+
+  // Escape leaves selection mode. Without it the camera stays locked and the
+  // globe reads as frozen.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && AD.arming) adSetSelecting(false);
+  });
+
+  // Restore a persisted selection. Only pay the 2.8 MB when there is something
+  // to draw with it.
+  const saved = Array.isArray(settings.adCounties) ? settings.adCounties : [];
+  if (saved.length) {
+    adLoad().then((ok) => {
+      if (!ok) return;
+      for (const f of saved) if (AD.byFips.has(f)) AD.selected.add(f);
+      adRebuildOutlines();
+      adRebuildMask();
+      adSyncUI();
+      if (settings.adFilterLabels) relabelCities();
+    });
+  }
+  adSyncUI();
 }

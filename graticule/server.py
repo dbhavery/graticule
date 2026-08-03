@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -73,6 +74,16 @@ async def _expire_loop() -> None:
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+
+# The static bundle is mostly generated GeoJSON, which is the most compressible
+# payload there is: ne_counties.json goes 2.8 MB -> 816 KB, ne_state_borders
+# 13 MB -> 3.4 MB. Static assets are served with no-store (see no_cache_static
+# below, a WebView2 workaround), so every reload pays the full transfer and the
+# compression is not a one-time saving.
+#
+# 4096 bytes is above every small JSON response we emit, so the CPU cost lands
+# only on payloads where it buys something.
+app.add_middleware(GZipMiddleware, minimum_size=4096)
 
 
 @app.get("/api/snapshot")
