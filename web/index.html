@@ -250,6 +250,18 @@
         <label><input type="checkbox" data-layer="fires"><span class="dot" data-color="fires"></span><span class="lbl">Wildfires</span><span class="count" id="count-fires">0</span></label>
       </details>
 
+      <!-- What the rain did after it landed, what the surge is doing at the
+           coast, what the sea state is offshore. All three are keyless
+           federal feeds; river gauges carry the flood category their river
+           forecast centre assigned, which is what makes a stage in feet
+           mean something. -->
+      <details open class="cat" data-cat="water">
+        <summary><span class="cat-name">WATER</span><span class="cat-count" id="cat-count-water">0</span></summary>
+        <label title="NOAA National Water Prediction Service. Gauges at or above action stage stay visible from orbit; the rest appear as you zoom in."><input type="checkbox" data-layer="rivers"><span class="dot" data-color="rivers"></span><span class="lbl">River Gauges</span><span class="count" id="count-rivers">0</span></label>
+        <label title="NOAA CO-OPS water-level stations. Click one for the live level and today's highs and lows."><input type="checkbox" data-layer="tides"><span class="dot" data-color="tides"></span><span class="lbl">Tide Stations</span><span class="count" id="count-tides">0</span></label>
+        <label title="NOAA National Data Buoy Center. Dot size and colour follow significant wave height."><input type="checkbox" data-layer="buoys"><span class="dot" data-color="buoys"></span><span class="lbl">Marine Buoys</span><span class="count" id="count-buoys">0</span></label>
+      </details>
+
       <details open class="cat" data-cat="reference">
         <summary><span class="cat-name">REFERENCE</span><span class="cat-count" id="cat-count-reference">0</span></summary>
         <label><input type="checkbox" data-layer="cables"><span class="dot" data-color="cables"></span><span class="lbl">Subsea Cables</span><span class="count" id="count-cables">—</span></label>

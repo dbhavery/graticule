@@ -23,6 +23,9 @@ const COLORS = {
   boundaries: Cesium.Color.fromCssColorString('#94a3b8'),  // cool slate — neutral over any base
   airspace:   Cesium.Color.fromCssColorString('#a78bfa'),  // soft violet for airspace classes
   cities:     Cesium.Color.fromCssColorString('#fcd34d'),  // amber for city dots
+  rivers:     Cesium.Color.fromCssColorString('#38bdf8'),  // flooding gauges recolour per category
+  tides:      Cesium.Color.fromCssColorString('#818cf8'),
+  buoys:      Cesium.Color.fromCssColorString('#5eead4'),
 };
 
 const CATEGORY = {
@@ -33,6 +36,7 @@ const CATEGORY = {
   launches: 'space',
   tsunamis: 'alerts', severe: 'alerts', news: 'alerts',
   cables: 'reference',
+  rivers: 'water', tides: 'water', buoys: 'water',
   parcels_us: 'land', parcels_wa: 'land',
   countries: 'boundaries', states: 'boundaries', airspace: 'boundaries', cities: 'boundaries',
 };
@@ -48,6 +52,7 @@ const KIND_LABEL = {
   metar: 'SURFACE OBS', lsr: 'STORM REPORT', warning: 'NWS ALERT',
   cameras: 'LIVE CAMERA', spotters: 'SPOTTER REPORT',
   spc: 'SPC OUTLOOK', model: 'MODEL FIELD', aqi: 'AIR QUALITY',
+  rivers: 'RIVER GAUGE', tides: 'TIDE STATION', buoys: 'MARINE BUOY',
 };
 
 // SPC categorical risk names, for the outlook detail panel.
@@ -317,6 +322,11 @@ let countdownTickHandle = null;
 let radarLayer = null, auroraLayer = null, cloudsLayer = null;
 let radarMeta = null, auroraMeta = null;
 let countriesDS = null, statesDS = null, airspaceDS = null, citiesDS = null;
+// Declared up here, not beside the water module at the bottom of the file.
+// `let` at classic-script top level is script-scoped and stays in its temporal
+// dead zone until its own line evaluates, so updateCategoryCounts reading them
+// from a callback that fires early would throw rather than read null.
+let riversDS = null, tidesDS = null, buoysDS = null;
 let countriesBuilt = false, statesBuilt = false, airspaceBuilt = false, citiesBuilt = false;
 const feedActivity = {};   // layer -> last update timestamp (ms)
 const recentEvents = [];   // ticker entries (newest first)
@@ -868,6 +878,9 @@ function bindUI() {
       else if (layer === 'lsr')        toggleLsr(on);
       else if (layer === 'cameras')    toggleCameras(on);
       else if (layer === 'spotters')   toggleSpotters(on);
+      else if (layer === 'rivers')     toggleRivers(on);
+      else if (layer === 'tides')      toggleTides(on);
+      else if (layer === 'buoys')      toggleBuoys(on);
       else if (layer === 'terminator') toggleTerminator(on);
       else if (layer === 'parcels_us') toggleParcelsUS(on);
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
@@ -1406,7 +1419,8 @@ function setCount(layer, n) {
 }
 
 function updateCategoryCounts() {
-  const totals = { air: 0, sea: 0, earth: 0, weather: 0, space: 0, alerts: 0, reference: 0, land: 0 };
+  const totals = { air: 0, sea: 0, earth: 0, weather: 0, space: 0, alerts: 0,
+                   reference: 0, land: 0, water: 0 };
   for (const [layer, cat] of Object.entries(CATEGORY)) {
     const cb = document.querySelector(`input[data-layer="${layer}"]`);
     if (!cb || !cb.checked) continue;
@@ -1416,6 +1430,12 @@ function updateCategoryCounts() {
     else if (layer === 'aurora' && auroraLayer)  totals[cat] += 1;
     else if (layer === 'parcels_us' && parcelsUSLayer) totals[cat] += 1;
     else if (layer === 'parcels_wa' && parcelsWADS)    totals[cat] += parcelsWADS.entities.values.length;
+    // The water layers own their own CustomDataSources rather than going
+    // through entitiesByLayer, so they need their own branch or the WATER
+    // category header would sit at zero with 11,534 gauges on the globe.
+    else if (layer === 'rivers' && riversDS)     totals[cat] += riversDS.entities.values.length;
+    else if (layer === 'tides'  && tidesDS)      totals[cat] += tidesDS.entities.values.length;
+    else if (layer === 'buoys'  && buoysDS)      totals[cat] += buoysDS.entities.values.length;
   }
   let grand = 0;
   for (const cat of Object.keys(totals)) {
@@ -2766,6 +2786,9 @@ function showPanel(entity) {
   else if (kind === 'spc')        { title = `SPC ${props.label || 'Outlook'}`; subtitle = SPC_RISK_LABEL[props.label] || 'Convective outlook'; }
   else if (kind === 'model')      { title = `${props.value}${props.unit || ''}`; subtitle = FIELD_DEFS[props.field] ? FIELD_DEFS[props.field].label : 'Model field'; }
   else if (kind === 'aqi')        { title = `AQI ${props.value}`; subtitle = aqiCategory(props.value); }
+  else if (kind === 'rivers')     { title = props.name || props.id; subtitle = [props.state, RIVER_STAGE_LABEL[props.flood_category]].filter(Boolean).join(' · '); }
+  else if (kind === 'tides')      { title = props.name || props.id; subtitle = [props.state, props.great_lakes ? 'Great Lakes' : (props.tidal ? 'Tidal' : 'Water level'), props.affiliations].filter(Boolean).join(' · '); }
+  else if (kind === 'buoys')      { title = `Buoy ${props.id}`; subtitle = props.wave_height != null ? `${waveText(props.wave_height)} seas` : 'NDBC station'; }
   else                            { title = entity.id; subtitle = ''; }
 
   document.getElementById('panel-kind').textContent = KIND_LABEL[kind] || (kind || '').toUpperCase();
@@ -2912,20 +2935,75 @@ const FIELD_META = {
   reporter:       { label: 'Reported by' },
   report:         { label: 'Report' },
   notes:          { label: 'Notes',      wide: true },
+  // river gauges (NWPS)
+  flood_category: { label: 'Flood stage', chip: true, fmt: (v) => RIVER_STAGE_LABEL[v] || v },
+  stage:          { label: 'Stage',       num: true },
+  stage_unit:     { label: 'Stage unit' },
+  observed_at:    { label: 'Observed',    time: true },
+  flow:           { label: 'Flow',        num: true },
+  flow_unit:      { label: 'Flow unit' },
+  forecast_stage: { label: 'Forecast crest', num: true },
+  forecast_at:    { label: 'Forecast for', time: true },
+  wfo:            { label: 'Forecast office' },
+  rfc:            { label: 'River centre' },
+  // tide stations (NOAA CO-OPS)
+  tidal:          { label: 'Tidal',       chip: true, goodWhenTrue: true, trueOnly: true },
+  great_lakes:    { label: 'Great Lakes', chip: true, goodWhenTrue: true, trueOnly: true },
+  storm_surge:    { label: 'Surge station', chip: true, goodWhenTrue: true, trueOnly: true },
+  affiliations:   { label: 'Network' },
+  // marine buoys (NDBC)
+  wave_height:    { label: 'Wave height', unit: 'm',   num: true, us: true },
+  dom_period:     { label: 'Dominant period', unit: 's', num: true },
+  avg_period:     { label: 'Average period', unit: 's', num: true },
+  wave_dir:       { label: 'Wave from',   fmt: (v) => `${Math.round(v)}°` },
+  wind_speed:     { label: 'Wind',        unit: 'm/s', num: true, us: true },
+  gust:           { label: 'Gust',        unit: 'm/s', num: true, us: true },
+  wind_dir:       { label: 'Wind from',   fmt: (v) => `${Math.round(v)}°` },
+  pressure:       { label: 'Pressure',    unit: 'hPa', num: true, us: true },
+  pressure_tend:  { label: 'Pressure tendency', unit: 'hPa', num: true },
+  air_temp:       { label: 'Air temp',    unit: '°C',  num: true, us: true },
+  water_temp:     { label: 'Water temp',  unit: '°C',  num: true, us: true },
+  dew_point:      { label: 'Dew point',   unit: '°C',  num: true, us: true },
+  visibility:     { label: 'Visibility',  unit: 'nmi', num: true },
+  tide:           { label: 'Tide',        unit: 'ft',  num: true },
+  obs_time:       { label: 'Observed',    time: true },
 };
 
 /* Headline = the one number you actually came for. Kinds absent from this map
    simply get no headline block rather than a fabricated one. */
+// `from` names the property the headline consumed, so the grid below can drop
+// that row outright. The older dedup compares display strings, which stopped
+// working the moment a value could be converted: a headline reading 13.5 ft
+// no longer matches the 4.1 the grid row holds.
 const KIND_HEADLINE = {
-  quakes:     (p) => p.mag       != null && { value: `M${p.mag}`, note: p.depth_km != null ? `${p.depth_km} km deep` : '' },
-  fires:      (p) => p.frp       != null && { value: p.frp, unit: 'MW', note: 'fire radiative power' },
-  hurricanes: (p) => p.intensity != null && { value: p.intensity, unit: 'kt', note: p.pressure ? `${p.pressure} hPa` : 'max sustained' },
-  model:      (p) => p.value     != null && { value: p.value, unit: p.unit || '', note: FIELD_DEFS[p.field] ? FIELD_DEFS[p.field].label : '' },
-  aqi:        (p) => p.value     != null && { value: p.value, note: aqiCategory(p.value) },
-  planes:     (p) => p.alt       != null && { value: Math.round(p.alt), unit: 'm', note: p.velocity != null ? `${Math.round(p.velocity)} m/s` : 'altitude' },
-  ships:      (p) => p.speed     != null && { value: p.speed, unit: 'kn', note: 'speed over ground' },
-  volcanoes:  (p) => p.elevation_m != null && { value: p.elevation_m, unit: 'm', note: 'summit elevation' },
-  airports:   (p) => p.elevation_ft != null && { value: p.elevation_ft, unit: 'ft', note: p.iata || 'field elevation' },
+  quakes:     (p) => p.mag       != null && { from: 'mag', value: `M${p.mag}`, note: p.depth_km != null ? `${p.depth_km} km deep` : '' },
+  fires:      (p) => p.frp       != null && { from: 'frp', value: p.frp, unit: 'MW', note: 'fire radiative power' },
+  hurricanes: (p) => p.intensity != null && { from: 'intensity', value: p.intensity, unit: 'kt', note: p.pressure ? `${p.pressure} hPa` : 'max sustained' },
+  model:      (p) => p.value     != null && { from: 'value', value: p.value, unit: p.unit || '', note: FIELD_DEFS[p.field] ? FIELD_DEFS[p.field].label : '' },
+  aqi:        (p) => p.value     != null && { from: 'value', value: p.value, note: aqiCategory(p.value) },
+  planes:     (p) => p.alt       != null && { from: 'alt', value: Math.round(p.alt), unit: 'm', note: p.velocity != null ? `${Math.round(p.velocity)} m/s` : 'altitude' },
+  ships:      (p) => p.speed     != null && { from: 'speed', value: p.speed, unit: 'kn', note: 'speed over ground' },
+  volcanoes:  (p) => p.elevation_m != null && { from: 'elevation_m', value: p.elevation_m, unit: 'm', note: 'summit elevation' },
+  airports:   (p) => p.elevation_ft != null && { from: 'elevation_ft', value: p.elevation_ft, unit: 'ft', note: p.iata || 'field elevation' },
+  rivers:     (p) => p.stage != null && { from: 'stage', value: p.stage, unit: p.stage_unit || 'ft', note: p.flow != null ? `${p.flow} ${p.flow_unit || ''} flow`.trim() : 'observed stage' },
+  buoys:      (p) => p.wave_height != null
+                       ? { from: 'wave_height', ...waveNum(p.wave_height), note: p.dom_period != null ? `${p.dom_period} s dominant period` : 'significant wave height' }
+                       : (p.wind_speed != null && { from: 'wind_speed', ...windNum(p.wind_speed), note: 'wind speed' }),
+};
+
+/* NWPS flood categories in the words a forecaster uses. The raw enum
+   ("fcst_not_current") is machine vocabulary and belongs in the raw record. */
+const RIVER_STAGE_LABEL = {
+  major: 'Major flooding',
+  moderate: 'Moderate flooding',
+  minor: 'Minor flooding',
+  action: 'Action stage',
+  no_flooding: 'No flooding',
+  low_threshold: 'Below low-water threshold',
+  out_of_service: 'Gauge out of service',
+  obs_not_current: 'Observation not current',
+  fcst_not_current: 'Forecast not current',
+  not_defined: 'No flood stage defined',
 };
 
 function humanise(key) {
@@ -2947,6 +3025,34 @@ function relTime(v) {
   else                   text = `${Math.round(abs / 86400)} d`;
   if (text !== 'just now') text = ahead ? `in ${text}` : `${text} ago`;
   return { text, title: d.toISOString().replace('T', ' ').replace('.000Z', ' UTC') };
+}
+
+/* Settings offers "US Customary — mi · ft · °F" and, until the marine feeds
+   arrived, only the altitude readout honoured it. NDBC publishes metres and
+   Celsius, so a US-customary user opening a buoy was reading 4.1 m seas and a
+   13.5 °C sea surface.
+
+   Conversion is declared per field rather than per unit string, because the
+   same "ft" means two different things: a river stage in feet is already what
+   a US reader wants, while a wave height in metres is not. A field with no
+   `us` entry is left exactly as the feed sent it. */
+// `dp` is the precision the converted figure is rounded to. Without it the
+// arithmetic invents accuracy the feed never had: NDBC reports 24.7 degrees C
+// to one decimal, and a straight conversion prints 76.46 F.
+const US_CONVERT = {
+  m:     { unit: 'ft',   dp: 1, fn: (v) => v * 3.280839895 },
+  'm/s': { unit: 'mph',  dp: 1, fn: (v) => v * 2.236936292 },
+  C:     { unit: '°F',   dp: 1, fn: (v) => v * 9 / 5 + 32 },
+  '°C':  { unit: '°F',   dp: 1, fn: (v) => v * 9 / 5 + 32 },
+  hPa:   { unit: 'inHg', dp: 2, fn: (v) => v * 0.02952998751 },
+};
+
+function convertUnit(value, meta) {
+  const n = Number(value);
+  const unit = meta.unit || '';
+  if (!Number.isFinite(n) || settings.units !== 'us' || !meta.us) return { n, unit };
+  const c = US_CONVERT[unit];
+  return c ? { n: Number(c.fn(n).toFixed(c.dp)), unit: c.unit } : { n, unit };
 }
 
 function detailRow(key, value) {
@@ -2993,9 +3099,9 @@ function detailRow(key, value) {
     v.textContent = meta.fmt(value);
     v.classList.add('is-num');
   } else if (meta.num || typeof value === 'number') {
-    const n = Number(value);
+    const { n, unit } = convertUnit(value, meta);
     v.textContent = Number.isFinite(n)
-      ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) + (meta.unit ? ` ${meta.unit}` : '')
+      ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) + (unit ? ` ${unit}` : '')
       : String(value);
     v.classList.add('is-num');
   } else {
@@ -3009,7 +3115,10 @@ function detailRow(key, value) {
    `last_seen`; printing both means printing 1785739069.89 next to "just now". */
 // `image` is an internal proxy path and the frame it points at is already
 // rendered above the grid; `icon` is a placefile sprite index.
-const DETAIL_SKIP = new Set(['ts', 'image', 'icon']);
+// stage_unit and flow_unit carry the unit for another field. They are already
+// printed next to the number they belong to; on their own they are a row
+// reading "Stage unit: ft".
+const DETAIL_SKIP = new Set(['ts', 'image', 'icon', 'stage_unit', 'flow_unit']);
 
 function renderDetail(kind, props) {
   const body = document.getElementById('panel-body');
@@ -3038,6 +3147,19 @@ function renderDetail(kind, props) {
     body.appendChild(shot);
   }
 
+  /* A tide station's marker carries no level; the level and today's highs and
+     lows are one request away and land in this slot. The station id is stamped
+     on it so a reply that arrives after the user has clicked something else is
+     discarded rather than painted into the wrong panel. */
+  if (kind === 'tides' && props.id) {
+    const slot = document.createElement('div');
+    slot.className = 'td-slot';
+    slot.dataset.station = String(props.id);
+    slot.textContent = 'Reading water level…';
+    body.appendChild(slot);
+    loadTideDetail(String(props.id), slot);
+  }
+
   const headlineFn = KIND_HEADLINE[kind];
   let head = headlineFn ? headlineFn(props) : null;
   if (head && said.has(String(head.value).trim())) head = null;
@@ -3063,6 +3185,10 @@ function renderDetail(kind, props) {
       wrap.appendChild(n);
     }
     body.appendChild(wrap);
+    // The headline is the number the reader came for. Printing it again three
+    // rows down as "Stage 7.27" under a headline reading "7.27 ft" is the same
+    // duplication the title/subtitle dedup already fixed, one block lower.
+    said.add(String(head.value).trim());
   }
 
   // Known fields in schema order first, then anything the feed added that we
@@ -3078,7 +3204,12 @@ function renderDetail(kind, props) {
     if (value == null || value === '' ||
         (Array.isArray(value) && value.length === 0)) continue;
     if (typeof value === 'object' && !Array.isArray(value)) continue;
+    if (head && head.from === key) continue;
     if (said.has(String(value).trim())) continue;
+    // Classification flags only carry information when set. A tide station
+    // that is not on the Great Lakes does not need a row saying so, and the
+    // chip renders a bare false as an alarm-red NO.
+    if ((FIELD_META[key] || {}).trueOnly && value === false) continue;
     grid.appendChild(detailRow(key, value));
     shown++;
   }
@@ -7293,4 +7424,342 @@ function initAreaDarkening() {
     });
   }
   adSyncUI();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  WATER  —  river gauges, tide stations, marine buoys
+//  The part of a storm picture radar cannot show: what the rain did after it
+//  landed, what the surge is doing at the coast, what the sea state is
+//  offshore. All three feeds are keyless federal sources; see the endpoint
+//  comments in graticule/server.py for why each one was chosen.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/* Flood category drives the colour, because the category is the finding and
+   the stage in feet is only evidence for it. A gauge reading 51 ft means
+   nothing on its own; "major" means evacuate. Ordered least to most severe. */
+const RIVER_TONE = {
+  major:    '#f0abfc',
+  moderate: '#ef4444',
+  minor:    '#fb923c',
+  action:   '#facc15',
+};
+const RIVER_BASE = '#38bdf8';
+
+/* 11,534 gauges is more dots than the globe can say anything with at range.
+   Ones at or above action stage stay visible from orbit; the rest appear as
+   you come down. Same shape as ddcQuake/ddcFire. */
+const RIVER_FAR_FLOODING = 2.4e7;
+const RIVER_FAR_NORMAL = 1_600_000;
+/* Labels go ONLY to flooding gauges. Cesium allocates one glyph atlas per
+   LabelCollection eagerly, ignoring distanceDisplayCondition, and 11k labels
+   is how the Cities layer took the renderer down (issues.md #2). */
+const RIVER_LABEL_FAR = 900_000;
+
+/* Sea state in whichever units the reader chose. The dot-size thresholds in
+   buoyStyle stay in metres because they are Douglas-scale boundaries, not a
+   display choice. */
+function waveNum(metres) {
+  const c = convertUnit(metres, { unit: 'm', us: true });
+  return { value: Number(c.n.toFixed(1)), unit: c.unit };
+}
+function waveText(metres) {
+  const w = waveNum(metres);
+  return `${w.value} ${w.unit}`;
+}
+function windNum(mps) {
+  const c = convertUnit(mps, { unit: 'm/s', us: true });
+  return { value: Number(c.n.toFixed(1)), unit: c.unit };
+}
+
+function riverTone(p) {
+  return RIVER_TONE[p.flood_category] || RIVER_BASE;
+}
+
+function toggleRivers(on) {
+  if (!riversDS) {
+    riversDS = new Cesium.CustomDataSource('rivers');
+    viewer.dataSources.add(riversDS);
+  }
+  riversDS.show = !!on;
+  if (on && riversDS.entities.values.length === 0) refreshRivers();
+  viewer.scene.requestRender();
+}
+
+async function refreshRivers() {
+  if (!riversDS || !riversDS.show) return;
+  let gj;
+  try {
+    // The first uncached call walks four NWPS tiles and takes ~19 s.
+    const r = await fetch('/api/rivers');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    gj = await r.json();
+  } catch (err) {
+    pushEvent('RIVER', `River gauges unavailable (${err.message})`, Date.now());
+    setCount('rivers', 'error');
+    return;
+  }
+
+  riversDS.entities.removeAll();
+  const feats = gj.features || [];
+  for (const f of feats) {
+    const [lon, lat] = f.geometry.coordinates;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const p = f.properties;
+    const flooding = (p.flood_rank || 0) >= 1;
+    const tone = Cesium.Color.fromCssColorString(riverTone(p));
+    const far = flooding ? RIVER_FAR_FLOODING : RIVER_FAR_NORMAL;
+
+    // renderDetail skips nested objects, so the readings are flattened here
+    // rather than handed over as { value, unit, valid }.
+    const obs = p.observed || null;
+    const fcst = p.forecast || null;
+    const flat = {
+      kind: 'rivers',
+      id: p.id, name: p.name, state: p.state,
+      flood_category: p.flood_category,
+      wfo: p.wfo, rfc: p.rfc,
+      stage: obs ? obs.value : null,
+      stage_unit: obs ? obs.unit : '',
+      observed_at: obs ? obs.valid : '',
+      flow: obs && obs.flow != null ? obs.flow : null,
+      flow_unit: obs ? (obs.flow_unit || '') : '',
+      forecast_stage: fcst ? fcst.value : null,
+      forecast_at: fcst ? fcst.valid : '',
+    };
+
+    const ent = {
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      point: {
+        pixelSize: flooding ? 9 : 5,
+        color: tone,
+        outlineColor: Cesium.Color.BLACK.withAlpha(0.75),
+        outlineWidth: flooding ? 1.5 : 1,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, far),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      properties: flat,
+    };
+    if (flooding) {
+      ent.label = {
+        text: p.name || p.id,
+        font: '600 10px Inter, sans-serif',
+        fillColor: tone,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -13),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, RIVER_LABEL_FAR),
+      };
+    }
+    riversDS.entities.add(ent);
+  }
+  setCount('rivers', feats.length);
+  if (gj.flooding) {
+    pushEvent('RIVER', `${gj.flooding} river gauges at or above action stage`, Date.now());
+  }
+  noteFeed('rivers');
+  updateCategoryCounts();
+  viewer.scene.requestRender();
+}
+
+function toggleTides(on) {
+  if (!tidesDS) {
+    tidesDS = new Cesium.CustomDataSource('tides');
+    viewer.dataSources.add(tidesDS);
+  }
+  tidesDS.show = !!on;
+  if (on && tidesDS.entities.values.length === 0) refreshTides();
+  viewer.scene.requestRender();
+}
+
+async function refreshTides() {
+  if (!tidesDS || !tidesDS.show) return;
+  let gj;
+  try {
+    const r = await fetch('/api/tides');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    gj = await r.json();
+  } catch (err) {
+    pushEvent('TIDE', `Tide stations unavailable (${err.message})`, Date.now());
+    setCount('tides', 'error');
+    return;
+  }
+
+  tidesDS.entities.removeAll();
+  // Indigo, not the cyan it started as. Tide stations and buoys both
+  // crowd the coastline, and two teals a shade apart are one layer to
+  // the eye. Buoys keep the teal because their palette runs warm with
+  // wave height and needs the cool end to itself.
+  const tone = Cesium.Color.fromCssColorString('#818cf8');
+  for (const f of gj.features || []) {
+    const [lon, lat] = f.geometry.coordinates;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const p = f.properties;
+    tidesDS.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      point: {
+        pixelSize: 7,
+        color: tone,
+        outlineColor: Cesium.Color.BLACK.withAlpha(0.75),
+        outlineWidth: 1,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: p.name || p.id,
+        font: '600 10px Inter, sans-serif',
+        fillColor: tone,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -12),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1_200_000),
+      },
+      properties: { ...p },
+    });
+  }
+  setCount('tides', (gj.features || []).length);
+  noteFeed('tides');
+  updateCategoryCounts();
+  viewer.scene.requestRender();
+}
+
+function toggleBuoys(on) {
+  if (!buoysDS) {
+    buoysDS = new Cesium.CustomDataSource('buoys');
+    viewer.dataSources.add(buoysDS);
+  }
+  buoysDS.show = !!on;
+  if (on && buoysDS.entities.values.length === 0) refreshBuoys();
+  viewer.scene.requestRender();
+}
+
+/* Sea state is the thing a buoy is for, so the dot grows with wave height
+   rather than sitting at a constant size next to a number nobody reads at
+   range. Stops are the Douglas scale boundaries: slight, moderate, rough,
+   very rough, high. */
+function buoyStyle(p) {
+  const h = p.wave_height;
+  if (h == null) return { size: 5, tone: '#5eead4' };
+  if (h >= 6) return { size: 13, tone: '#f0abfc' };
+  if (h >= 4) return { size: 11, tone: '#ef4444' };
+  if (h >= 2.5) return { size: 9, tone: '#fb923c' };
+  if (h >= 1.25) return { size: 7, tone: '#facc15' };
+  return { size: 6, tone: '#5eead4' };
+}
+
+async function refreshBuoys() {
+  if (!buoysDS || !buoysDS.show) return;
+  let gj;
+  try {
+    const r = await fetch('/api/buoys');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    gj = await r.json();
+  } catch (err) {
+    pushEvent('BUOY', `Marine buoys unavailable (${err.message})`, Date.now());
+    setCount('buoys', 'error');
+    return;
+  }
+
+  buoysDS.entities.removeAll();
+  for (const f of gj.features || []) {
+    const [lon, lat] = f.geometry.coordinates;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const p = f.properties;
+    const st = buoyStyle(p);
+    buoysDS.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      point: {
+        pixelSize: st.size,
+        color: Cesium.Color.fromCssColorString(st.tone),
+        outlineColor: Cesium.Color.BLACK.withAlpha(0.75),
+        outlineWidth: 1,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: p.wave_height != null ? waveText(p.wave_height) : p.id,
+        font: '600 10px "JetBrains Mono", monospace',
+        fillColor: Cesium.Color.fromCssColorString(st.tone),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -12),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2_500_000),
+      },
+      properties: { ...p },
+    });
+  }
+  setCount('buoys', (gj.features || []).length);
+  noteFeed('buoys');
+  updateCategoryCounts();
+  viewer.scene.requestRender();
+}
+
+/* Tide drill-down. The station layer carries no water level: filling 301
+   markers would be 602 CO-OPS requests to populate a panel showing one. The
+   level and today's highs and lows are fetched when the station is opened,
+   and rendered into a slot renderDetail leaves behind. */
+async function loadTideDetail(stationId, slot) {
+  let d;
+  try {
+    const r = await fetch(`/api/tide/${encodeURIComponent(stationId)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    d = await r.json();
+  } catch (err) {
+    slot.textContent = `Water level unavailable (${err.message})`;
+    slot.classList.add('td-err');
+    return;
+  }
+  // The panel may have moved on to another entity while this was in flight.
+  if (slot.dataset.station !== stationId || !slot.isConnected) return;
+
+  slot.textContent = '';
+  if (d.level) {
+    const head = document.createElement('div');
+    head.className = 'dt-headline';
+    const big = document.createElement('span');
+    big.className = 'dt-big';
+    big.textContent = Number(d.level.v).toFixed(2);
+    const unit = document.createElement('span');
+    unit.className = 'dt-unit';
+    unit.textContent = 'ft';
+    const note = document.createElement('span');
+    note.className = 'dt-note';
+    note.textContent = `observed ${d.level.t} UTC · MLLW`;
+    head.append(big, unit, note);
+    slot.appendChild(head);
+  } else {
+    const none = document.createElement('div');
+    none.className = 'td-err';
+    none.textContent = d.level_error || 'No water level reported at this station.';
+    slot.appendChild(none);
+  }
+
+  const preds = d.predictions || [];
+  if (preds.length) {
+    const cap = document.createElement('div');
+    cap.className = 'td-cap';
+    cap.textContent = 'TODAY · PREDICTED HIGHS AND LOWS';
+    slot.appendChild(cap);
+    const row = document.createElement('div');
+    row.className = 'td-hilo';
+    for (const p of preds) {
+      const cell = document.createElement('div');
+      cell.className = p.type === 'H' ? 'td-cell is-high' : 'td-cell is-low';
+      const t = document.createElement('span');
+      t.className = 'td-t mono';
+      t.textContent = (p.t || '').split(' ')[1] || '';
+      const v = document.createElement('span');
+      v.className = 'td-v mono';
+      v.textContent = `${Number(p.v).toFixed(1)} ft`;
+      const k = document.createElement('span');
+      k.className = 'td-k';
+      k.textContent = p.type === 'H' ? 'HIGH' : 'LOW';
+      cell.append(k, v, t);
+      row.appendChild(cell);
+    }
+    slot.appendChild(row);
+  }
 }

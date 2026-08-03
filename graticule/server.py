@@ -476,6 +476,337 @@ async def spotter_reports() -> JSONResponse:
     return JSONResponse(data)
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  WATER  —  river gauges, tide stations, marine buoys
+#  Three keyless federal feeds. Between them they cover the part of a severe
+#  weather picture that radar cannot show: what the rain did after it landed,
+#  what the surge is doing at the coast, and what the sea state is offshore.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: River gauges — NOAA National Water Prediction Service.
+#:
+#: Chosen over USGS Water Services, which was the obvious first stop. USGS
+#: gives a stage in feet and nothing to compare it against, and its bbox is
+#: area-limited ("your requested width must be less than or equal to 1.9
+#: degrees at latitude 30.0 with requested height of 15.0"), so national
+#: coverage costs 50 state queries. NWPS carries the observed stage, the
+#: forecast stage, AND the flood category the local river forecast centre has
+#: assigned, which is the difference between a number and a warning.
+_RIVER_CACHE: tuple[float, dict] | None = None
+_RIVER_TTL_S = 600.0
+_RIVER_URL = "https://api.water.noaa.gov/nwps/v1/gauges"
+
+#: The whole of North America in one request 504s after 60 s. These four tiles
+#: each return in 15-40 s and are fetched concurrently.
+_RIVER_TILES = [
+    (-180.0, 15.0, -125.0, 72.0),   # Alaska, Hawaii, the Pacific
+    (-125.0, 24.0, -100.0, 50.0),   # west
+    (-100.0, 24.0, -85.0, 50.0),    # plains and midwest
+    (-85.0, 15.0, -60.0, 50.0),     # east, Gulf, Puerto Rico
+]
+
+#: NWPS flood categories, least to most severe. The client colours by these.
+_FLOOD_RANK = {
+    "no_flooding": 0, "not_defined": 0, "obs_not_current": 0,
+    "fcst_not_current": 0, "low_water_threshold": 0,
+    "action": 1, "minor": 2, "moderate": 3, "major": 4,
+}
+#: NWPS uses -999 as its no-data sentinel. Left alone it plots as a river
+#: 999 feet below its bed.
+_NWPS_MISSING = -999
+
+
+def _nwps_reading(block: dict) -> dict | None:
+    if not block:
+        return None
+    value = block.get("primary")
+    if value is None or value == _NWPS_MISSING:
+        return None
+    out = {"value": value, "unit": block.get("primaryUnit") or "ft",
+           "valid": block.get("validTime") or ""}
+    flow = block.get("secondary")
+    if flow is not None and flow != _NWPS_MISSING:
+        out["flow"] = flow
+        out["flow_unit"] = block.get("secondaryUnit") or ""
+    return out
+
+
+async def _fetch_river_tile(client: httpx.AsyncClient, box: tuple) -> list[dict]:
+    xmin, ymin, xmax, ymax = box
+    r = await client.get(_RIVER_URL, params={
+        "srid": "EPSG_4326",
+        "bbox.xmin": xmin, "bbox.ymin": ymin,
+        "bbox.xmax": xmax, "bbox.ymax": ymax,
+    }, headers={"User-Agent": "graticule/1.0"})
+    r.raise_for_status()
+    out = []
+    for g in r.json().get("gauges", []):
+        lat, lon = g.get("latitude"), g.get("longitude")
+        if lat is None or lon is None:
+            continue
+        status = g.get("status") or {}
+        observed = _nwps_reading(status.get("observed"))
+        # A gauge with no current reading is a dot that says nothing. The
+        # forecast-only ones are kept, because a river forecast to crest is
+        # exactly what a viewer wants to see before it does.
+        forecast = _nwps_reading(status.get("forecast"))
+        if not observed and not forecast:
+            continue
+        cat = ((status.get("observed") or {}).get("floodCategory") or "not_defined")
+        out.append({
+            "lon": lon, "lat": lat,
+            "id": g.get("lid") or "",
+            "name": g.get("name") or "River gauge",
+            "state": ((g.get("state") or {}).get("abbreviation") or ""),
+            "wfo": ((g.get("wfo") or {}).get("abbreviation") or ""),
+            "rfc": ((g.get("rfc") or {}).get("name") or ""),
+            "flood_category": cat,
+            "flood_rank": _FLOOD_RANK.get(cat, 0),
+            "observed": observed,
+            "forecast": forecast,
+        })
+    return out
+
+
+@app.get("/api/rivers")
+async def river_gauges() -> JSONResponse:
+    """Every NWPS river gauge in North America with a live or forecast stage."""
+    global _RIVER_CACHE
+    now = asyncio.get_event_loop().time()
+    if _RIVER_CACHE and now - _RIVER_CACHE[0] < _RIVER_TTL_S:
+        return JSONResponse(_RIVER_CACHE[1])
+
+    async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
+        results = await asyncio.gather(
+            *(_fetch_river_tile(client, b) for b in _RIVER_TILES),
+            return_exceptions=True)
+
+    gauges, failures = [], []
+    for res in results:
+        if isinstance(res, Exception):
+            failures.append(str(res))
+        else:
+            gauges.extend(res)
+    if not gauges:
+        logger.warning(f"all river tiles failed: {failures}")
+        if _RIVER_CACHE:
+            return JSONResponse(_RIVER_CACHE[1])
+        return JSONResponse({"error": "river gauges unavailable"}, status_code=502)
+
+    # Tiles share edges, so a gauge on a boundary arrives twice.
+    seen, unique = set(), []
+    for g in gauges:
+        if g["id"] and g["id"] in seen:
+            continue
+        seen.add(g["id"])
+        unique.append(g)
+
+    flooding = sum(1 for g in unique if g["flood_rank"] >= 1)
+    data = {
+        "type": "FeatureCollection",
+        "flooding": flooding,
+        "credit": "NOAA National Water Prediction Service",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [g.pop("lon"), g.pop("lat")]},
+            "properties": {"kind": "rivers", **g},
+        } for g in unique],
+    }
+    _RIVER_CACHE = (now, data)
+    logger.info(f"rivers: {len(unique)} gauges, {flooding} at or above action stage"
+                + (f" ({len(failures)} tiles failed)" if failures else ""))
+    return JSONResponse(data)
+
+
+#: Tide stations — NOAA CO-OPS. The station list is one request; live water
+#: level is per-station, so it is fetched on click rather than for all 300 up
+#: front. See /api/tide/{station}.
+_TIDE_CACHE: tuple[float, dict] | None = None
+_TIDE_TTL_S = 86400.0          # the station list is effectively static
+_TIDE_STATIONS = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json"
+_TIDE_DATA = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+
+
+@app.get("/api/tides")
+async def tide_stations() -> JSONResponse:
+    """NOAA water-level stations as GeoJSON. Levels come from /api/tide/{id}."""
+    global _TIDE_CACHE
+    now = asyncio.get_event_loop().time()
+    if _TIDE_CACHE and now - _TIDE_CACHE[0] < _TIDE_TTL_S:
+        return JSONResponse(_TIDE_CACHE[1])
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            r = await client.get(_TIDE_STATIONS, params={"type": "waterlevels"},
+                                 headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+            stations = r.json().get("stations", [])
+    except Exception as exc:
+        logger.warning(f"tide station list failed: {exc}")
+        if _TIDE_CACHE:
+            return JSONResponse(_TIDE_CACHE[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    feats = []
+    for s in stations:
+        lat, lon = s.get("lat"), s.get("lng")
+        if lat is None or lon is None:
+            continue
+        feats.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {
+                "kind": "tides",
+                "id": s.get("id") or "",
+                "name": s.get("name") or "Tide station",
+                "state": s.get("state") or "",
+                "tidal": bool(s.get("tidal")),
+                "great_lakes": bool(s.get("greatlakes")),
+                "storm_surge": bool(s.get("stormsurge")),
+                "affiliations": s.get("affiliations") or "",
+            },
+        })
+    data = {"type": "FeatureCollection", "features": feats,
+            "credit": "NOAA CO-OPS"}
+    _TIDE_CACHE = (now, data)
+    logger.info(f"tides: {len(feats)} stations")
+    return JSONResponse(data)
+
+
+@app.get("/api/tide/{station}")
+async def tide_detail(station: str) -> JSONResponse:
+    """Live water level plus today's highs and lows for one station.
+
+    Fetched on click. Doing this for all 301 stations up front would be 602
+    requests against CO-OPS every refresh to populate a panel showing one.
+    """
+    if not re.fullmatch(r"[0-9A-Za-z]{3,12}", station):
+        return JSONResponse({"error": "bad station id"}, status_code=400)
+
+    common = {"station": station, "datum": "MLLW", "units": "english",
+              "format": "json", "application": "graticule"}
+    try:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            level_r, pred_r = await asyncio.gather(
+                client.get(_TIDE_DATA, params={**common, "date": "latest",
+                                               "product": "water_level",
+                                               "time_zone": "gmt"}),
+                client.get(_TIDE_DATA, params={**common, "date": "today",
+                                               "product": "predictions",
+                                               "interval": "hilo",
+                                               "time_zone": "lst_ldt"}),
+                return_exceptions=True)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    out: dict = {"station": station}
+    # CO-OPS answers 200 with {"error": {...}} for a station that carries no
+    # water level, so status_code alone does not tell you whether this worked.
+    if not isinstance(level_r, Exception) and level_r.status_code == 200:
+        body = level_r.json()
+        rows = body.get("data") or []
+        if rows:
+            out["level"] = {"t": rows[-1].get("t"), "v": rows[-1].get("v")}
+            out["name"] = (body.get("metadata") or {}).get("name")
+        elif body.get("error"):
+            out["level_error"] = (body["error"] or {}).get("message", "")
+    if not isinstance(pred_r, Exception) and pred_r.status_code == 200:
+        body = pred_r.json()
+        out["predictions"] = [
+            {"t": p.get("t"), "v": p.get("v"), "type": p.get("type")}
+            for p in (body.get("predictions") or [])
+        ]
+    return JSONResponse(out)
+
+
+#: Marine buoys — NDBC. One 108 KB text file carries the latest observation
+#: from every station on the network, worldwide, so this is a single request
+#: rather than a fetch per buoy.
+_BUOY_CACHE: tuple[float, dict] | None = None
+_BUOY_TTL_S = 900.0
+_BUOY_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
+
+#: Column order of latest_obs.txt after the two header lines. 'MM' is missing.
+#:   STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES PTDY
+#:   ATMP WTMP DEWP VIS TIDE
+_BUOY_FIELDS = [
+    ("wind_dir", 8, "deg"), ("wind_speed", 9, "m/s"), ("gust", 10, "m/s"),
+    ("wave_height", 11, "m"), ("dom_period", 12, "s"), ("avg_period", 13, "s"),
+    ("wave_dir", 14, "deg"), ("pressure", 15, "hPa"), ("pressure_tend", 16, "hPa"),
+    ("air_temp", 17, "C"), ("water_temp", 18, "C"), ("dew_point", 19, "C"),
+    ("visibility", 20, "nmi"), ("tide", 21, "ft"),
+]
+
+
+def _parse_latest_obs(text: str) -> list[dict]:
+    out = []
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        cols = line.split()
+        if len(cols) < 22:
+            continue
+        try:
+            lat, lon = float(cols[1]), float(cols[2])
+        except ValueError:
+            continue
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            continue
+        rec = {"id": cols[0]}
+        for name, idx, _unit in _BUOY_FIELDS:
+            raw = cols[idx]
+            if raw == "MM":
+                continue
+            try:
+                rec[name] = float(raw)
+            except ValueError:
+                continue
+        # A station reporting nothing but its own position is a dot with no
+        # content behind it.
+        if len(rec) == 1:
+            continue
+        try:
+            rec["obs_time"] = (f"{cols[3]}-{int(cols[4]):02d}-{int(cols[5]):02d}T"
+                               f"{int(cols[6]):02d}:{int(cols[7]):02d}Z")
+        except ValueError:
+            rec["obs_time"] = ""
+        out.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"kind": "buoys", **rec},
+        })
+    return out
+
+
+@app.get("/api/buoys")
+async def marine_buoys() -> JSONResponse:
+    """Latest observation from every NDBC station, worldwide."""
+    global _BUOY_CACHE
+    now = asyncio.get_event_loop().time()
+    if _BUOY_CACHE and now - _BUOY_CACHE[0] < _BUOY_TTL_S:
+        return JSONResponse(_BUOY_CACHE[1])
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            r = await client.get(_BUOY_URL, headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+            text = r.text
+    except Exception as exc:
+        logger.warning(f"buoy fetch failed: {exc}")
+        if _BUOY_CACHE:
+            return JSONResponse(_BUOY_CACHE[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    feats = _parse_latest_obs(text)
+    data = {"type": "FeatureCollection", "features": feats,
+            "credit": "NOAA National Data Buoy Center"}
+    _BUOY_CACHE = (now, data)
+    logger.info(f"buoys: {len(feats)} stations reporting")
+    return JSONResponse(data)
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()

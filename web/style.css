@@ -32,6 +32,9 @@
   --c-photoreal3d: #67e8f9;
   --c-severe:     #ec4899;
   --c-cables:     #fbbf24;
+  --c-rivers:     #38bdf8;
+  --c-tides:      #818cf8;
+  --c-buoys:      #5eead4;
   --c-nightlights:#fef08a;
   --c-terminator: #475569;
   --c-airports:   #60a5fa;
@@ -431,6 +434,9 @@ html, body {
 .dot[data-color=photoreal3d]{ background: var(--c-photoreal3d);box-shadow: 0 0 5px var(--c-photoreal3d); }
 .dot[data-color=severe]     { background: var(--c-severe);     box-shadow: 0 0 5px var(--c-severe); }
 .dot[data-color=cables]     { background: var(--c-cables);     box-shadow: 0 0 5px var(--c-cables); }
+.dot[data-color=rivers]     { background: var(--c-rivers);     box-shadow: 0 0 5px var(--c-rivers); }
+.dot[data-color=tides]      { background: var(--c-tides);      box-shadow: 0 0 5px var(--c-tides); }
+.dot[data-color=buoys]      { background: var(--c-buoys);      box-shadow: 0 0 5px var(--c-buoys); }
 .dot[data-color=nightlights]{ background: var(--c-nightlights);box-shadow: 0 0 5px var(--c-nightlights); }
 .dot[data-color=terminator] { background: var(--c-terminator); box-shadow: 0 0 5px var(--c-terminator); }
 .dot[data-color=airports]   { background: var(--c-airports);   box-shadow: 0 0 5px var(--c-airports); }
@@ -2074,3 +2080,31 @@ input[type=range]::-webkit-slider-runnable-track {
 .sm-btn:hover { background: rgba(255, 255, 255, 0.09); border-color: var(--accent); }
 .sm-btn[disabled] { opacity: 0.4; cursor: default; }
 .sm-btn[disabled]:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--panel-border); }
+
+/* ─────────  TIDE DRILL-DOWN  ─────────
+   Fetched when a station panel opens, so it renders into a slot rather than
+   arriving with the rest of the record. */
+.td-slot {
+  margin: 0 0 10px;
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-dim);
+}
+.td-err { color: var(--warn); font-size: var(--fs-xs); }
+.td-cap {
+  margin: 10px 0 6px;
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: var(--tr-wide);
+  color: var(--text-mute);
+}
+/* Four cells, one per tide of the day. Fixed columns so the times line up
+   even when a day carries three highs instead of two. */
+.td-hilo { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.td-cell {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 5px; border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 2px solid var(--text-mute);
+}
+.td-cell.is-high { border-left-color: var(--accent); }
+.td-cell.is-low  { border-left-color: var(--text-mute); }
+.td-k { font-size: var(--fs-micro); font-weight: 700; letter-spacing: var(--tr-tight); color: var(--text-mute); }
+.td-v { font-size: var(--fs-sm); color: var(--text); }
+.td-t { font-size: var(--fs-xs); color: var(--text-dim); }
