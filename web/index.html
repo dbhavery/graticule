@@ -363,18 +363,32 @@
     </select>
   </div>
 
-  <!-- ─────────  DRAW TOOLBAR + MAP THEME  ───────── -->
-  <div id="drawbar">
-    <button id="draw-toggle" class="tool-btn" title="Draw on the globe">&#9998;</button>
-    <button id="draw-undo"   class="tool-btn" title="Undo last stroke">&#8630;</button>
-    <button id="draw-clear"  class="tool-btn" title="Clear all strokes">&#9003;</button>
-    <button id="draw-color"  class="tool-swatch" title="Cycle stroke colour"></button>
-    <span class="tool-sep"></span>
-    <div id="theme-picker">
-      <button class="theme-btn" data-theme="satellite" title="Satellite">SAT</button>
-      <button class="theme-btn" data-theme="streets"   title="Streets">MAP</button>
-      <button class="theme-btn" data-theme="topo"      title="Topographic">TOPO</button>
-      <button class="theme-btn" data-theme="night"     title="Night lights">NIGHT</button>
+  <!-- ─────────  DRAW TOOLBAR + MAP THEME  ─────────
+       Two unrelated jobs, so two separate bars. They used to share one box
+       with a hairline between them, which made the stroke-colour swatch read
+       as a fifth basemap button — it sat 40px from an accent-filled SAT and
+       wore the same accent fill. The swatch is now round; nothing else in
+       the chrome is. -->
+  <div id="toolstrip">
+    <div id="drawbar" role="group" aria-label="Drawing tools">
+      <span class="bar-cap">DRAW</span>
+      <button id="draw-toggle" class="tool-btn" aria-label="Draw on the globe"
+              aria-pressed="false" title="Draw on the globe">&#9998;</button>
+      <button id="draw-undo"   class="tool-btn" aria-label="Undo last stroke"
+              title="Undo last stroke">&#8630;</button>
+      <button id="draw-clear"  class="tool-btn" aria-label="Clear all strokes"
+              title="Clear all strokes">&#9003;</button>
+      <button id="draw-color"  class="tool-swatch" aria-label="Cycle stroke colour"
+              title="Cycle stroke colour"></button>
+    </div>
+    <div id="basemapbar" role="group" aria-label="Base map">
+      <span class="bar-cap">BASE</span>
+      <div id="theme-picker">
+        <button class="theme-btn" data-theme="satellite" aria-pressed="false" title="Satellite imagery">SAT</button>
+        <button class="theme-btn" data-theme="streets"   aria-pressed="false" title="Street map">MAP</button>
+        <button class="theme-btn" data-theme="topo"      aria-pressed="false" title="Topographic">TOPO</button>
+        <button class="theme-btn" data-theme="night"     aria-pressed="false" title="Night lights">NIGHT</button>
+      </div>
     </div>
   </div>
 

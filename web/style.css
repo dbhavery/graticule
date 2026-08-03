@@ -1470,36 +1470,51 @@ input[type=range]::-webkit-slider-runnable-track {
 .warn-card.is-zone { cursor: default; opacity: 0.72; }
 .warn-card.is-zone:hover { background: rgba(255,255,255,0.035); }
 
-/* ---- Draw toolbar + theme picker ---- */
-#drawbar {
+/* ---- Draw toolbar + theme picker ----
+   One strip, two captioned groups, a real 10px gap between them. Grouping is
+   carried by the gap and the caption rather than by a 1px rule, so the two
+   unrelated functions stop reading as one eight-button row. */
+#toolstrip {
   position: absolute; top: 66px; right: 16px; z-index: 13;
+  display: flex; align-items: stretch; gap: 10px;
+}
+#drawbar, #basemapbar {
   display: flex; align-items: center; gap: 5px;
   background: var(--panel-bg-strong);
   border: 1px solid var(--panel-border);
-  border-radius: 4px; padding: 5px 7px;
+  border-radius: 4px; padding: 5px 8px;
   backdrop-filter: blur(8px);
 }
+/* Only the draw group lights up while drawing. The old rule outlined the
+   basemap buttons too, which implied they were part of the mode. */
 #drawbar.is-drawing { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(77,210,255,0.25); }
+
+/* Caption sets what the group is for; the glyphs alone never did. */
+.bar-cap {
+  font-family: var(--sans); font-size: 8.5px; font-weight: 700;
+  letter-spacing: 1.1px; color: var(--text-mute);
+  padding-right: 3px; user-select: none;
+}
 .tool-btn {
   appearance: none; background: none; border: 0;
   color: var(--text-dim); font-size: 13px; line-height: 1;
   padding: 5px 7px; border-radius: 3px; cursor: pointer;
-  transition: all 140ms ease;
 }
 .tool-btn:hover { color: var(--text); background: rgba(255,255,255,0.07); }
 .tool-btn.is-active { color: #041016; background: var(--accent); }
+/* Round, and only round thing in the chrome: a colour value, not a mode. */
 .tool-swatch {
-  width: 18px; height: 18px; border-radius: 3px;
-  border: 1px solid rgba(255,255,255,0.22); cursor: pointer; padding: 0;
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.30); cursor: pointer; padding: 0;
 }
-.tool-sep { width: 1px; height: 18px; background: var(--panel-rule); margin: 0 3px; }
 #theme-picker { display: flex; gap: 3px; }
 .theme-btn {
   appearance: none; background: rgba(255,255,255,0.04);
   border: 1px solid var(--panel-border); border-radius: 3px;
   color: var(--text-mute); font-family: var(--sans);
-  font-size: 8.5px; font-weight: 600; letter-spacing: 0.8px;
-  padding: 4px 6px; cursor: pointer; transition: all 140ms ease;
+  /* was 8.5px: below the 10px floor, and unreadable next to 13px glyphs */
+  font-size: 10px; font-weight: 600; letter-spacing: 0.6px;
+  padding: 4px 7px; cursor: pointer;
 }
 .theme-btn:hover { color: var(--text-dim); }
 .theme-btn.is-active { background: var(--accent); border-color: var(--accent); color: #041016; }

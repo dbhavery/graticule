@@ -5510,7 +5510,11 @@ function setDrawing(on) {
   DRAW.active = !!on;
   const btn = document.getElementById('draw-toggle');
   const bar = document.getElementById('drawbar');
-  if (btn) btn.classList.toggle('is-active', DRAW.active);
+  if (btn) {
+    btn.classList.toggle('is-active', DRAW.active);
+    // The class is a paint job; aria-pressed is what a screen reader reads.
+    btn.setAttribute('aria-pressed', String(DRAW.active));
+  }
   if (bar) bar.classList.toggle('is-drawing', DRAW.active);
 
   // Camera control has to yield while drawing, otherwise a stroke drags the
@@ -5582,13 +5586,19 @@ function endStroke() {
 function initMapTheme() {
   const wrap = document.getElementById('theme-picker');
   if (!wrap) return;
+  const markActive = (active) => {
+    wrap.querySelectorAll('.theme-btn').forEach((x) => {
+      const on = x === active;
+      x.classList.toggle('is-active', on);
+      x.setAttribute('aria-pressed', String(on));
+    });
+  };
+  markActive(wrap.querySelector(`.theme-btn[data-theme="${settings.imageryBase}"]`));
   wrap.querySelectorAll('.theme-btn').forEach((b) => {
-    b.classList.toggle('is-active', b.dataset.theme === settings.imageryBase);
     b.addEventListener('click', () => {
       settings.imageryBase = b.dataset.theme;
       saveSettings();
-      wrap.querySelectorAll('.theme-btn').forEach((x) =>
-        x.classList.toggle('is-active', x === b));
+      markActive(b);
       applyImageryBase(settings.imageryBase);
       const radio = document.querySelector(`input[name="imageryBase"][value="${settings.imageryBase}"]`);
       if (radio) radio.checked = true;
