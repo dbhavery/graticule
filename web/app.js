@@ -289,6 +289,7 @@ const settings = Object.assign({
   adOpacity: 0.6,                   // matches the reference app's default
   adFilterLabels: false,
   adCounties: [],                   // FIPS strings; drives a 2.8 MB lazy load
+  presenting: false,                // broadcast framing; chrome hidden
   renderEpoch: 0,                   // bumped when visual defaults change
 }, loadSettings());
 function loadSettings() {
@@ -351,6 +352,7 @@ const TICKER_MAX = 6;
   initWorldDash();
   initModelCompare();
   initAreaDarkening();
+  initPresentation();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -7762,4 +7764,68 @@ async function loadTideDetail(stationId, slot) {
     }
     slot.appendChild(row);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PRESENTATION MODE
+//  Weatherfront's broadcast framing. Strips the app down to the map, the
+//  valid time, the colour scale and the timeline: everything that exists to
+//  CONFIGURE the view goes away, because on air it is chrome the audience has
+//  to look past.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _presentIdle = null;
+
+function applyPresenting(on) {
+  on = !!on;
+  settings.presenting = on;
+  saveSettings();
+
+  document.body.classList.toggle('is-presenting', on);
+  document.getElementById('present-exit')?.classList.toggle('hidden', !on);
+  const btn = document.getElementById('present-btn');
+  if (btn) {
+    btn.setAttribute('aria-pressed', String(on));
+    btn.classList.toggle('is-active', on);
+  }
+
+  // Selection mode locks the camera and its bar is one of the things hidden,
+  // so entering presentation while armed would strand the globe.
+  if (on && typeof AD !== 'undefined' && AD.arming) adSetSelecting(false);
+
+  // Cesium sizes its canvas to the container, which does not change here, but
+  // the vignette opacity and the hidden overlays both want a repaint.
+  viewer.scene.requestRender();
+}
+
+/* The exit chip fades out on its own so it stays out of the frame, then comes
+   back on any pointer movement. Without the timer it either sits at full
+   opacity in every shot or is invisible when someone needs it. */
+function initPresentation() {
+  const btn = document.getElementById('present-btn');
+  if (btn) btn.addEventListener('click', () => applyPresenting(!settings.presenting));
+  document.getElementById('present-exit-btn')
+    ?.addEventListener('click', () => applyPresenting(false));
+
+  document.addEventListener('keydown', (e) => {
+    // Ignore the shortcut while typing, or a station search would toggle the
+    // whole UI away on the letter p.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.key === 'p' || e.key === 'P') {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      applyPresenting(!settings.presenting);
+    } else if (e.key === 'Escape' && settings.presenting) {
+      applyPresenting(false);
+    }
+  });
+
+  document.addEventListener('pointermove', () => {
+    if (!settings.presenting) return;
+    document.body.classList.add('is-pointing');
+    clearTimeout(_presentIdle);
+    _presentIdle = setTimeout(() => document.body.classList.remove('is-pointing'), 2200);
+  });
+
+  if (settings.presenting) applyPresenting(true);
 }

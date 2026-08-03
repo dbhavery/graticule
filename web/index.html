@@ -68,6 +68,8 @@
           <span class="hdr-dot" data-color="mon_feed"></span><span>FEED</span>
         </button>
       </div>
+      <button id="present-btn" class="settings-btn" aria-label="Presentation mode"
+              aria-pressed="false" title="Presentation mode (P) — hide the chrome">▣</button>
       <button id="settings-btn" class="settings-btn" aria-label="Settings">⚙</button>
     </div>
   </header>
@@ -427,6 +429,15 @@
         <button class="theme-btn" data-theme="night"     aria-pressed="false" title="Night lights">NIGHT</button>
       </div>
     </div>
+  </div>
+
+  <!-- ─────────  PRESENTATION MODE EXIT  ─────────
+       The only chrome presentation mode leaves behind, because a mode with no
+       way out and no sign it is on is a bug report. Fades to near-invisible
+       once the pointer settles. -->
+  <div id="present-exit" class="hidden">
+    <span class="pe-dot"></span><span class="pe-txt">PRESENTING</span>
+    <button id="present-exit-btn" class="tool-btn" title="Leave presentation mode">Esc</button>
   </div>
 
   <!-- ─────────  COUNTY SELECTION BAR  ─────────

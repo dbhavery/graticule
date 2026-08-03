@@ -2108,3 +2108,58 @@ input[type=range]::-webkit-slider-runnable-track {
 .td-k { font-size: var(--fs-micro); font-weight: 700; letter-spacing: var(--tr-tight); color: var(--text-mute); }
 .td-v { font-size: var(--fs-sm); color: var(--text); }
 .td-t { font-size: var(--fs-xs); color: var(--text-dim); }
+
+/* ─────────  PRESENTATION MODE  ─────────
+   Broadcast framing: the map, the valid time, the colour scale and the
+   timeline. Everything that exists to CONFIGURE the view goes away, because
+   on air it is chrome the audience has to look past.
+
+   Hidden with visibility rather than display:none. A hidden #hud whose box is
+   also gone would let the Cesium canvas reflow, and reflowing a WebGL canvas
+   mid-broadcast is a visible resize flash. */
+body.is-presenting #topbar,
+body.is-presenting #hud,
+body.is-presenting #toolstrip,
+body.is-presenting #feedstrip,
+body.is-presenting #ticker,
+body.is-presenting #history-strip,
+body.is-presenting #alerts-panel,
+body.is-presenting #compass,
+body.is-presenting #panel {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* The vignette is scenery, not chrome, but at broadcast size it reads as a
+   dirty lens. */
+body.is-presenting #overlay-vignette { opacity: 0.35; }
+
+#present-exit {
+  position: absolute; top: 14px; right: 16px; z-index: 40;
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px 5px 10px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  backdrop-filter: blur(8px);
+  /* Recedes on its own so it is not in the frame, and comes back the moment
+     the pointer moves. */
+  opacity: 0.12;
+  transition: opacity 220ms var(--ease-out);
+}
+#present-exit:hover,
+body.is-pointing #present-exit { opacity: 1; }
+#present-exit.hidden { display: none; }
+.pe-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--bad);
+  box-shadow: 0 0 6px var(--bad);
+}
+.pe-txt {
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); color: var(--text-dim);
+}
+#present-exit .tool-btn {
+  border: 1px solid var(--panel-border);
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-tight);
+}
