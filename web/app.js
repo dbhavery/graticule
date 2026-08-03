@@ -5381,6 +5381,74 @@ const FIELD_DEFS = {
             [1013,'#facc15'],[1025,'#f97316'],[1040,'#dc2626']],
     ticks: ['980','1000','1013','1025','1040'],
   },
+
+  /* ---- Mesoanalysis -------------------------------------------------------
+     The parameters a severe-weather forecaster reads together with CAPE. Two
+     of them are not variables Open-Meteo serves, they are derived here; both
+     say so in their `note`, because a derived approximation presented as a
+     model output is the kind of thing that gets believed.
+
+     SRH, SCP and STP are deliberately absent. All three need a storm motion
+     vector, which needs a wind profile Open-Meteo's free tier does not
+     expose. Inventing one would produce numbers that look like the SPC
+     mesoanalysis and are not. */
+  convective_inhibition: {
+    label: 'CIN', unit: 'J/kg', legend: 'CIN',
+    // Read backwards from the others: high CIN is a LID, so the alarming end
+    // of this ramp is the calm end of CAPE's.
+    stops: [[0,'#7f1d1d'],[25,'#dc2626'],[50,'#f97316'],[100,'#facc15'],
+            [200,'#22c55e'],[400,'#0ea5e9'],[800,'#0f172a']],
+    ticks: ['0','50','100','200','400','800'],
+  },
+  lifted_index: {
+    label: 'Lifted Index', unit: '°C', legend: 'LIFTED INDEX', dp: 1,
+    stops: [[-10,'#a21caf'],[-8,'#dc2626'],[-5,'#f97316'],[-2,'#facc15'],
+            [0,'#22c55e'],[4,'#0ea5e9'],[10,'#0f172a']],
+    ticks: ['-8','-5','-2','0','4','10'],
+  },
+  dew_point_2m: {
+    label: '2 m Dewpoint', unit: '°F', legend: 'DEWPOINT',
+    stops: [[0,'#7c3aed'],[20,'#3b82f6'],[40,'#22d3ee'],[55,'#22c55e'],
+            [65,'#facc15'],[72,'#f97316'],[80,'#dc2626']],
+    ticks: ['20','40','55','65','72','80'],
+  },
+  bulk_shear: {
+    label: 'Deep-layer shear', unit: 'mph', legend: 'BULK SHEAR',
+    vars: ['wind_speed_10m', 'wind_direction_10m',
+           'wind_speed_500hPa', 'wind_direction_500hPa'],
+    // Vector difference between the 500 hPa and 10 m winds. 500 hPa sits near
+    // 5.5 km, so this stands in for 0-6 km bulk shear; it is not the same
+    // quantity and the panel note says so.
+    derive: (c, _u) => {
+      const rad = Math.PI / 180;
+      // Meteorological direction is where the wind comes FROM.
+      const u0 = -c.wind_speed_10m * Math.sin(c.wind_direction_10m * rad);
+      const v0 = -c.wind_speed_10m * Math.cos(c.wind_direction_10m * rad);
+      const u5 = -c.wind_speed_500hPa * Math.sin(c.wind_direction_500hPa * rad);
+      const v5 = -c.wind_speed_500hPa * Math.cos(c.wind_direction_500hPa * rad);
+      return Math.hypot(u5 - u0, v5 - v0);
+    },
+    note: 'derived: 500 hPa minus 10 m wind vector, a stand-in for 0-6 km shear',
+    stops: [[0,'#0f172a'],[20,'#0ea5e9'],[35,'#22c55e'],[50,'#facc15'],
+            [65,'#f97316'],[80,'#dc2626'],[100,'#a21caf']],
+    ticks: ['0','20','35','50','65','80'],
+  },
+  freezing_level_height: {
+    label: 'Freezing level', unit: 'kft', legend: 'FREEZING LEVEL', dp: 1,
+    vars: ['freezing_level_height'],
+    /* Hail forecasting is done in thousands of feet. The conversion reads the
+       unit off the response rather than assuming one, because Open-Meteo
+       silently switches THIS field to feet when precipitation_unit=inch is
+       set -- a parameter about rainfall depth changing the unit of a height.
+       Assuming metres put the freezing level at 46-58 kft, above the
+       tropopause, which is the only reason it was caught. */
+    derive: (c, u) => (u && u.freezing_level_height === 'm')
+      ? c.freezing_level_height / 304.8
+      : c.freezing_level_height / 1000,
+    stops: [[0,'#7c3aed'],[5,'#3b82f6'],[9,'#22d3ee'],[12,'#22c55e'],
+            [15,'#facc15'],[18,'#f97316'],[22,'#dc2626']],
+    ticks: ['0','5','9','12','15','18'],
+  },
 };
 
 const AQI_STOPS = [[0,'#22c55e'],[50,'#facc15'],[100,'#f97316'],
@@ -5455,6 +5523,11 @@ function isFrontFacing(lon, lat) {
 
 let modelDS = null;
 let _modelBusy = false;
+// A field change while a fetch is in flight used to return early and never
+// re-run, so the select showed CIN while the map still showed temperature:
+// chrome lying about state. The request is coalesced instead -- at most one
+// re-run is queued, because the user only ever wants the field they landed on.
+let _modelPending = false;
 
 function toggleModelField(on) {
   if (!modelDS) {
@@ -5467,7 +5540,8 @@ function toggleModelField(on) {
 }
 
 async function refreshModelField() {
-  if (!modelDS || !modelDS.show || _modelBusy) return;
+  if (!modelDS || !modelDS.show) return;
+  if (_modelBusy) { _modelPending = true; return; }
   _modelBusy = true;
   const noteEl = document.getElementById('model-note');
   try {
@@ -5478,9 +5552,11 @@ async function refreshModelField() {
     const lat = pts.map((p) => p[0]).join(',');
     const lon = pts.map((p) => p[1]).join(',');
 
+    // A derived field needs several variables; a plain one needs itself.
+    const wanted = (def.vars || [fieldKey]).join(',');
     const params = new URLSearchParams({
       latitude: lat, longitude: lon,
-      current: fieldKey,
+      current: wanted,
       models: OM_MODELS[modelKey] || 'gfs_seamless',
       temperature_unit: 'fahrenheit',
       wind_speed_unit: 'mph',
@@ -5496,7 +5572,14 @@ async function refreshModelField() {
     modelDS.entities.removeAll();
     let shown = 0;
     for (const d of data) {
-      const v = d && d.current ? d.current[fieldKey] : null;
+      const cur = d && d.current;
+      let v = null;
+      if (cur) {
+        v = def.derive ? def.derive(cur, d.current_units) : cur[fieldKey];
+        // A derive() over a missing variable yields NaN, and NaN paints as
+        // the bottom of the ramp rather than as absent.
+        if (!Number.isFinite(v)) v = null;
+      }
       if (v == null) continue;
       // Open-Meteo can return an error object without coordinates for a point
       // it rejects. fromDegrees(undefined, undefined) yields a NaN position,
@@ -5512,7 +5595,8 @@ async function refreshModelField() {
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
-          text: fieldKey === 'precipitation' ? v.toFixed(2) : String(Math.round(v)),
+          text: v.toFixed(def.dp != null ? def.dp
+                          : (fieldKey === 'precipitation' ? 2 : 0)),
           font: '600 11px Inter, sans-serif',
           fillColor: Cesium.Color.WHITE,
           outlineColor: Cesium.Color.BLACK,
@@ -5526,14 +5610,19 @@ async function refreshModelField() {
     }
     applyLegendForField(def);
     if (noteEl) {
-      noteEl.textContent =
-        `${def.label} · ${modelKey.toUpperCase()} · ${shown} points. Re-samples on view change.`;
+      noteEl.textContent = def.note
+        ? `${def.label} · ${modelKey.toUpperCase()} · ${shown} points · ${def.note}`
+        : `${def.label} · ${modelKey.toUpperCase()} · ${shown} points. Re-samples on view change.`;
     }
     viewer.scene.requestRender();
   } catch (err) {
     if (noteEl) noteEl.textContent = `Model field unavailable: ${err.message}`;
   } finally {
     _modelBusy = false;
+    if (_modelPending) {
+      _modelPending = false;
+      refreshModelField();
+    }
   }
 }
 
