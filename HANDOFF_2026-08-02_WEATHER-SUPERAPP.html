@@ -1,0 +1,423 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>HANDOFF 2026-08-02 WEATHER-SUPERAPP</title><style>
+:root{--bg:#121417;--panel:#181b1f;--fg:#e6e8ea;--muted:#9aa0a6;--accent:#ff5e00;
+--code:#0e1013;--border:#262a2f;--warn:#ffb020}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+line-height:1.6;max-width:56rem;margin:0 auto;padding:2.5rem 1.5rem 6rem;font-size:16px}
+h1{font-size:1.7rem;line-height:1.25;border-bottom:2px solid var(--accent);padding-bottom:.4rem;margin:1.6rem 0 1rem}
+h2{font-size:1.3rem;margin:2rem 0 .6rem;color:#fff;border-bottom:1px solid var(--border);padding-bottom:.3rem}
+h3{font-size:1.08rem;margin:1.4rem 0 .4rem;color:var(--accent)}
+p{margin:.55rem 0}
+a{color:#6db3ff}
+strong{color:#fff}
+code{background:var(--code);border:1px solid var(--border);border-radius:4px;padding:.08em .35em;
+font-family:Consolas,Menlo,monospace;font-size:.9em}
+pre{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:.9rem 1.1rem;
+overflow:auto;margin:.8rem 0}
+pre code{background:none;border:none;padding:0;font-size:.86rem;line-height:1.5;color:#d7dbe0}
+ul,ol{margin:.5rem 0 .9rem;padding-left:1.5rem}
+li{margin:.3rem 0}
+blockquote{border-left:3px solid var(--accent);margin:.8rem 0;padding:.3rem 0 .3rem 1rem;color:var(--muted)}
+hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+.warn{color:var(--warn)}
+</style></head><body><h1>Graticule — Session Handoff (2026-08-02)</h1>
+<blockquote><strong>Session:</strong> 2026-08-02, single session.</blockquote>
+<blockquote><strong>Repo state:</strong> branch <code>dev</code>, working tree <strong>clean</strong>.</blockquote>
+<blockquote><strong>Tip:</strong> <code>5458c60 [FIX] Cities layer crashed the renderer; guard NaN positions; cluster colour</code></blockquote>
+<blockquote><strong>Pushed:</strong> yes — <code>origin/dev</code> = <code>5458c60</code> at github.com/dbhavery/graticule</blockquote>
+<blockquote><strong>Base this session branched from:</strong> <code>da2d4fc [repo] add LICENSE, CI, fix em-dash in description</code></blockquote>
+<blockquote><strong>Server:</strong> was running on port 8731 at writeup time. Kill with the port recipe below.</blockquote>
+<blockquote></blockquote>
+<blockquote><strong>Read order for the next agent:</strong> this file top-to-bottom, then</blockquote>
+<blockquote>file:///C:/Users/dbhav/Projects/graticule/issues.md (two open defects, one</blockquote>
+<blockquote>with a fix sketch). <code>HANDOFF.md</code> and <code>HANDOFF_2026-05-02_GRATICULE.md</code> are</blockquote>
+<blockquote><strong>HISTORICAL</strong> — they predate the rename from Cupola and describe a UI that</blockquote>
+<blockquote>no longer exists. Do not trust them for current state.</blockquote>
+<hr>
+<h2>TL;DR</h2>
+<p>Don asked for three things, sourced from two YouTube videos he supplied:</p>
+<ol>
+<li>Make the Earth <strong>completely realistic</strong> — real-time sun and moon, day/night,</li>
+</ol>
+<p>   toggleable weather clouds. He called this &quot;the main part of the app&quot;.</p>
+<ol>
+<li><strong>Stay centred on North America</strong> with the sunlight and darkness rotating in</li>
+</ol>
+<p>   real time around it.</p>
+<ol>
+<li><strong>Everything toggled in tabs</strong>, and rework the UI to look like high-end</li>
+</ol>
+<p>   weather apps. Verbatim: *&quot;Graticule looks too cheap and amateurish. We need</p>
+<p>   to step this up to pro level.&quot;*</p>
+<p>Plus: &quot;add every option in these videos that we do not already have.&quot;</p>
+<p>Six commits, +2,850/−109 lines across 6 files. All three delivered. Four</p>
+<p>pre-existing bugs found and fixed along the way, including one that meant</p>
+<p><strong>radar imagery had never rendered in this app</strong> and one that **crashed the</p>
+<p>renderer outright**.</p>
+<pre><code>5458c60  [FIX] Cities layer crashed the renderer; guard NaN positions; cluster colour
+f27d195  [WX]  Fix single-site radar URL, dedupe layer toggles, detail panels
+da9c901  [WX]  Local storm reports, drawing tools, map theme picker
+7595d96  [WX]  Real weather data: models, obs, AQI, NWS warning cards, GOES
+a92f205  [UI]  Tabbed pro rework + radar timeline, legend, SPC outlooks, WORLD tab
+ebe6be0  [EARTH] Realistic Earth: real-time sun, moon, night lights, NA lock</code></pre>
+<hr>
+<h2>The source material</h2>
+<p>Both videos were watched in full. Transcripts and frames are in the session</p>
+<p>scratchpad (ephemeral); the durable extraction is below.</p>
+<h3>Video 1 — StormCat5, &quot;I Tested Every Major Weather Radar App to Find the Best One&quot; (25 min)</h3>
+<p><a href="https://www.youtube.com/watch?v=W4Qg0_vxKiE">https://www.youtube.com/watch?v=W4Qg0_vxKiE</a></p>
+<p>Scores out of 10: **Weatherfront 9.25 · WeatherWise 9 · RadarScope 8 · Radar</p>
+<p>Omega 8 · MyRadar 7 · GR Earth/Analyst 7 · Weather Channel 5.**</p>
+<p>His comparison chart (23:44) is the canonical capability list — eight rows:</p>
+<p>| Row | Graticule status after this session |</p>
+<p>|---|---|</p>
+<p>| National Radar | <strong>done</strong> (now actually renders; see Bug 1) |</p>
+<p>| Local Hi-Res Radar | <strong>done</strong> — 30 NEXRAD sites, reflectivity + velocity |</p>
+<p>| Satellite | <strong>done</strong> — GOES-East/West vis/IR/WV + global true colour |</p>
+<p>| Warnings | <strong>done</strong> — RadarScope-style cards + polygons |</p>
+<p>| Storm Chaser Feeds | <strong>not possible</strong> — requires per-chaser partnerships |</p>
+<p>| Weather Models | <strong>done</strong> — GFS/HRRR/NAM/ECMWF/ICON via Open-Meteo |</p>
+<p>| Webcams | <strong>key-gated</strong> — Windy needs <code>WINDY_WEBCAM_KEY</code> |</p>
+<p>| Custom Graphics | <strong>not started</strong> — see Open Items |</p>
+<p>Layer lists pulled from the app UIs in the video, used to drive scope:</p>
+<ul>
+<li><strong>MyRadar:</strong> Winds, Temperatures, Clouds, Weather Alerts, Outlooks, Hurricane</li>
+</ul>
+<p>  Tracker, Fronts, Road Weather, Air Quality, Aviation, Orbital Tracking,</p>
+<p>  Storm Chasers/Live Cameras, Earthquakes, Wildfires, Power Outages. Each row</p>
+<p>  is a toggle <strong>plus a gear</strong> for per-layer settings.</p>
+<ul>
+<li><strong>GR Earth:</strong> globe view, layer checkboxes (SPC/Watch/GOES/Meso/Radar/METAR/</li>
+</ul>
+<p>  Lightning/Warning/Watch/Spotters), radar products (BR QC, CR QC, HSR, MEHS,</p>
+<p>  ROT, QPE 1hr/12hr, LTNG 30m), METAR selectors, and a large mesoanalysis grid</p>
+<p>  (SBCAPE/MUCAPE/MLCAPE/CIN/LCL/LFC/EBWD/SRH/ESRH/SCP/STP/2mT/850T/700VV/500RV).</p>
+<ul>
+<li><strong>RadarScope Pro:</strong> left warnings list with rich cards (type, &quot;expires in</li>
+</ul>
+<p>  18m&quot;, counties, <code>Hail: &lt;.75&quot;</code>, <code>Wind: 60 mph</code>, <code>Tornado: Possible</code>), product</p>
+<p>  header <code>KRAX — Raleigh-Durham, NC / VCP 212</code>, tilt selector, dBZ bar across</p>
+<p>  the bottom, single/dual/quad pane buttons, drawing.</p>
+<ul>
+<li><strong>Radar Omega:</strong> &quot;Single Site&quot; dropdown, <code>VCP 212: Precip Mode</code> badge,</li>
+</ul>
+<p>  <code>19 ALERTS</code> chip, camera popups with live sensor readouts and trend charts,</p>
+<p>  weather models, drawing, elevation/tilt.</p>
+<ul>
+<li><strong>Weatherfront (winner):</strong> left panel with Data | NWS Alerts tabs, chip row</li>
+</ul>
+<p>  (Radar/Model/Satellite/Observations/Outlooks/Mapping), dropdowns</p>
+<p>  (<code>SATELLITE: GOES-East</code>, <code>VIEW: Full Disk</code>), collapsible groups (ABI</p>
+<p>  Channels, RGB Products → Color Composites / Atmospheric / Fire), model panel</p>
+<p>  with <code>MODEL</code>/<code>INIT TIME</code>/<code>FORECAST HOUR</code> plus Single | Compare Runs | Compare</p>
+<p>  Models, timeline scrubber with forecast-hour ticks, timestamp chip top-left,</p>
+<p>  colour bar right. Broadcast build adds presentation mode, custom map styles,</p>
+<p>  county selection and area darkening.</p>
+<p><strong>The UI shape adopted for Graticule comes from Weatherfront</strong>, because it</p>
+<p>scored highest and its layout generalises: tabs → mode chips → contextual</p>
+<p>controls, with a transport timeline and a persistent colour scale.</p>
+<h3>Video 2 — LiveStream07, &quot;World Population Reaches 8.3 Billion People!&quot; (8.7 min)</h3>
+<p><a href="https://www.youtube.com/watch?v=D1GZq1qiVHU">https://www.youtube.com/watch?v=D1GZq1qiVHU</a></p>
+<p><strong>Music only — no narration.</strong> Every frame is the same static dashboard; only</p>
+<p>the numbers tick. All information is visual, extracted from frames.</p>
+<p>Content: giant rolling world-population odometer with a pulsing <code>LIVE</code> badge;</p>
+<p>TODAY panel (births/deaths/growth); THIS YEAR panel; CONTINENT ranks; BIG</p>
+<p>RELIGION ranks; POPULATION NEXT MILESTONE with 30s/1m/2m/5m/10m/20m columns and</p>
+<p><code>ACHIEVED</code> states; TOP 15 COUNTRIES and REST OF COUNTRIES with up/down delta</p>
+<p>arrows and flags; UTC timestamp footer.</p>
+<blockquote><strong>★ Process note.</strong> I used <code>AskUserQuestion</code> to check whether a silent video</blockquote>
+<blockquote>was really in scope. Don&#x27;s reply: *&quot;I know the world population does not have</blockquote>
+<blockquote>narration, but it has visuals, it has data. It has things I want you to</blockquote>
+<blockquote>include in the app. That&#x27;s why I told you to watch them.&quot;*</blockquote>
+<blockquote>Media Don hands over is in scope because of <strong>what is on screen</strong>. Do not ask.</blockquote>
+<blockquote>Captured as memory <code>feedback-shared-media-is-in-scope-for-its-visuals</code>.</blockquote>
+<hr>
+<h2>What shipped</h2>
+<h3>1. Realistic Earth — <code>ebe6be0</code></h3>
+<p><strong>Why it looked cheap:</strong> <code>viewer.clock</code> was never animated, so Cesium&#x27;s sun</p>
+<p>vector never moved, and <code>globe.enableLighting</code> defaulted to <code>false</code>. The result</p>
+<p>was a uniformly lit plastic sphere. The old &quot;Day/Night&quot; layer was a **dashed</p>
+<p>polyline drawn on top of that** — a cosmetic annotation, not real shading.</p>
+<p><strong>Now,</strong> in <code>initRealisticEarth()</code> (web/app.js):</p>
+<ul>
+<li><code>clock.clockStep = SYSTEM_CLOCK</code>, <code>shouldAnimate = true</code> → terminator sweeps</li>
+</ul>
+<p>  at a true 15°/hour, matching real UTC to the second.</p>
+<ul>
+<li><code>globe.enableLighting</code>, <code>dynamicAtmosphereLighting</code>,</li>
+</ul>
+<p>  <code>dynamicAtmosphereLightingFromSun</code>, widened <code>atmosphereBrightnessShift</code> for a</p>
+<p>  realistic dusk band rather than Cesium&#x27;s hard ~1px cut.</p>
+<ul>
+<li>VIIRS city lights via <code>dayAlpha = 0 / nightAlpha = 1</code> — glow on the night</li>
+</ul>
+<p>  hemisphere only.</p>
+<ul>
+<li><code>scene.moon</code> with true ephemeris position and phase, <code>skyBox</code> stars,</li>
+</ul>
+<p>  <code>highDynamicRange</code>, lens-flare post-process stage.</p>
+<ul>
+<li>Telemetry bar gained <strong>SUN</strong> (subsolar lat/lon) and <strong>MOON</strong> (phase glyph,</li>
+</ul>
+<p>  name, % illuminated). Sun position comes from the same ephemeris that drives</p>
+<p>  the lighting, so the readout and the shading cannot disagree.</p>
+<ul>
+<li>All of it defaults <strong>on</strong> — realism is not an opt-in buried in Settings.</li>
+</ul>
+<p><strong>North America lock</strong> — <code>applyNorthAmericaLock()</code>. This works only because</p>
+<p>Cesium renders in an earth-fixed frame: continents are nailed to the globe and</p>
+<p>the *sun* moves, so holding the camera costs nothing. Guards: re-centres only</p>
+<p>after 12 s of no interaction, only above 3 Mm altitude, only past 12° drift.</p>
+<p><code>idleRotateSec</code> now defaults to <code>0</code> — auto-rotate and the NA lock fight</p>
+<p>otherwise.</p>
+<h3>2. Tabbed pro UI — <code>a92f205</code></h3>
+<ul>
+<li>Left rail is tabbed <strong>WEATHER / EARTH / SKY / WORLD</strong> (<code>initTabs()</code>),</li>
+</ul>
+<p>  replacing a flat 12-category accordion. Selected tab persists to</p>
+<p>  <code>localStorage[&#x27;graticule.tab&#x27;]</code>.</p>
+<ul>
+<li>Weather tab has mode chips: Radar / Satellite / Model / Observations /</li>
+</ul>
+<p>  Outlooks, each swapping a <code>.mode-body</code>.</p>
+<ul>
+<li>New primitives in <code>style.css</code>: <code>.hud-tab</code>, <code>.chip</code>, <code>.sw</code> toggle switches,</li>
+</ul>
+<p>  <code>.ctl</code> labelled control rows, <code>#timeline</code>, <code>#legend</code>, <code>#frame-stamp</code>,</p>
+<p>  <code>#drawbar</code>, <code>.warn-card</code>, <code>.wp-*</code> world panel.</p>
+<ul>
+<li>Range inputs restyled — the UA default was rendering <strong>bright red</strong>.</li>
+</ul>
+<h3>3. Radar as a frame series — <code>a92f205</code></h3>
+<p><code>TL</code> object owns the loop. One <code>ImageryLayer</code> per frame, cross-faded by alpha</p>
+<p>(add/remove per tick caused a visible black flash). Past frames and RainViewer</p>
+<p>nowcast frames sit on one track with an explicit <strong>NOW</strong> marker, because the</p>
+<p>video singles out weather.com for making past-vs-future ambiguous. Frame stamp</p>
+<p>reads <code>RADAR · OBSERVED</code> or <code>RADAR · FORECAST</code>.</p>
+<h3>4. Real weather data — <code>7595d96</code>, <code>da9c901</code></h3>
+<p>All keyless. Backend proxies exist only where CORS forces it.</p>
+<p>| Feature | Source | Where |</p>
+<p>|---|---|---|</p>
+<p>| Model fields | Open-Meteo <code>/v1/forecast</code> | <code>refreshModelField()</code> |</p>
+<p>| Air quality | Open-Meteo <code>/v1/air-quality</code> | <code>refreshAirQuality()</code> |</p>
+<p>| METAR | aviationweather.gov | proxy <code>/api/metar</code> |</p>
+<p>| NWS warnings | api.weather.gov | proxy <code>/api/nws/alerts</code> |</p>
+<p>| SPC outlooks | spc.noaa.gov | proxy <code>/api/spc/outlook?day=N</code> |</p>
+<p>| Storm reports | IEM <code>/geojson/lsr.py</code> | proxy <code>/api/lsr?hours=N</code> |</p>
+<p>| GOES | IEM <code>goes-{east,west}-*</code> | <code>rebuildCloudsLayer()</code> |</p>
+<p>| Single-site radar | IEM <code>ridge::&lt;SITE&gt;-&lt;PROD&gt;-0</code> | <code>rebuildRadarSiteLayer()</code> |</p>
+<p>Model and AQI sample a grid over the <strong>current view</strong> (<code>viewGrid()</code>), filtered</p>
+<p>to the visible hemisphere by <code>isFrontFacing()</code>, and re-sample debounced on</p>
+<p><code>camera.moveEnd</code>. Open-Meteo takes comma-separated coordinate lists, so a whole</p>
+<p>field is one request.</p>
+<p>Warning cards carry event, expiry countdown, counties, and detection details</p>
+<p>(hail size, gust, tornado/flash-flood detection), colour-coded by event type,</p>
+<p>click-to-zoom. <strong>All</strong> active alerts are listed; only the ~10% carrying a</p>
+<p>polygon are drawn, and zone-only cards are marked <code>.is-zone</code> and inert.</p>
+<h3>5. WORLD tab — <code>a92f205</code></h3>
+<p>Video 2&#x27;s dashboard. <code>WORLD_BASE</code>, <code>CONTINENTS</code>, <code>COUNTRIES</code> seeded from **UN</p>
+<p>World Population Prospects 2024 (medium variant), mid-2025**, with published</p>
+<p>growth rates; <code>project()</code> compounds from a fixed epoch (<code>WPP_EPOCH</code>).</p>
+<p><code>BIRTHS_PER_SEC = 4.24</code>, <code>DEATHS_PER_SEC = 2.51</code>.</p>
+<p>There is <strong>no public real-time population feed</strong> — the dashboards that appear</p>
+<p>to have one are extrapolating a projection, and so is this. The pane says so in</p>
+<p><code>renderWorldStatic()</code>. Cross-checked against the video at the same timestamp:</p>
+<p>India 1,478,101,547 (video 1,478,077,472), China 1,412,551,550 (video</p>
+<p>1,412,691,390), US 349,343,925 (video 349,381,176) — within ~0.01%.</p>
+<h3>6. Drawing, themes, storm reports — <code>da9c901</code></h3>
+<p>Free-hand annotation clamped to the globe with undo/clear/colour-cycle. Camera</p>
+<p>control yields while drawing or a stroke drags the globe underneath it; finished</p>
+<p>strokes are frozen out of their <code>CallbackProperty</code> rather than re-evaluating</p>
+<p>forever. Map theme picker (SAT/MAP/TOPO/NIGHT) surfaced on the map, synced with</p>
+<p>the existing <code>imageryBase</code> setting. Compass moved to <code>top: 112px</code> to clear the</p>
+<p>new toolbar.</p>
+<hr>
+<h2>Bugs found and fixed — all pre-existing</h2>
+<h3>Bug 1 — radar imagery had never rendered</h3>
+<p>RainViewer&#x27;s <code>path</code> field <strong>already contains</strong> <code>/v2/radar/&lt;id&gt;</code>. The code built</p>
+<p><code>${host}/v2/radar/${path}/…</code>, producing <code>/v2/radar//v2/radar/&lt;id&gt;/…</code>. Every</p>
+<p>radar tile 404&#x27;d, silently, forever. Same fault on the satellite path. Fixed to</p>
+<p><code>${host}${path}</code>. Verified 32/32 tiles load. **This means no screenshot or</p>
+<p>handoff before today showing &quot;radar working&quot; was accurate.**</p>
+<h3>Bug 2 — Cities layer crashed the renderer</h3>
+<p>Enabling Cities alone threw `RangeError: Failed to set the &#x27;length&#x27; property on</p>
+<p>&#x27;Array&#x27;: Invalid array length<code> from </code>createPotentiallyVisibleSet`, and Cesium</p>
+<p><strong>stopped rendering</strong>.</p>
+<p>Root cause: Cesium builds one glyph texture atlas per <code>LabelCollection</code> and</p>
+<p>allocates <strong>eagerly, ignoring <code>distanceDisplayCondition</code></strong>. All 7,342 populated</p>
+<p>places were created with label text and overflowed it. Measured threshold:</p>
+<p>1,000 labels fine, 3,000 crash.</p>
+<p>Ruled out first, so nobody re-walks these: coordinates (all 7,342 finite and in</p>
+<p>range), empty label strings, <code>distanceDisplayCondition</code>, <code>translucencyByDistance</code>.</p>
+<p>Fix: every city keeps a point; labels exist on all of them but carry text only</p>
+<p>for a working set of <code>CITY_LABEL_CAP = 900</code>, ranked by scalerank then</p>
+<p>population and filtered to those in range at the current camera altitude, via</p>
+<p><code>relabelCities()</code> debounced on <code>camera.moveEnd</code>. Verified 41 labels at globe</p>
+<p>view, 900 at regional, clean at every zoom.</p>
+<blockquote><strong>★ Detection lesson.</strong> Cesium catches render exceptions into its own</blockquote>
+<blockquote><code>.cesium-widget-errorPanel</code> and they never reach <code>window.onerror</code>. My</blockquote>
+<blockquote>automated regression printed <code>ERRORS: none</code> across 27 layers **while the app</blockquote>
+<blockquote>was frozen on screen**; only the screenshot caught it. Any Graticule test</blockquote>
+<blockquote>must hook <code>viewer.scene.renderError</code> and check for the panel. Captured as</blockquote>
+<blockquote>memory <code>reference-cesium-render-errors-are-invisible</code>.</blockquote>
+<h3>Bug 3 — duplicate layer toggles</h3>
+<p><code>hurricanes</code> and <code>airspace</code> each had two checkboxes in different panes, and</p>
+<p>airspace shipped a duplicate <code>id=&quot;count-airspace&quot;</code>. The two copies could</p>
+<p>disagree about state. Tropical now lives in Outlooks, airspace in SKY.</p>
+<h3>Bug 4 — <code>configureClustering</code> colour contract (mine)</h3>
+<p>It accepted only a <code>Cesium.Color</code>; passing a CSS string (as my new METAR layer</p>
+<p>did) threw from inside the cluster event and likewise stopped rendering. Now</p>
+<p>accepts either. Also added <code>Number.isFinite</code> guards before every</p>
+<p><code>fromDegrees()</code> on external data — Open-Meteo can return a point object with no</p>
+<p>lat/lon, and a NaN position corrupts the same frustum computation.</p>
+<hr>
+<h2>Upstream traps — every one cost real time</h2>
+<ul>
+<li><strong><code>VIIRS_Black_Marble</code> is not a served GIBS layer.</strong> 400s on every tile. The</li>
+</ul>
+<p>  night-lights product is <code>VIIRS_CityLights_2012</code>, date segment <code>2012-01-01</code>.</p>
+<ul>
+<li><strong>GIBS EPSG:4326 <code>500m</code> is not a power-of-two grid</strong> (levels are 2, 3, 5,</li>
+</ul>
+<p>  10 … tiles wide) so it *cannot* be addressed with <code>GeographicTilingScheme</code>.</p>
+<p>  Use EPSG:3857 <code>GoogleMapsCompatible</code> + <code>WebMercatorTilingScheme</code>.</p>
+<ul>
+<li><strong>RainViewer caps at z7</strong> — set <code>maximumLevel: 7</code>.</li>
+<li><strong>IEM per-site radar is <code>ridge::KTLX-N0Q-0</code></strong>, not <code>KTLX-N0Q</code>. N0Q/N0U/N0B</li>
+</ul>
+<p>  return 200; N0G returns 503. Bound the layer to a rectangle around the site</p>
+<p>  (~5°) or Cesium requests it worldwide and everything outside the ~460 km</p>
+<p>  range 404s.</p>
+<ul>
+<li><strong>aviationweather.gov bbox is <code>lat0,lon0,lat1,lon1</code>.</strong> Lon-first returns</li>
+</ul>
+<p>  <strong>204 No Content</strong>, which then fails JSON decoding rather than erroring</p>
+<p>  usefully.</p>
+<ul>
+<li><strong>api.weather.gov rejects <code>limit</code></strong> as unrecognised. Needs a <code>User-Agent</code>.</li>
+<li><strong><code>Cesium.Color.lerp</code> is a static</strong>, not an instance method.</li>
+<li><strong><code>computeViewRectangle</code> spans more than the visible hemisphere</strong> at globe</li>
+</ul>
+<p>  scale — grid samples need a front-facing test or they float past the limb.</p>
+<ul>
+<li><strong>No free source exists</strong> for lightning (Vaisala/Blitzortung are commercial),</li>
+</ul>
+<p>  webcams (Windy needs a key), road weather, power outages, or SPC</p>
+<p>  mesoanalysis rasters. Don&#x27;t hunt.</p>
+<hr>
+<h2>File map</h2>
+<pre><code>web/app.js          5,383 lines  (+1,970 this session)
+web/index.html        650 lines  (+312)
+web/style.css       1,487 lines  (+345)
+graticule/server.py   297 lines  (+164)
+issues.md              99 lines  (new)</code></pre>
+<p><strong>app.js regions</strong>, in file order:</p>
+<p><code>KIND_LABEL</code> + <code>SPC_RISK_LABEL</code> + <code>aqiCategory</code> (top) · <code>NA_HOME</code> const ·</p>
+<p><code>initViewer</code> (clock + <code>initRealisticEarth</code>) · <code>configureClustering</code> ·</p>
+<p><code>summarizeEntity</code> (hover) · night lights · terminator · parcels ·</p>
+<p><code>relabelCities</code> + <code>buildCities</code> · <code>showPanel</code> · settings binding ·</p>
+<p><code>applyNorthAmericaLock</code> · <code>initTabs</code> / timeline <code>TL</code> / legend / WORLD pane /</p>
+<p><code>initSkyMirrors</code> · weather controls + SPC · model/AQI/METAR/warnings +</p>
+<p><code>initViewResampling</code> · LSR / drawing / map theme (end of file).</p>
+<p><strong>Backend endpoints:</strong> <code>/api/snapshot</code>, <code>/api/config</code>, <code>/api/spc/outlook</code>,</p>
+<p><code>/api/metar</code>, <code>/api/nws/alerts</code>, <code>/api/lsr</code>. Each new one caches with a TTL and</p>
+<p><strong>serves stale on upstream failure</strong> rather than blanking the map mid-event.</p>
+<hr>
+<h2>How to run and verify</h2>
+<pre><code>cd C:/Users/dbhav/Projects/graticule
+uv run python main.py                      # pywebview window
+
+# browser-testable server (what all verification used):
+uv run python -c &quot;from graticule.server import run_server; run_server(8731)&quot;</code></pre>
+<p>Kill a stuck server (pkill does not catch <code>uv run python -c</code>):</p>
+<pre><code>netstat -ano | grep &quot;:8731&quot; | grep LISTENING | awk &#x27;{print $5}&#x27; | sort -u \
+  | while read pid; do powershell -Command &quot;Stop-Process -Id $pid -Force&quot;; done</code></pre>
+<p>Endpoint smoke test — all should be 200:</p>
+<pre><code>for ep in &quot;/&quot; &quot;/api/metar&quot; &quot;/api/nws/alerts&quot; &quot;/api/spc/outlook?day=1&quot; &quot;/api/lsr?hours=12&quot;; do
+  printf &quot;%-26s &quot; &quot;$ep&quot;; curl -s -o /dev/null -w &quot;%{http_code}\n&quot; &quot;http://127.0.0.1:8731$ep&quot;; done</code></pre>
+<p><strong>Crash detection harness</strong> — the important one. Hooks <code>scene.renderError</code>,</p>
+<p>because <code>pageerror</code> alone gives false confidence:</p>
+<pre><code>viewer.scene.renderError.addEventListener((s, e) =&gt; window.__renderErrors.push(String(e)));
+document.querySelector(&#x27;.cesium-widget-errorPanel&#x27;)   // non-null =&gt; dead scene</code></pre>
+<p><strong>Last full regression (at tip <code>5458c60</code>):</strong> 27 layers on simultaneously</p>
+<p>(everything except the two parcels layers), all four tabs cycled, all five</p>
+<p>weather modes, all satellite channels, all model fields, all obs fields, SPC</p>
+<p>days 1-3, all four themes, timeline play/pause/step, settings modal.</p>
+<p>Result: <strong>0 render errors, 0 JS errors</strong>, only the documented Cesium-ion 401.</p>
+<p>There is <strong>no automated test suite</strong> in this repo. Verification was</p>
+<p>Playwright-driven and ad-hoc. Building a persistent one is a good next job.</p>
+<hr>
+<h2>Open items</h2>
+<h3>In <code>issues.md</code> (read it — it has measurements and a fix sketch)</h3>
+<ol>
+<li><strong>Parcels layer stalls the UI ~45 s</strong> when run alongside a loaded scene.</li>
+</ol>
+<p>   <code>toggleParcelsUS</code> sets <code>minimumLevel: 14</code>; Cesium honours that floor at</p>
+<p>   globe zoom and tries to tile the whole visible globe at level 14. Measured:</p>
+<p>   legacy set minus parcels = 3 ms; with parcels = <strong>45,780 ms</strong>. Fix sketch:</p>
+<p>   attach/detach on camera altitude the way <code>parcels_wa</code> already does via</p>
+<p>   <code>initParcelsWACameraHook</code>. **Logged, not fixed — pre-existing and unrelated</p>
+<p>   to this task, per the Projects rule. Don has not yet said to fix it.**</p>
+<ol>
+<li><code>applyPerfPreset</code> advertises entity caps (&quot;Low — 2k ships · 2k planes&quot;) that</li>
+</ol>
+<p>   it never implements; it only tunes <code>maximumScreenSpaceError</code>.</p>
+<h3>Video features not built</h3>
+<ul>
+<li><strong>Custom Graphics</strong> (the only row Weatherfront had): presentation mode,</li>
+</ul>
+<p>  custom map styles, <strong>county area-darkening and county selection</strong>. The county</p>
+<p>  geometry is already in the repo — <code>ne_10m_admin_2_counties.zip</code>.</p>
+<ul>
+<li><strong>Dual / quad pane</strong> (RadarScope). Needs a second Cesium viewer; non-trivial.</li>
+<li><strong>Compare Runs / Compare Models</strong> (Weatherfront). Open-Meteo supports both</li>
+</ul>
+<p>  via <code>models=</code> lists and <code>past_days</code>, so this is the cheapest remaining win.</p>
+<ul>
+<li><strong>Mesoanalysis grid</strong> (GR Earth). CAPE is already available through the model</li>
+</ul>
+<p>  field; the full SPC parameter set has no keyless raster source.</p>
+<ul>
+<li><strong>Fronts.</strong> No usable free geojson found. WPC coded surface bulletin is text.</li>
+<li><strong>Per-layer gear settings</strong> (MyRadar pattern) — currently only radar, clouds</li>
+</ul>
+<p>  and boundaries have opacity controls.</p>
+<h3>Gated on Don</h3>
+<ul>
+<li><strong>Webcams</strong> need <code>WINDY_WEBCAM_KEY</code> in <code>.env</code>, following the existing</li>
+</ul>
+<p>  <code>FIRMS_MAP_KEY</code> / <code>AISSTREAM_KEY</code> pattern. UI says so.</p>
+<ul>
+<li><strong>Storm chaser feeds</strong> require per-chaser agreements. Not buildable.</li>
+<li>Setting <code>CESIUM_ION_TOKEN</code> would remove the boot 401 and enable ion terrain</li>
+</ul>
+<p>  and OSM Buildings (both currently disabled in the 3D pane).</p>
+<hr>
+<h2>Memory written this session</h2>
+<p>In <code>C:/Users/dbhav/.claude/projects/C--Users-dbhav-Projects/memory/</code>:</p>
+<ul>
+<li><code>project-graticule-weather-superapp-2026-08-02.md</code> — project state, indexed</li>
+</ul>
+<p>  from <code>MEMORY.md</code></p>
+<ul>
+<li><code>reference-graticule-free-weather-data-sources.md</code> — every verified endpoint</li>
+</ul>
+<p>  and URL trap above</p>
+<ul>
+<li><code>reference-cesium-render-errors-are-invisible.md</code> — the swallowed-render-error</li>
+</ul>
+<p>  lesson and the two Cesium faults that only surface that way</p>
+<ul>
+<li><code>feedback-shared-media-is-in-scope-for-its-visuals.md</code> — indexed from</li>
+</ul>
+<p>  <code>MEMORY_FEEDBACK.md</code></p>
+<hr>
+<h2>Starting prompt for the next session</h2>
+<blockquote>Graticule (<code>Projects/graticule</code>, branch <code>dev</code>, tip <code>5458c60</code>, pushed).</blockquote>
+<blockquote>Read <code>HANDOFF_2026-08-02_WEATHER-SUPERAPP.md</code> first, then <code>issues.md</code>.</blockquote>
+<blockquote><code>HANDOFF.md</code> and <code>HANDOFF_2026-05-02_GRATICULE.md</code> are historical and</blockquote>
+<blockquote>describe a UI that no longer exists.</blockquote>
+<blockquote>Start the browser-testable server with</blockquote>
+<blockquote><code>uv run python -c &quot;from graticule.server import run_server; run_server(8731)&quot;</code>.</blockquote>
+<blockquote>Any UI verification must hook <code>viewer.scene.renderError</code> — Cesium hides</blockquote>
+<blockquote>render crashes from <code>pageerror</code> and a passing console check means nothing.</blockquote></body></html>

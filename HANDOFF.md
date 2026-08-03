@@ -1,5 +1,15 @@
 # Cupola — Session Handoff (2026-05-02)
 
+> **HISTORICAL — DO NOT TRUST FOR CURRENT STATE.** Superseded by
+> `HANDOFF_2026-08-02_WEATHER-SUPERAPP.md`. This file predates the
+> Cupola-to-Graticule rename and the 2026-08-02 weather rework, and
+> describes a UI (flat layer accordion, no tabs) that no longer exists.
+> Radar screenshots in here were never real: the tile URL was
+> double-prefixed and every radar tile 404'd until 2026-08-02.
+
+---
+
+
 > **Session:** 2026-05-01 → 2026-05-02 (overnight)
 > **Repo state:** branch `dev` clean, working tree clean.
 > **Tip:** `2448a4a rename: Overwatch → Cupola`
