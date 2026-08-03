@@ -348,6 +348,19 @@ const GFX = {
   ready: false,            // gate: this module's consts evaluate at EOF
 };
 let countriesBuilt = false, statesBuilt = false, airspaceBuilt = false, citiesBuilt = false;
+/* Raw feed rows per layer, id -> data, kept whether or not the layer is drawn.
+   This is the store the scene is BUILT FROM, not a cache of it.
+
+   Before it existed, every snapshot built a Cesium Entity for every row of
+   every layer the moment the socket delivered it. Measured at boot with
+   nothing switched on: 8,974 entities -- 5,272 airports, 1,352 satellites,
+   1,196 volcanoes, 771 quakes -- all with show=false, costing 4.1 seconds of
+   blocked main thread before the user had touched anything, plus a permanent
+   place in every scene-graph traversal for as long as the tab was open.
+
+   Entities are now built when a layer is switched on and thrown away when it
+   is switched off; the counts and the alerts panel read this instead. */
+const layerData = {};
 const feedActivity = {};   // layer -> last update timestamp (ms)
 const recentEvents = [];   // ticker entries (newest first)
 const TICKER_MAX = 6;
@@ -375,6 +388,7 @@ const TICKER_MAX = 6;
   initPanes();
   initGraphics();
   initScenes();
+  initDynamicLod();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -441,9 +455,12 @@ async function initViewer() {
   // applyImageryBase honors settings.imageryBase, falls back to satellite, and
   // tracks the layer so the picker can swap it later.
   await applyImageryBase(settings.imageryBase || 'satellite');
-  // Allow Cesium to over-zoom past native level (interpolated, lossy but the
-  // user sees something instead of a black tile).
-  viewer.scene.maximumScreenSpaceError = 1.5;
+  // Level of detail. Owned by applyPerfPreset, which is called during bindUI
+  // once the stored preset is known. The line that used to sit here set
+  // `viewer.scene.maximumScreenSpaceError`, which Cesium does not define, and
+  // its comment described over-zoom past native imagery level -- a different
+  // mechanism entirely (that one is the provider's maximumLevel).
+  viewer.scene.globe.maximumScreenSpaceError = SSE_PRESET.high;
 
   viewer.scene.backgroundColor = Cesium.Color.BLACK;
 
@@ -919,7 +936,32 @@ function bindUI() {
       else if (layer === 'states')     toggleStates(on);
       else if (layer === 'cities')     toggleCities(on);
       else if (layer === 'airspace')   toggleAirspace(on);
-      else if (dataSources[layer])     fadeDataSource(dataSources[layer], on ? 'in' : 'out');
+      else if (dataSources[layer]) {
+        // Build on the way in, release on the way out. The fade still runs on
+        // the data source either way, so the layer appears and leaves the same
+        // as it always did; what changed is that nothing exists in between.
+        if (on) {
+          if (layer === 'satellites') {
+            if (!satelliteRecords.size && layerData.satellites) {
+              rebuildSatellites(layerData.satellites);
+              setCount('satellites', satelliteRecords.size);
+            }
+          } else {
+            materialiseLayer(layer);
+          }
+        }
+        // Release AFTER the fade, through its completion callback. Tearing the
+        // entities down straight away would make every layer snap off instead
+        // of fading, which is the animation this call exists to run.
+        fadeDataSource(dataSources[layer], on ? 'in' : 'out', undefined, on ? undefined : () => {
+          // Re-check: a fast off/on leaves the second toggle's build in place,
+          // and this callback must not delete it.
+          if (isLayerOn(layer)) return;
+          if (layer === 'satellites') releaseSatellites();
+          else dematerialiseLayer(layer);
+          updateCategoryCounts();
+        });
+      }
       updateCategoryCounts();
       refreshLegend();
       syncControlAvailability();
@@ -1164,46 +1206,64 @@ function isAlertOn(kind) {
   return !!(cb && cb.checked);
 }
 
+/* Reads the FEED, not the scene.
+   It used to walk entitiesByLayer, which quietly made the alerts panel depend
+   on those layers having been built -- so the only way to be warned about a
+   tsunami was to already have the tsunami layer switched on. Now the panel
+   lists what the feeds are reporting whether or not any of it is drawn, and a
+   row resolves to an entity when it is clicked. */
 function collectAlerts() {
-  // Returns array of {kind, id, tag, text, meta, sev, sortKey, entity}
+  // Returns array of {kind, id, tag, text, meta, sev, sortKey, ref}
   const out = [];
   const now = Date.now();
+  const rows = (layer) => Object.entries(layerData[layer] || {});
+  const row = (layer, id, data) =>
+    buildAlertRow(layer, { kind: layer, id, ...data }, { layer, id }, now);
 
-  const layers = ['tsunamis','severe','hurricanes','tfrs','volcanoes','news'];
-  for (const layer of layers) {
-    const ents = entitiesByLayer[layer]; if (!ents) continue;
-    for (const ent of ents.values()) {
-      const p = ent.properties.getValue ? ent.properties.getValue() : ent.properties;
+  for (const layer of ['tsunamis', 'severe', 'hurricanes', 'tfrs', 'volcanoes', 'news']) {
+    for (const [id, p] of rows(layer)) {
       if (!p) continue;
       if (layer === 'volcanoes' && p.active !== true) continue;
-      out.push(buildAlertRow(layer, p, ent, now));
+      out.push(row(layer, id, p));
     }
   }
 
   // Quakes: only M >= 4 within 24h
-  const qents = entitiesByLayer.quakes;
-  if (qents) for (const ent of qents.values()) {
-    const p = ent.properties.getValue ? ent.properties.getValue() : ent.properties;
+  for (const [id, p] of rows('quakes')) {
     if (!p || typeof p.mag !== 'number' || p.mag < 4) continue;
     const ageH = p.time ? ((now - p.time) / 3.6e6) : 999;
     if (ageH > 24) continue;
-    out.push(buildAlertRow('quakes', p, ent, now));
+    out.push(row('quakes', id, p));
   }
 
   // Launches: within ±3h of NET
-  const lents = entitiesByLayer.launches;
-  if (lents) for (const ent of lents.values()) {
-    const p = ent.properties.getValue ? ent.properties.getValue() : ent.properties;
+  for (const [id, p] of rows('launches')) {
     if (!p || !p.net) continue;
     const dt = (Date.parse(p.net) - now) / 3.6e6;
     if (!isFinite(dt) || Math.abs(dt) > 3) continue;
-    out.push(buildAlertRow('launches', p, ent, now));
+    out.push(row('launches', id, p));
   }
 
   return out;
 }
 
-function buildAlertRow(kind, p, ent, now) {
+/* Fly to what an alert row is about. The layer may not be drawn -- that is the
+   point of the panel -- so switching it on is part of the gesture, not a side
+   effect: the user asked to be shown a thing they cannot currently see. */
+function alertJumpTo(ref) {
+  if (!ref) return;
+  const cb = document.querySelector(`input[data-layer="${ref.layer}"]`);
+  if (cb && !cb.checked && !cb.disabled) {
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  const ent = entitiesByLayer[ref.layer] && entitiesByLayer[ref.layer].get(ref.id);
+  if (!ent) return;
+  flyToEntity(ent);
+  showPanel(ent);
+}
+
+function buildAlertRow(kind, p, ref, now) {
   let tag = (KIND_LABEL[kind] || kind).split(' ')[0].slice(0, 8);
   let text = '—', meta = '', sev = 'low', sortKey = 0;
 
@@ -1254,7 +1314,8 @@ function buildAlertRow(kind, p, ent, now) {
     meta = (p.categories || []).join(' · ');
     sortKey = 2e14;
   }
-  return { kind, id: p.id, tag, text, meta, sev, sortKey, entity: ent };
+  // `ref` is {layer, id}, not the entity: the layer may not be built yet.
+  return { kind, id: p.id, tag, text, meta, sev, sortKey, ref };
 }
 
 let alertsRefreshScheduled = false;
@@ -1289,10 +1350,7 @@ function doRefreshAlerts() {
     const li = document.createElement('li');
     li.dataset.sev = a.sev;
     li.innerHTML = `<span class="al-tag">${a.tag}</span><span class="al-text">${escapeHtml(a.text)}</span><span class="al-meta">${escapeHtml(a.meta || '')}</span>`;
-    li.addEventListener('click', () => {
-      flyToEntity(a.entity);
-      showPanel(a.entity);
-    });
+    li.addEventListener('click', () => alertJumpTo(a.ref));
     list.appendChild(li);
   }
 
@@ -1525,20 +1583,58 @@ function isLayerOn(layer) {
 // ---------- Generic layer rendering -----------------------------------------
 
 function resetLayer(layer, entries) {
+  layerData[layer] = entries;
+
   if (layer === 'satellites') {
-    rebuildSatellites(entries);
-    setCount('satellites', satelliteRecords.size);
+    // Satellites propagate their own orbits on a 1 Hz tick, so building them
+    // for a layer nobody is looking at buys a permanent timer as well as 1,352
+    // entities.
+    if (isLayerOn('satellites')) {
+      rebuildSatellites(entries);
+      setCount('satellites', satelliteRecords.size);
+    } else {
+      setCount('satellites', Object.keys(entries).length);
+    }
     return;
   }
   const ds = dataSources[layer];
   if (!ds) return;
   ds.entities.removeAll();
   entitiesByLayer[layer].clear();
-  for (const [id, data] of Object.entries(entries)) upsertEntity(layer, id, data);
-  setCount(layer, entitiesByLayer[layer].size);
+  // The check is hoisted out of the loop deliberately: isLayerOn() is a DOM
+  // query, and inside a 5,272-row airports snapshot that is 5,272 of them.
+  const draw = isLayerOn(layer);
+  if (draw) {
+    for (const [id, data] of Object.entries(entries)) upsertEntity(layer, id, data, true);
+  }
+  // Counts report what the FEED has, drawn or not. A layer showing 0 because
+  // you have not switched it on is chrome lying about the data behind it.
+  setCount(layer, Object.keys(entries).length);
 
   // Live ticker — only push entries that are NEW since last reset (delta-aware).
   pushDeltasToTicker(layer, entries);
+}
+
+/* Build the entities for a layer from the feed rows already in hand. Called
+   when a layer is switched on; a no-op if the scene is already in step. */
+function materialiseLayer(layer) {
+  const ds = dataSources[layer];
+  const entries = layerData[layer];
+  if (!ds || !entries) return 0;
+  const map = entitiesByLayer[layer];
+  if (map.size) return 0;                       // already built
+  for (const [id, data] of Object.entries(entries)) upsertEntity(layer, id, data, true);
+  setCount(layer, Object.keys(entries).length);
+  return map.size;
+}
+
+/* And give them back. A layer switched off used to keep every entity alive and
+   merely invisible, which is the whole cost with none of the picture. */
+function dematerialiseLayer(layer) {
+  const ds = dataSources[layer];
+  if (!ds || !entitiesByLayer[layer] || !entitiesByLayer[layer].size) return;
+  ds.entities.removeAll();
+  entitiesByLayer[layer].clear();
 }
 
 // Track the last-seen ID set per layer, so each refresh only emits truly new
@@ -1649,10 +1745,16 @@ function planeOrientation(pos, headingDeg) {
   return Cesium.Transforms.headingPitchRollQuaternion(pos, hpr);
 }
 
-function upsertEntity(layer, id, data) {
+/* `draw` is passed by resetLayer/materialiseLayer, which have already decided.
+   A live plane or ship arriving on the socket while its layer is off records
+   itself and stops there -- the row is kept so switching the layer on shows the
+   world as it is now, without building a scene nobody asked for. */
+function upsertEntity(layer, id, data, draw) {
   if (data.lat == null || data.lon == null) return;
   const ds = dataSources[layer];
   if (!ds) return;
+  (layerData[layer] || (layerData[layer] = {}))[id] = data;
+  if (draw === undefined ? !isLayerOn(layer) : !draw) return;
   const map = entitiesByLayer[layer];
   let ent = map.get(id);
   const pos = positionFor(layer, data);
@@ -1963,6 +2065,15 @@ function rebuildSatellites(tles) {
     satelliteTickHandle = setInterval(tickSatellites, 1000);
     tickSatellites();
   }
+}
+
+/* Drop the constellation and stop propagating it. The 1 Hz orbit tick already
+   returned early when the layer was off, but it was still scheduled forever
+   and the 1,352 entities it steered were still in the scene graph. */
+function releaseSatellites() {
+  if (satelliteTickHandle) { clearInterval(satelliteTickHandle); satelliteTickHandle = null; }
+  if (dataSources.satellites) dataSources.satellites.entities.removeAll();
+  satelliteRecords.clear();
 }
 
 function tickSatellites() {
@@ -2410,7 +2521,25 @@ function toggleAirspace(on) {
 function toggleCities(on) {
   if (!citiesDS) return;
   if (on && !citiesBuilt) buildCities();
-  fadeDataSource(citiesDS, on ? 'in' : 'out');
+  else if (on) relabelCities();
+  // Release after the fade, not before, or the layer snaps off instead of
+  // fading. The rows stay in memory: the download is the expensive part, the
+  // entities are what cost per frame.
+  fadeDataSource(citiesDS, on ? 'in' : 'out', undefined, on ? undefined : () => {
+    if (!isLayerOn('cities')) releaseCities();
+  });
+}
+
+function releaseCities() {
+  if (!cityLive.size) return;
+  citiesDS.entities.suspendEvents();
+  try {
+    for (const row of cityLive) { row.entity = null; row.shown = ''; }
+    cityLive.clear();
+    citiesDS.entities.removeAll();
+  } finally {
+    citiesDS.entities.resumeEvents();
+  }
 }
 
 async function buildCountries() {
@@ -2676,64 +2805,28 @@ async function buildCities() {
       ((a.properties?.scalerank ?? 9) - (b.properties?.scalerank ?? 9)) ||
       ((b.properties?.pop_max ?? 0) - (a.properties?.pop_max ?? 0)));
 
-    cityRecords = [];
-    let added = 0;
+    // Plain rows, no Cesium objects. Entities are minted from these by
+    // relabelCities() for the cities that can actually be seen right now.
+    CITY_STYLE.fill = labelFill;
+    CITY_STYLE.outline = labelOutline;
+    CITY_STYLE.dot = dotColor;
+    cityRows = [];
     for (const f of feats) {
       const c = f.geometry?.coordinates;
       if (!c) continue;
       if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) continue;
       const p = f.properties || {};
       const sr = p.scalerank ?? 6;
-      const farM = _cityMaxDist(sr);
-      // Lower rank = larger label; cap range to keep things readable
-      const fontPx = sr <= 1 ? 12 : sr <= 3 ? 11 : sr <= 6 ? 10 : 9;
-      // Dot size scales gently with rank too
-      const dotPx = sr <= 1 ? 4.5 : sr <= 4 ? 3.5 : 2.5;
-      // Fade-in distance: the city is fully opaque once the camera is inside
-      // ~35% of its visibility range and fades to nothing by ~60%.
-      //
-      // NearFarScalar requires far > near. These were previously passed as
-      // (0.6·farM → 0, 0.35·farM → 1), i.e. far < near, which Cesium cannot
-      // interpolate: it yields a non-finite translucency, corrupts the frustum
-      // computation, and kills the whole scene with "Invalid array length"
-      // from createPotentiallyVisibleSet. Enabling Cities alone was enough to
-      // stop rendering.
-      const fadeFull  = Math.min(farM, farM * 0.35);   // nearer  → opaque
-      const fadeStart = Math.min(farM, farM * 0.6);    // further → transparent
-      citiesDS.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
-        point: {
-          pixelSize: dotPx,
-          color: dotColor,
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 0.5,
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, farM),
-          translucencyByDistance: new Cesium.NearFarScalar(fadeFull, 1.0, fadeStart, 0.0),
-        },
-        label: {
-          // Text is assigned by relabelCities(); leaving it empty here keeps
-          // the glyph atlas within its limit.
-          text: '',
-          font: `500 ${fontPx}px "Inter", system-ui, sans-serif`,
-          fillColor: labelFill,
-          outlineColor: labelOutline,
-          outlineWidth: 2.5,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          pixelOffset: new Cesium.Cartesian2(6, 0),
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, farM),
-          translucencyByDistance: new Cesium.NearFarScalar(fadeFull, 1.0, fadeStart, 0.0),
-          // Depth-test ON so cities on the far side of the globe are occluded.
-        },
-        properties: { kind: 'city_label', ...p },
+      cityRows.push({
+        name: p.name || '', lon: c[0], lat: c[1], sr,
+        farM: _cityMaxDist(sr),
+        // Lower rank = larger label and dot; cap the range to keep it readable.
+        fontPx: sr <= 1 ? 12 : sr <= 3 ? 11 : sr <= 6 ? 10 : 9,
+        dotPx:  sr <= 1 ? 4.5 : sr <= 4 ? 3.5 : 2.5,
+        props: p,
+        entity: null,
+        shown: '',           // last text actually written to the label
       });
-      cityRecords.push({
-        entity: citiesDS.entities.values[citiesDS.entities.values.length - 1],
-        name: p.name || '', farM, lon: c[0], lat: c[1],
-        shown: '',   // last text actually written to the label
-      });
-      added++;
     }
     relabelCities();
     if (!buildCities._hooked) {
@@ -2744,25 +2837,110 @@ async function buildCities() {
         t = setTimeout(relabelCities, 250);
       });
     }
-    setCount('cities', added);
+    setCount('cities', cityRows.length);
     updateCategoryCounts();
-    console.log(`Built ${added} city points (labels capped at ${CITY_LABEL_CAP})`);
+    console.log(`${cityRows.length} cities loaded; at most ${CITY_ENTITY_CAP} `
+              + `drawn and ${CITY_LABEL_CAP} labelled at a time`);
   } catch (e) {
     console.warn('Cities failed to load:', e);
     citiesBuilt = false;
   }
 }
 
-// Assign label text to the most important cities that are in range at the
-// current camera altitude, and clear the rest. Keeps the live label count
-// under the glyph-atlas ceiling while still revealing smaller towns as you
-// zoom in — which is what the per-entity distanceDisplayCondition implies but
-// cannot deliver on its own.
-const CITY_LABEL_CAP = 900;
-let cityRecords = [];
+/* Build one city entity. Split out of buildCities because entities are now
+   minted and destroyed as the camera moves rather than once, up front. */
+const CITY_STYLE = { fill: null, outline: null, dot: null };
+
+function cityEntity(row) {
+  const farM = row.farM;
+  // Fade-in distance: opaque once the camera is inside ~35% of the city's
+  // visibility range, gone by ~60%.
+  //
+  // NearFarScalar requires far > near. These were once passed the other way
+  // round, which yields a non-finite translucency, corrupts the frustum
+  // computation, and kills the scene from createPotentiallyVisibleSet.
+  const fadeFull  = Math.min(farM, farM * 0.35);
+  const fadeStart = Math.min(farM, farM * 0.6);
+  const ddc = new Cesium.DistanceDisplayCondition(0, farM);
+  const fade = new Cesium.NearFarScalar(fadeFull, 1.0, fadeStart, 0.0);
+  return citiesDS.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(row.lon, row.lat, 0),
+    point: {
+      pixelSize: row.dotPx,
+      color: CITY_STYLE.dot,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 0.5,
+      distanceDisplayCondition: ddc,
+      translucencyByDistance: fade,
+    },
+    label: {
+      // Text is assigned by relabelCities(); an empty label keeps the glyph
+      // atlas within its limit.
+      text: '',
+      font: `500 ${row.fontPx}px "Inter", system-ui, sans-serif`,
+      fillColor: CITY_STYLE.fill,
+      outlineColor: CITY_STYLE.outline,
+      outlineWidth: 2.5,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
+      verticalOrigin: Cesium.VerticalOrigin.CENTER,
+      pixelOffset: new Cesium.Cartesian2(6, 0),
+      distanceDisplayCondition: ddc,
+      translucencyByDistance: fade,
+      // Depth-test ON so cities on the far side of the globe are occluded.
+    },
+    properties: { kind: 'city_label', ...row.props },
+  });
+}
+
+/* Keep the drawn set of cities to the ones that can actually be seen.
+ *
+ * The old shape built an entity for all 7,342 populated places up front and
+ * only swapped label TEXT as the camera moved. That made the scene graph carry
+ * 7,342 point primitives and 7,342 label slots forever, to show a few hundred
+ * of each: measured at 10.8 seconds of blocked main thread to switch the layer
+ * on, and a permanent per-frame visit to every one of them thereafter.
+ *
+ * Two gates decide the working set, and BOTH are needed. Altitude alone is not
+ * enough: zoomed into Houston, every town on Earth passes the distance test,
+ * because distance-to-camera is not the same question as in-frame. The view
+ * rectangle is what bounds it near the ground; the altitude tier is what bounds
+ * it from orbit.
+ */
+const CITY_LABEL_CAP = 900;    // glyph-atlas ceiling; 1,000 render, 3,000 crash
+const CITY_ENTITY_CAP = 1600;  // point primitives alive at once
+let cityRows = [];             // every city, as plain data
+const cityLive = new Set();    // the subset holding an entity right now
+
+/* Padded view rectangle in degrees, or null when the camera sees so much of the
+   planet that a box is meaningless (the altitude tier is doing the work then).
+   The padding keeps a city that is about to scroll into frame from popping. */
+function cityViewBox() {
+  const rect = viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
+  if (!rect) return null;
+  const w = Cesium.Math.toDegrees(rect.west),  e = Cesium.Math.toDegrees(rect.east);
+  const s = Cesium.Math.toDegrees(rect.south), n = Cesium.Math.toDegrees(rect.north);
+  let width = e - w;
+  if (width < 0) width += 360;
+  if (width > 150) return null;
+  const padX = Math.max(1, width * 0.25);
+  const padY = Math.max(1, (n - s) * 0.25);
+  return { w: w - padX, e: e + padX, s: s - padY, n: n + padY };
+}
+
+function cityInBox(box, lon, lat) {
+  if (lat < box.s || lat > box.n) return false;
+  // Longitude compared as an offset from the west edge so a box straddling the
+  // antimeridian is one range rather than two.
+  const d = ((lon - box.w) % 360 + 360) % 360;
+  return d <= ((box.e - box.w) % 360 + 360) % 360;
+}
 
 function relabelCities() {
-  if (!citiesDS || !cityRecords.length) return;
+  if (!citiesDS || !cityRows.length) return;
+  // The camera-settle hook fires whether or not the layer is on, so without
+  // this the working set would be rebuilt for a layer nobody is looking at.
+  if (!isLayerOn('cities')) { releaseCities(); return; }
   let camHeight = Infinity;
   try {
     const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
@@ -2772,23 +2950,47 @@ function relabelCities() {
   // "Filter labels to area": with a county selection active, a label outside it
   // is describing the part of the map the darkening is trying to push back.
   const clip = typeof adLabelsFiltered === 'function' && adLabelsFiltered();
+  const box = cityViewBox();
 
-  let shown = 0;
-  for (const rec of cityRecords) {
-    const inRange = camHeight <= rec.farM
-      && (!clip || adInsideSelection(rec.lon, rec.lat));
-    const want = inRange && shown < CITY_LABEL_CAP ? rec.name : '';
-    if (want) shown++;
-    // Only touch Cesium when the value actually changes; assigning text is
-    // what triggers glyph work.
-    //
-    // Compare against our own copy, not against entity.label.text. That is a
-    // Cesium Property, never a string, so `!== want` was true on every record
-    // of every call and this guard had never once skipped an assignment.
-    if (rec.shown !== want) {
-      rec.entity.label.text = want;
-      rec.shown = want;
+  // cityRows is pre-sorted by importance, so taking the first N that pass is
+  // taking the N that matter.
+  const want = new Set();
+  for (const row of cityRows) {
+    if (camHeight > row.farM) continue;
+    if (box && !cityInBox(box, row.lon, row.lat)) continue;
+    if (clip && !adInsideSelection(row.lon, row.lat)) continue;
+    want.add(row);
+    if (want.size >= CITY_ENTITY_CAP) break;
+  }
+
+  // One collection event for the whole delta rather than one per entity.
+  citiesDS.entities.suspendEvents();
+  try {
+    for (const row of cityLive) {
+      if (want.has(row)) continue;
+      citiesDS.entities.remove(row.entity);
+      row.entity = null;
+      row.shown = '';
+      cityLive.delete(row);
     }
+    let labelled = 0;
+    for (const row of want) {
+      if (!row.entity) { row.entity = cityEntity(row); cityLive.add(row); }
+      const text = labelled < CITY_LABEL_CAP ? row.name : '';
+      if (text) labelled++;
+      // Only touch Cesium when the value actually changes; assigning text is
+      // what triggers glyph work.
+      //
+      // Compare against our own copy, not against entity.label.text. That is a
+      // Cesium Property, never a string, so `!== text` was true on every record
+      // of every call and this guard had never once skipped an assignment.
+      if (row.shown !== text) {
+        row.entity.label.text = text;
+        row.shown = text;
+      }
+    }
+  } finally {
+    citiesDS.entities.resumeEvents();
   }
   viewer.scene.requestRender();
 }
@@ -4037,18 +4239,60 @@ function applyImageryOpacity(which) {
 
 // ---------- Performance preset ---------------------------------------------
 
+/* Level-of-detail tolerance: how much screen-space error a terrain tile may
+   carry before it is subdivided. Lower = more tiles = sharper and slower.
+
+   ★ This used to write `viewer.scene.maximumScreenSpaceError`, which is not a
+   Cesium property. Scene has no such member, so the assignment created an
+   expando that nothing reads and the globe sat at Cesium's default of 2 no
+   matter which preset was selected. Proved by setting the Scene property to 4
+   and reading the globe's, which stayed at 2. High, Balanced and Low were the
+   same picture at the same cost for the life of the app.
+
+   High is therefore 2, not the 1.5 the old code asked for: 2 is what the globe
+   has actually been rendering at, it is what the look was graded against, and
+   dropping to 1.5 now would be a 12-39% tile increase presented as a fix.
+   Measured tiles at 1.5 / 2 / 3 / 4 over four camera heights:
+     hemisphere 18 / 11 / 11 /  5
+     CONUS      42 / 37 / 23 / 18
+     metro      28 / 28 / 12 / 12 */
+const SSE_PRESET = { high: 2.0, balanced: 3.0, low: 4.0 };
+
+// While the camera is moving there is nothing to see in the extra subdivision,
+// and moving is exactly when the frame budget is tight. Cesium ships this idea
+// for 3D Tiles as dynamicScreenSpaceError; the globe has no equivalent, so it
+// is done here.
+const SSE_WHILE_MOVING = 6.0;
+const SSE_SETTLE_MS = 220;
+let _sseSettle = null;
+
+function restingSSE() {
+  return SSE_PRESET[settings.perfPreset] || SSE_PRESET.high;
+}
+
 function applyPerfPreset(preset) {
   if (!viewer) return;
-  // Tunes Cesium globe SSE + cluster pixelRange. Layer-specific entity caps
-  // would require backend cooperation — for now we tune just the renderer.
-  if (preset === 'low') {
-    viewer.scene.maximumScreenSpaceError = 4;
-  } else if (preset === 'balanced') {
-    viewer.scene.maximumScreenSpaceError = 2.5;
-  } else {
-    viewer.scene.maximumScreenSpaceError = 1.5;
-  }
+  settings.perfPreset = SSE_PRESET[preset] ? preset : 'high';
+  viewer.scene.globe.maximumScreenSpaceError = restingSSE();
   viewer.scene.requestRender();
+}
+
+function initDynamicLod() {
+  const coarsen = () => {
+    if (viewer.scene.globe.maximumScreenSpaceError !== SSE_WHILE_MOVING) {
+      viewer.scene.globe.maximumScreenSpaceError = SSE_WHILE_MOVING;
+    }
+    clearTimeout(_sseSettle);
+    _sseSettle = setTimeout(() => {
+      viewer.scene.globe.maximumScreenSpaceError = restingSSE();
+      viewer.scene.requestRender();
+    }, SSE_SETTLE_MS);
+  };
+  // moveStart/moveEnd alone are too coarse: a continuous drag fires moveStart
+  // once and the settle timer would restore full detail mid-gesture.
+  viewer.camera.changed.addEventListener(coarsen);
+  viewer.camera.moveStart.addEventListener(coarsen);
+  viewer.camera.percentageChanged = 0.02;
 }
 
 // ---------- North America lock ---------------------------------------------
@@ -4683,6 +4927,11 @@ function initTabs() {
 // ambiguous, so we keep them on one track with an explicit NOW marker and
 // label every frame with a relative offset.
 
+// How many frames either side of the current one stay visible to the renderer.
+// 1 buys a full frame interval of tile-fetch lead time at a cost of 3 imagery
+// layers compositing instead of 13. See showFrame.
+const RADAR_PREFETCH = 1;
+
 const TL = {
   frames: [],        // [{ time:<epoch s>, path, kind:'past'|'forecast' }]
   index: 0,
@@ -4760,7 +5009,31 @@ function showFrame(i) {
 
   const layer = ensureFrameLayer(TL.index);
   if (layer) {
-    for (const [idx, l] of TL.layers) l.alpha = idx === TL.index ? Number(settings.opRadar) : 0;
+    // alpha AND show, but show over a WINDOW rather than just the current
+    // frame.
+    //
+    // alpha 0 hides a layer from the eye and not from the renderer: Cesium
+    // composites every imagery layer whose `show` is true into every rendered
+    // globe tile, so a 13-frame loop had each tile blending 15 layers to
+    // display 3. Measured after one pass: 15 imagery layers, 15 shown, 12 of
+    // them at alpha 0.
+    //
+    // ★ Hiding all the others is not free, and the first attempt broke the
+    // loop: Cesium does not request tiles for a hidden imagery layer, so every
+    // frame's tiles were fetched in one burst at the instant it became current.
+    // At 600 ms a frame RainViewer answered that burst with 125 CORS-less error
+    // responses -- zero before the change. The window is a prefetch: a frame is
+    // shown one step before it is needed, which is a whole frame interval of
+    // lead time, and the tiles are already in the cache when it is displayed.
+    for (const [idx, l] of TL.layers) {
+      const current = idx === TL.index;
+      // Distance measured around the loop, because playback wraps.
+      const n = TL.frames.length;
+      const d = Math.min((idx - TL.index + n) % n, (TL.index - idx + n) % n);
+      const on = d <= RADAR_PREFETCH;
+      l.alpha = current ? Number(settings.opRadar) : 0;
+      if (l.show !== on) l.show = on;
+    }
   }
 
   const range = document.getElementById('tl-range');
@@ -4809,6 +5082,9 @@ function ensureFrameLayer(i) {
     minimumLevel: 0, maximumLevel: 7,
   }));
   layer.alpha = 0;
+  // Born hidden: until it is inside showFrame's prefetch window it must not
+  // cost a composite on every rendered tile.
+  layer.show = false;
   TL.layers.set(i, layer);
   return layer;
 }
