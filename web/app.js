@@ -4533,12 +4533,27 @@ function showFrame(i) {
 
   const lbl = document.getElementById('tl-label');
   if (lbl) lbl.textContent = `${hh}:${mm}Z ${relTxt}`;
-  const fsT = document.getElementById('fs-time');
-  const fsK = document.getElementById('fs-kind');
-  if (fsT) fsT.textContent = `${hh}:${mm} UTC`;
-  if (fsK) fsK.textContent = frame.kind === 'forecast' ? 'RADAR · FORECAST' : 'RADAR · OBSERVED';
+  // Product over source on the left, time over date on the right.
+  setStamp(frame.kind === 'forecast' ? 'RADAR FORECAST' : 'BASE REFLECTIVITY',
+           frame.kind === 'forecast' ? 'RainViewer nowcast' : 'RainViewer composite',
+           when);
 
   viewer.scene.requestRender();
+}
+
+/* Fill the frame stamp. `when` is a Date; everything is shown in UTC because
+   a weather product's valid time is meaningless in an unstated local zone. */
+function setStamp(product, source, when) {
+  const set = (id, txt) => {
+    const el = document.getElementById(id);
+    if (el && el.textContent !== txt) el.textContent = txt;
+  };
+  const p2 = (n) => String(n).padStart(2, '0');
+  set('fs-kind', product);
+  set('fs-src', source);
+  set('fs-time', `${p2(when.getUTCHours())}:${p2(when.getUTCMinutes())} UTC`);
+  set('fs-date', `${p2(when.getUTCMonth() + 1)}/${p2(when.getUTCDate())}/`
+                 + String(when.getUTCFullYear()).slice(2));
 }
 
 function ensureFrameLayer(i) {
@@ -4930,9 +4945,14 @@ function rebuildRadarSiteLayer() {
   }));
   fadeImageryLayer(radarSiteLayer, 0, Number(settings.opRadar) || 0.7);
 
-  const stamp = document.getElementById('fs-kind');
-  if (stamp && isLayerOn('radar_site')) {
-    stamp.textContent = `${site} · ${kind === 'N0U' ? 'VELOCITY' : 'REFLECTIVITY'}`;
+  // RadarScope's header: the product on top, the station and its city under
+  // it. NEXRAD_SITES already carries the city, so the stamp can name the
+  // station properly instead of showing a bare four-letter ICAO id.
+  if (isLayerOn('radar_site')) {
+    const entry = NEXRAD_SITES.find((s) => s[0] === site);
+    setStamp(kind === 'N0U' ? 'BASE VELOCITY' : 'SUPER-RES REFLECTIVITY',
+             entry ? `${site} · ${entry[1]}` : site,
+             new Date());
   }
 }
 
@@ -5594,25 +5614,8 @@ function renderWarningCards() {
     return;
   }
 
-  list.innerHTML = warnFeatures.slice(0, 120).map((f, i) => {
-    const p = f.properties;
-    const st = warnStyle(p.event);
-    const par = p.parameters || {};
-    const bits = [];
-    if (par.hailSize)          bits.push(`Hail ${par.hailSize[0]}"`);
-    if (par.maxWindGust)       bits.push(`Wind ${par.maxWindGust[0]}`);
-    if (par.tornadoDetection)  bits.push(`Tornado ${par.tornadoDetection[0]}`);
-    if (par.flashFloodDetection) bits.push(String(par.flashFloodDetection[0]));
-    const area = (p.areaDesc || '').split(';').slice(0, 3).join(',').trim();
-    const mappable = !!f.geometry;
-    return `<li class="warn-card${mappable ? '' : ' is-zone'}" data-warn="${i}" style="--wc:${st.c}"
-      title="${mappable ? 'Click to zoom to the warning polygon' : 'Zone-based alert — no polygon issued'}">
-      <div class="wc-top"><span class="wc-evt">${p.event || 'Alert'}</span>
-      <span class="wc-exp">${fmtExpiry(p.expires)}</span></div>
-      <div class="wc-area">${area}</div>
-      ${bits.length ? `<div class="wc-bits">${bits.join(' · ')}</div>` : ''}
-    </li>`;
-  }).join('');
+  list.textContent = '';
+  warnFeatures.slice(0, 120).forEach((f, i) => list.appendChild(warnCard(f, i)));
 
   // Click a card to fly to that warning's polygon.
   list.querySelectorAll('.warn-card').forEach((el) => {
@@ -6253,4 +6256,108 @@ function tickWorldMilestone(now) {
     const txt = pct >= 100 ? '✓ ACHIEVED' : '';
     if (done.textContent !== txt) done.textContent = txt;
   });
+}
+
+/* ---------------------------------------------------------------------------
+   NWS warning card, RadarScope Pro shape
+   ---------------------------------------------------------------------------
+   From a frame of the app: coloured event name, "Expires in 20m" under it,
+   then the state, then the counties, then one label:value line per hazard
+   parameter with the label dim and the value bold —
+
+       Severe Thunderstorm
+       Expires in 20m
+       North Carolina
+       Cumberland & Sampson
+       Hail:    <.75", Radar Indicated
+       Wind:    60 mph, Radar Indicated
+       Tornado: Possible
+
+   Every one of those parameters is already in the payload /api/nws/alerts
+   returns; nothing new is fetched. Two bugs fixed on the way:
+
+     - the old code read `parameters.hailSize`. NWS sends `maxHailSize`, so
+       hail size never once rendered.
+     - the old code built this with innerHTML out of feed strings. Alert text
+       is attacker-influenced in principle and goes straight into the
+       document; this builds with DOM APIs and textContent instead. */
+
+const WARN_PARAMS = [
+  ['Tornado',  (q) => q.tornadoDetection?.[0]],
+  ['Damage',   (q) => q.thunderstormDamageThreat?.[0] || q.tornadoDamageThreat?.[0]],
+  ['Hail',     (q) => (q.maxHailSize?.[0] ? `${q.maxHailSize[0]}"` : null)],
+  ['Wind',     (q) => q.maxWindGust?.[0]],
+  ['Flooding', (q) => q.flashFloodDetection?.[0]],
+  ['Damage threat', (q) => q.flashFloodDamageThreat?.[0]],
+  ['Waterspout', (q) => q.waterspoutDetection?.[0]],
+  ['Motion',   (q) => q.eventMotionDescription?.[0]],
+];
+
+/* NWS areaDesc is "Cumberland, NC; Sampson, NC" — one "county, ST" per
+   segment. Split it so the state can head the card the way RadarScope does
+   instead of being repeated after every county. */
+function splitAreaDesc(areaDesc) {
+  const segs = (areaDesc || '').split(';').map((s) => s.trim()).filter(Boolean);
+  const states = new Set();
+  const places = [];
+  for (const seg of segs) {
+    const m = seg.match(/^(.*),\s*([A-Z]{2})$/);
+    if (m) { places.push(m[1]); states.add(m[2]); }
+    else places.push(seg);
+  }
+  return { states: [...states], places };
+}
+
+function warnRow(cls, text) {
+  const el = document.createElement('div');
+  el.className = cls;
+  el.textContent = text;
+  return el;
+}
+
+function warnCard(feature, index) {
+  const p = feature.properties || {};
+  const st = warnStyle(p.event);
+  const par = p.parameters || {};
+  const mappable = !!feature.geometry;
+
+  const li = document.createElement('li');
+  li.className = mappable ? 'warn-card' : 'warn-card is-zone';
+  li.dataset.warn = String(index);
+  li.style.setProperty('--wc', st.c);
+  li.title = mappable
+    ? 'Click to zoom to the warning polygon'
+    : 'Zone-based alert — no polygon issued';
+
+  const top = document.createElement('div');
+  top.className = 'wc-top';
+  top.appendChild(warnRow('wc-evt', p.event || 'Alert'));
+  top.appendChild(warnRow('wc-exp', fmtExpiry(p.expires)));
+  li.appendChild(top);
+
+  const { states, places } = splitAreaDesc(p.areaDesc);
+  if (states.length) li.appendChild(warnRow('wc-state', states.join(', ')));
+  if (places.length) {
+    const shown = places.slice(0, 4).join(', ');
+    const row = warnRow('wc-area',
+      places.length > 4 ? `${shown} +${places.length - 4} more` : shown);
+    if (places.length > 4) row.title = places.join(', ');
+    li.appendChild(row);
+  }
+
+  for (const [label, pick] of WARN_PARAMS) {
+    const value = pick(par);
+    if (!value) continue;
+    const row = document.createElement('div');
+    row.className = 'wc-par';
+    const k = document.createElement('span');
+    k.className = 'wc-par-k';
+    k.textContent = `${label}:`;
+    const v = document.createElement('span');
+    v.className = 'wc-par-v';
+    v.textContent = String(value);
+    row.append(k, v);
+    li.appendChild(row);
+  }
+  return li;
 }
