@@ -207,8 +207,12 @@
             <option value="48">Past 48 h</option>
           </select>
         </div>
-        <label class="sw"><input type="checkbox" data-layer="webcams" disabled><span class="sw-t"></span><span class="sw-l">Webcams</span></label>
-        <p class="pane-note" id="webcam-note">Webcams need a Windy API key in .env (WINDY_WEBCAM_KEY).</p>
+        <!-- Was a disabled "Webcams" row waiting on a Windy API key.
+             ALERTCalifornia publishes ~1,280 geolocated wildfire cameras and
+             their live frames with no key, so the row works now. -->
+        <label class="sw" title="Live wildfire-camera sites. Click one for its current frame."><input type="checkbox" data-layer="cameras"><span class="sw-t"></span><span class="sw-l">Wildfire Cameras</span><span class="count" id="count-cameras">—</span></label>
+        <label class="sw" title="Live storm-spotter ground truth from Spotter Network."><input type="checkbox" data-layer="spotters"><span class="sw-t"></span><span class="sw-l">Spotter Reports</span><span class="count" id="count-spotters">—</span></label>
+        <p class="pane-note">Cameras: ALERTCalifornia / UC San Diego (California only). Spotters: Spotter Network. Both keyless.</p>
       </div>
 
       <!-- ---- OUTLOOKS ---- -->

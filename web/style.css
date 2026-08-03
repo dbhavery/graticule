@@ -547,6 +547,15 @@ html, body {
   letter-spacing: var(--tr-wide);
 }
 
+/* Camera frame in the detail panel. 16:9 reserved up front so opening the
+   panel does not reflow when the JPEG lands. */
+.dt-shot {
+  width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+  border: 1px solid var(--panel-border); border-radius: var(--r-sm);
+  margin-bottom: 12px; background: rgba(255, 255, 255, 0.03);
+  display: block;
+}
+
 .dt-grid { display: flex; flex-direction: column; }
 .dt-row {
   display: grid;

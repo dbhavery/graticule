@@ -4,13 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -250,6 +251,164 @@ async def local_storm_reports(hours: int = 12) -> JSONResponse:
 
     data["_hours"] = hours
     _LSR_CACHE = (now, data)
+    return JSONResponse(data)
+
+
+#: Wildfire cameras — ALERTCalifornia / UC San Diego, keyless and public.
+#: This is the "Webcams" row of the survey chart without a Windy API key.
+_CAM_CACHE: tuple[float, dict] | None = None
+_CAM_TTL_S = 1800.0
+_CAM_LIST = "https://cameras.alertcalifornia.org/public-camera-data/all_cameras-v3.json"
+_CAM_FRAME = "https://cameras.alertcalifornia.org/public-camera-data/{cid}/latest-frame.jpg"
+
+
+@app.get("/api/cameras")
+async def wildfire_cameras() -> JSONResponse:
+    """Public wildfire-camera sites as GeoJSON.
+
+    The upstream file carries ~2,180 entries but roughly 900 have null
+    coordinates (indoor test units and cameras awaiting survey), and a point
+    at [null, null] becomes NaN in Cesium and corrupts frustum computation.
+    Those are dropped here rather than in the client.
+    """
+    global _CAM_CACHE
+    now = asyncio.get_event_loop().time()
+    if _CAM_CACHE and now - _CAM_CACHE[0] < _CAM_TTL_S:
+        return JSONResponse(_CAM_CACHE[1])
+
+    try:
+        async with httpx.AsyncClient(timeout=40.0, follow_redirects=True) as client:
+            r = await client.get(_CAM_LIST, headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+            raw = r.json()
+    except Exception as exc:
+        logger.warning(f"wildfire camera list fetch failed: {exc}")
+        if _CAM_CACHE:
+            return JSONResponse(_CAM_CACHE[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    feats = []
+    for f in raw.get("features", []):
+        coords = (f.get("geometry") or {}).get("coordinates") or []
+        if len(coords) < 2 or coords[0] is None or coords[1] is None:
+            continue
+        p = f.get("properties") or {}
+        feats.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [coords[0], coords[1]]},
+            "properties": {
+                "kind": "cameras",
+                "id": p.get("id"),
+                "name": p.get("name") or p.get("id"),
+                "county": (p.get("county") or "").title(),
+                "state": p.get("state") or "",
+                "sponsor": p.get("sponsor") or "",
+                "az_current": p.get("az_current"),
+                "tilt_current": p.get("tilt_current"),
+                "last_frame_ts": p.get("last_frame_ts"),
+                "image": f"/api/camera/{p.get('id')}",
+            },
+        })
+
+    data = {"type": "FeatureCollection", "features": feats,
+            "credit": "ALERTCalifornia / UC San Diego"}
+    _CAM_CACHE = (now, data)
+    logger.info(f"wildfire cameras: {len(feats)} geolocated of {len(raw.get('features', []))}")
+    return JSONResponse(data)
+
+
+@app.get("/api/camera/{cid}")
+async def wildfire_camera_frame(cid: str) -> Response:
+    """Proxy one camera's current frame.
+
+    Proxied rather than hot-linked so the browser makes a same-origin request
+    (the upstream host sets no CORS headers), and so a dead camera returns a
+    clean 502 instead of a broken image.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", cid):
+        return JSONResponse({"error": "bad camera id"}, status_code=400)
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            r = await client.get(_CAM_FRAME.format(cid=cid),
+                                 headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+    except Exception as exc:
+        logger.warning(f"camera frame {cid} failed: {exc}")
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    return Response(content=r.content,
+                    media_type=r.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "public, max-age=60"})
+
+
+#: Storm spotter reports — Spotter Network's public GRLevelX placefile.
+#: This is the "Storm Chaser Feeds" row without a per-chaser partnership:
+#: the same ground-truth reports the desktop radar apps plot.
+_SPOT_CACHE: tuple[float, dict] | None = None
+_SPOT_TTL_S = 120.0
+_SPOT_URL = "https://www.spotternetwork.org/feeds/reports.txt"
+
+#: Placefile lines look like:
+#:   Icon: 42.036,-72.755,000,5,3,"Reported By: Tim Saridakis\nRotating Wall
+#:   Cloud\nTime: 2026-08-03 04:57:04 UTC\nNotes: ..."
+_SPOT_ICON = re.compile(
+    r'^Icon:\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*\d+,\s*\d+,\s*(\d+),\s*"(.*)"\s*$',
+    re.MULTILINE,
+)
+
+
+def _parse_spotter_placefile(text: str) -> list[dict]:
+    feats = []
+    for lat, lon, icon, blob in _SPOT_ICON.findall(text):
+        # The placefile escapes newlines as a literal backslash-n.
+        lines = [ln.strip() for ln in blob.split("\\n") if ln.strip()]
+        rec = {"reporter": "", "report": "", "time": "", "notes": ""}
+        for ln in lines:
+            low = ln.lower()
+            if low.startswith("reported by:"):
+                rec["reporter"] = ln.split(":", 1)[1].strip()
+            elif low.startswith("time:"):
+                rec["time"] = ln.split(":", 1)[1].strip()
+            elif low.startswith("notes:"):
+                rec["notes"] = ln.split(":", 1)[1].strip()
+            elif not rec["report"]:
+                rec["report"] = ln
+        try:
+            flat, flon = float(lat), float(lon)
+        except ValueError:
+            continue
+        if not (-90 <= flat <= 90 and -180 <= flon <= 180):
+            continue
+        feats.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [flon, flat]},
+            "properties": {"kind": "spotters", "icon": int(icon), **rec},
+        })
+    return feats
+
+
+@app.get("/api/spotters")
+async def spotter_reports() -> JSONResponse:
+    """Live storm-spotter reports as GeoJSON."""
+    global _SPOT_CACHE
+    now = asyncio.get_event_loop().time()
+    if _SPOT_CACHE and now - _SPOT_CACHE[0] < _SPOT_TTL_S:
+        return JSONResponse(_SPOT_CACHE[1])
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            r = await client.get(_SPOT_URL, headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+            text = r.text
+    except Exception as exc:
+        logger.warning(f"spotter reports fetch failed: {exc}")
+        if _SPOT_CACHE:
+            return JSONResponse(_SPOT_CACHE[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    data = {"type": "FeatureCollection",
+            "features": _parse_spotter_placefile(text),
+            "credit": "Spotter Network"}
+    _SPOT_CACHE = (now, data)
     return JSONResponse(data)
 
 

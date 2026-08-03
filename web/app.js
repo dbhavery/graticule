@@ -46,6 +46,7 @@ const KIND_LABEL = {
   airports: 'AIRPORT', tfrs: 'FLIGHT RESTRICTION',
   parcels_wa: 'PARCEL',
   metar: 'SURFACE OBS', lsr: 'STORM REPORT', warning: 'NWS ALERT',
+  cameras: 'WILDFIRE CAMERA', spotters: 'SPOTTER REPORT',
   spc: 'SPC OUTLOOK', model: 'MODEL FIELD', aqi: 'AIR QUALITY',
 };
 
@@ -859,6 +860,8 @@ function bindUI() {
       else if (layer === 'metar')      toggleMetar(on);
       else if (layer === 'warnings')   toggleWarnings(on);
       else if (layer === 'lsr')        toggleLsr(on);
+      else if (layer === 'cameras')    toggleCameras(on);
+      else if (layer === 'spotters')   toggleSpotters(on);
       else if (layer === 'terminator') toggleTerminator(on);
       else if (layer === 'parcels_us') toggleParcelsUS(on);
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
@@ -2736,6 +2739,8 @@ function showPanel(entity) {
   else if (kind === 'launches')   { title = props.name || 'Launch'; subtitle = `${props.vehicle || ''} · ${props.pad_location || ''}`; }
   else if (kind === 'news')       { title = props.name || 'Natural event'; subtitle = (props.categories && props.categories.join(' · ')) || ''; }
   else if (kind === 'parcels_wa') { title = props.address || `Parcel ${props.parcel_id || ''}`; subtitle = `${props.city || 'Washington'} · APN ${props.parcel_id || '—'}`; }
+  else if (kind === 'cameras')    { title = props.name || props.id; subtitle = `${props.county ? props.county + ' County, ' : ''}${props.state || 'CA'}`; }
+  else if (kind === 'spotters')   { title = props.report || 'Spotter report'; subtitle = props.reporter ? `Reported by ${props.reporter}` : 'Spotter Network'; }
   else if (kind === 'metar')      { title = props.id || 'Station'; subtitle = props.name || 'Surface observation'; }
   else if (kind === 'lsr')        { title = `${props.type}${props.magnitude ? ` ${props.magnitude}` : ''}`; subtitle = `${props.city || ''}${props.state ? `, ${props.state}` : ''}`; }
   else if (kind === 'warning')    { title = props.event || 'Alert'; subtitle = (props.areaDesc || '').split(';').slice(0, 3).join(', '); }
@@ -2872,6 +2877,16 @@ const FIELD_META = {
   magnitude:      { label: 'Magnitude' },
   magnitude_value: { label: 'Magnitude',  num: true },
   magnitude_unit: { label: 'Unit' },
+  // wildfire cameras
+  county:         { label: 'County' },
+  sponsor:        { label: 'Sponsor' },
+  az_current:     { label: 'Azimuth',    fmt: (v) => `${Number(v).toFixed(1)}°` },
+  tilt_current:   { label: 'Tilt',       fmt: (v) => `${Number(v).toFixed(1)}°` },
+  last_frame_ts:  { label: 'Frame age',  time: true },
+  // spotter reports
+  reporter:       { label: 'Reported by' },
+  report:         { label: 'Report' },
+  notes:          { label: 'Notes',      wide: true },
 };
 
 /* Headline = the one number you actually came for. Kinds absent from this map
@@ -2965,7 +2980,9 @@ function detailRow(key, value) {
 
 /* Fields that exist only to feed a derived row. `ts` is the epoch behind
    `last_seen`; printing both means printing 1785739069.89 next to "just now". */
-const DETAIL_SKIP = new Set(['ts']);
+// `image` is an internal proxy path and the frame it points at is already
+// rendered above the grid; `icon` is a placefile sprite index.
+const DETAIL_SKIP = new Set(['ts', 'image', 'icon']);
 
 function renderDetail(kind, props) {
   const body = document.getElementById('panel-body');
@@ -2979,6 +2996,20 @@ function renderDetail(kind, props) {
     document.getElementById('panel-subtitle').textContent.trim(),
     document.getElementById('panel-kind').textContent.trim().toLowerCase(),
   ].filter(Boolean));
+
+  /* A camera's whole point is the picture. Cache-bust so reopening the panel
+     fetches the current frame rather than the one from ten minutes ago, and
+     drop the element entirely if the camera is down rather than leaving a
+     broken-image glyph in the panel. */
+  if (kind === 'cameras' && props.image) {
+    const shot = document.createElement('img');
+    shot.className = 'dt-shot';
+    shot.alt = `Current frame from ${props.name || props.id}`;
+    shot.loading = 'lazy';
+    shot.src = `${props.image}?t=${Math.floor(Date.now() / 60000)}`;
+    shot.addEventListener('error', () => shot.remove(), { once: true });
+    body.appendChild(shot);
+  }
 
   const headlineFn = KIND_HEADLINE[kind];
   let head = headlineFn ? headlineFn(props) : null;
@@ -6591,4 +6622,158 @@ function drawCompareChart(series, def) {
     item.append(dot, lab);
     leg.appendChild(item);
   });
+}
+
+
+/* ---------------------------------------------------------------------------
+   WILDFIRE CAMERAS and SPOTTER REPORTS
+   ---------------------------------------------------------------------------
+   Two rows of StormCat5's capability chart that this app had written off.
+
+   "Webcams" was marked key-gated because Windy's webcam API needs a key.
+   ALERTCalifornia / UC San Diego publish ~1,280 geolocated wildfire cameras
+   and their current frames with no key at all, and they pair with the FIRMS
+   fire-detection layer already here: a hotspot plus a camera pointed at it is
+   a far better answer than either alone.
+
+   "Storm Chaser Feeds" was marked not possible without per-chaser
+   partnerships. That was wrong. Spotter Network publishes a public GRLevelX
+   placefile of live spotter reports — the same ground truth the desktop radar
+   apps plot — and it needs no account. Reports, not raw chaser positions,
+   which is the part that genuinely does need a partnership.
+
+   Both are proxied through the server: the upstream hosts set no CORS
+   headers, the placefile needs parsing, and ~900 of the camera records carry
+   null coordinates that would become NaN positions and corrupt Cesium's
+   frustum computation. */
+
+let camerasDS = null;
+let spottersDS = null;
+
+function toggleCameras(on) {
+  if (!camerasDS) {
+    camerasDS = new Cesium.CustomDataSource('cameras');
+    viewer.dataSources.add(camerasDS);
+  }
+  camerasDS.show = !!on;
+  if (on && camerasDS.entities.values.length === 0) refreshCameras();
+  viewer.scene.requestRender();
+}
+
+async function refreshCameras() {
+  if (!camerasDS || !camerasDS.show) return;
+  let gj;
+  try {
+    const r = await fetch('/api/cameras');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    gj = await r.json();
+  } catch (err) {
+    pushEvent('CAM', `Wildfire cameras unavailable (${err.message})`, Date.now());
+    setCount('cameras', 'error');
+    return;
+  }
+
+  camerasDS.entities.removeAll();
+  const feats = gj.features || [];
+  for (const f of feats) {
+    const [lon, lat] = f.geometry.coordinates;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const p = f.properties;
+    camerasDS.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      point: {
+        pixelSize: 6,
+        color: Cesium.Color.fromCssColorString('#67e8f9'),
+        outlineColor: Cesium.Color.BLACK.withAlpha(0.7),
+        outlineWidth: 1,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      /* 1,281 label glyphs would blow the atlas Cesium allocates per
+         LabelCollection, so names appear only inside ~120km. */
+      label: {
+        text: p.name || p.id,
+        font: '600 10px Inter, sans-serif',
+        fillColor: Cesium.Color.fromCssColorString('#67e8f9'),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -12),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 120_000),
+      },
+      properties: { ...p },
+    });
+  }
+  setCount('cameras', feats.length);
+  updateCategoryCounts();
+  viewer.scene.requestRender();
+}
+
+const SPOTTER_TONE = {
+  tornado: '#f0abfc', funnel: '#f0abfc', 'wall cloud': '#e879f9',
+  hail: '#4dd2ff', wind: '#fbbf24', flood: '#4ade80',
+};
+
+function spotterColour(report) {
+  const r = (report || '').toLowerCase();
+  for (const [k, c] of Object.entries(SPOTTER_TONE)) if (r.includes(k)) return c;
+  return '#f97373';
+}
+
+function toggleSpotters(on) {
+  if (!spottersDS) {
+    spottersDS = new Cesium.CustomDataSource('spotters');
+    viewer.dataSources.add(spottersDS);
+  }
+  spottersDS.show = !!on;
+  if (on) refreshSpotters();
+  viewer.scene.requestRender();
+}
+
+async function refreshSpotters() {
+  if (!spottersDS || !spottersDS.show) return;
+  let gj;
+  try {
+    const r = await fetch('/api/spotters');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    gj = await r.json();
+  } catch (err) {
+    pushEvent('SPOT', `Spotter reports unavailable (${err.message})`, Date.now());
+    setCount('spotters', 'error');
+    return;
+  }
+
+  spottersDS.entities.removeAll();
+  const feats = gj.features || [];
+  for (const f of feats) {
+    const [lon, lat] = f.geometry.coordinates;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const p = f.properties;
+    const colour = spotterColour(p.report);
+    spottersDS.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lon, lat),
+      point: {
+        pixelSize: 9,
+        color: Cesium.Color.fromCssColorString(colour),
+        outlineColor: Cesium.Color.BLACK.withAlpha(0.75),
+        outlineWidth: 1,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: p.report || 'Report',
+        font: '600 10px Inter, sans-serif',
+        fillColor: Cesium.Color.fromCssColorString(colour),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -14),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 4_000_000),
+      },
+      properties: { ...p },
+    });
+  }
+  setCount('spotters', feats.length);
+  updateCategoryCounts();
+  viewer.scene.requestRender();
 }
