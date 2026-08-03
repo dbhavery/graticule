@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graticule handoff — 2026-08-03 — video parity and live data breadth</title>
+<style>
+  :root {
+    --bg: #0b0e13; --panel: #131822; --line: #232c3b;
+    --fg: #e8edf2; --dim: #97a3b6; --mute: #6b788c;
+    --accent: #4dd2ff; --ok: #3ad46a; --warn: #e9c23c; --bad: #f0484b;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, "Segoe UI", system-ui, sans-serif;
+    padding: 40px 24px 96px;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.2px; }
+  h2 {
+    font-size: 20px; margin: 46px 0 14px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--accent); }
+  .sub { color: var(--dim); margin: 0 0 26px; }
+  code, .m { font-family: var(--mono); font-size: 0.9em; }
+  code { background: #1a2130; padding: 1px 5px; border-radius: 3px; color: #cfe6f5; }
+  pre {
+    background: #0e131c; border: 1px solid var(--line); border-radius: 6px;
+    padding: 12px 14px; overflow-x: auto; font-family: var(--mono);
+    font-size: 13px; line-height: 1.55;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 12.5px;
+       text-transform: uppercase; letter-spacing: 1px; }
+  td.n { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 14px 18px; margin: 14px 0;
+  }
+  .card.hot { border-color: #5a3a1a; background: #1a1408; }
+  .card.bad { border-color: #4a2024; background: #1a0d0f; }
+  .card.ok  { border-color: #1d4a2c; background: #0a1a11; }
+  .k { color: var(--warn); font-weight: 600; }
+  .good { color: var(--ok); }
+  .no { color: var(--bad); }
+  ul, ol { padding-left: 22px; }
+  li { margin: 5px 0; }
+  a { color: var(--accent); }
+  .path { font-family: var(--mono); font-size: 13px; color: #9fd8ef; word-break: break-all; }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 11px;
+    padding: 1px 7px; border-radius: 3px; border: 1px solid currentColor;
+    margin-right: 6px;
+  }
+  .t-done { color: var(--ok); } .t-open { color: var(--warn); }
+  .t-block { color: var(--bad); } .t-note { color: var(--dim); }
+  footer { margin-top: 60px; color: var(--mute); font-size: 13px;
+           border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Graticule — video feature parity, live data breadth, UI/UX rebuild</h1>
+<p class="sub">
+  Handoff written 2026-08-03 · session <span class="m">1c129daf</span> ·
+  branch <span class="m">dev</span> · tip <span class="m">acf79d6</span>, pushed, working tree clean
+</p>
+
+<div class="card hot">
+  <strong>Read these three things before touching anything.</strong>
+  <ol>
+    <li><strong>The source videos and their frames are on disk.</strong> Do not re-download them, and do
+      not work from a written summary of them. A previous session summarised frames that were later lost,
+      and the summary was thin enough that half the population dashboard never got built. Extract frames
+      and look at them.</li>
+    <li><strong>Cesium hides render errors.</strong> A clean <span class="m">pageerror</span> listener and
+      a clean console mean nothing. Hook <span class="m">viewer.scene.renderError</span> and check for
+      <span class="m">.cesium-widget-errorPanel</span>.</li>
+    <li><strong>This box cannot measure GPU performance.</strong> Headless Chromium runs SwiftShader, so
+      any before/after frame-rate number is bound by the software rasteriser, not by the change. Measure
+      behaviour and pair every saving with a liveness check.</li>
+  </ol>
+</div>
+
+<h2>Where things stand</h2>
+
+<p>Don's standing brief: Graticule is a professional weather superapp built from two YouTube videos he
+supplied as the spec, with a completely realistic Earth as the centrepiece. Over this session he pushed
+three times, each time correctly:</p>
+
+<ol>
+  <li><em>"does not look realistic, UI does not look high-quality, UX does not feel natural and
+    intuative."</em></li>
+  <li><em>"did you actually watch/screenshot the layouts... find out what and where to get all that live
+    data and design them into the graticule app exactly as they are."</em></li>
+  <li><em>"find other ways"</em> then <em>"come on. you can figure this out... More effort."</em> — both
+    aimed at capabilities I had wrongly written off as blocked.</li>
+</ol>
+
+<p>The third one is the lesson worth carrying: <strong>I declared two capabilities impossible and one
+merely hard, and all three claims were wrong.</strong> Check before declaring a wall.</p>
+
+<h2>Commits this session</h2>
+
+<p>All on <span class="m">dev</span>, all pushed. Each message carries the full reasoning and the
+verification numbers, so read the commit rather than duplicating it here:
+<span class="m">git log 5458c60..acf79d6</span></p>
+
+<table>
+  <tr><th>SHA</th><th>What</th></tr>
+  <tr><td class="m">6c49e6f</td><td>Parcels no longer explode the tile graph; night lights stop blanketing near-zoom</td></tr>
+  <tr><td class="m">4537e05</td><td>Re-grade the globe; fix the dead NIGHT basemap</td></tr>
+  <tr><td class="m">4b2002b</td><td>Stop the chrome from lying: live legend, inert controls, collapsed feed debug</td></tr>
+  <tr><td class="m">08f5323</td><td>Close issues.md #1 with the real root cause and measurements</td></tr>
+  <tr><td class="m">cbe0e8d</td><td>HUD hugs its content; press feedback on the chrome <span class="tag t-note">another session</span></td></tr>
+  <tr><td class="m">4da9f5f</td><td>Split the top-right strip into DRAW and BASE, and label them</td></tr>
+  <tr><td class="m">0ed465a</td><td>Put the stylesheet on a type scale: 16/6/14 → 7/2/3</td></tr>
+  <tr><td class="m">fbbe610</td><td>Detail panel: a real drill-down instead of a JSON dump</td></tr>
+  <tr><td class="m">37020c9</td><td>Turn on explicit-render mode; the code was already written for it</td></tr>
+  <tr><td class="m">c41134c</td><td>World population dashboard, built from the source frames</td></tr>
+  <tr><td class="m">b067153</td><td>RadarScope warning cards and the Weatherfront frame stamp</td></tr>
+  <tr><td class="m">5cf8dd9</td><td>Compare Runs and Compare Models, on the iDSSe chart shape</td></tr>
+  <tr><td class="m">adc3fea</td><td>Cameras and spotters: two rows I wrongly called blocked</td></tr>
+  <tr><td class="m">acf79d6</td><td>Cameras 1,281 → 5,732 across three keyless networks</td></tr>
+</table>
+
+<h2>Source material on disk</h2>
+
+<div class="card">
+  <p class="path">C:/Users/dbhav/AppData/Local/Temp/claude/C--Users-dbhav-Projects/1c129daf-7a32-41ca-b2ff-3a484cdf0078/scratchpad/videos/</p>
+  <p><span class="m">v1.mp4</span> StormCat5 radar-app review, 25 min, 1920x1080 ·
+     <span class="m">v2.mp4</span> LiveStream07 world population, 8.7 min ·
+     both <span class="m">.srt</span> transcripts · <span class="m">frames/</span></p>
+  <pre>ffmpeg -ss &lt;seconds&gt; -i v1.mp4 -frames:v 1 -q:v 1 frames/out.png</pre>
+  <p><span class="k">★</span> That scratchpad is <strong>ephemeral</strong>. If it has been cleared, the
+  videos are gone and must be re-pulled with
+  <span class="m">yt-dlp --extractor-args "youtube:player_client=android_vr"</span>
+  (IDs <span class="m">W4Qg0_vxKiE</span> and <span class="m">D1GZq1qiVHU</span>). Copy them somewhere
+  durable early if the next session will need them.</p>
+</div>
+
+<p>Useful timestamps in <span class="m">v1.mp4</span>: capability chart <span class="m">1424s</span> ·
+Weatherfront model panel with Compare Runs <span class="m">1223s</span> ·
+RadarScope Pro warnings and pane buttons <span class="m">522s</span> ·
+Weatherfront settings and frame stamp <span class="m">1330s</span>.</p>
+
+<h2>StormCat5 capability chart — current state</h2>
+
+<table>
+  <tr><th>Row</th><th>State</th><th>Notes</th></tr>
+  <tr><td>National Radar</td><td class="good">done</td><td>RainViewer composite + forecast</td></tr>
+  <tr><td>Local Hi-Res Radar</td><td class="good">done</td><td>30 NEXRAD sites via Iowa State</td></tr>
+  <tr><td>Satellite</td><td class="good">done</td><td>GOES-East/West + global true colour</td></tr>
+  <tr><td>Warnings</td><td class="good">done</td><td>RadarScope-shaped cards, <span class="m">b067153</span></td></tr>
+  <tr><td>Weather Models</td><td class="good">done</td><td>Open-Meteo, plus Compare Runs/Models <span class="m">5cf8dd9</span></td></tr>
+  <tr><td>Webcams</td><td class="good">done</td><td>5,732 cameras, no key. Was wrongly reported as gated on a Windy key.</td></tr>
+  <tr><td>Storm Chaser Feeds</td><td class="good">done</td><td>Spotter Network reports. Was wrongly reported impossible.</td></tr>
+  <tr><td>Custom Graphics</td><td class="no">not started</td><td>the last unticked row</td></tr>
+</table>
+
+<h2>Live data sources now wired</h2>
+
+<table>
+  <tr><th>Source</th><th>Used for</th><th>Key?</th></tr>
+  <tr><td>World Bank <span class="m">SP.POP.TOTL</span> / <span class="m">SP.POP.GROW</span></td><td>WORLD dashboard, 217 countries</td><td class="good">none</td></tr>
+  <tr><td>flagcdn.com</td><td>country flags</td><td class="good">none</td></tr>
+  <tr><td>Pew Research Center</td><td>religion ranks (static, no live feed exists)</td><td class="good">n/a</td></tr>
+  <tr><td>ALERTCalifornia / UC San Diego</td><td>1,281 wildfire cameras + live frames</td><td class="good">none</td></tr>
+  <tr><td>Caltrans CWWP2</td><td>3,478 highway CCTV, 12 districts, stills + 12 prior frames + HLS</td><td class="good">none</td></tr>
+  <tr><td>NYC DOT</td><td>973 city cameras</td><td class="good">none</td></tr>
+  <tr><td>Spotter Network placefile</td><td>live spotter ground truth</td><td class="good">none</td></tr>
+  <tr><td>Open-Meteo forecast + previous-runs</td><td>model and run spread charts</td><td class="good">none</td></tr>
+  <tr><td>NWS <span class="m">api.weather.gov</span></td><td>alerts with hazard parameters</td><td class="good">none</td></tr>
+</table>
+
+<h3>Ruled out — do not re-probe these</h3>
+<ul>
+  <li><strong>511 platform family</strong> (Georgia, Arizona, Florida, Maine, and siblings): every
+    <span class="m">/api/v2/get/cameras</span> answers <span class="m">Invalid Key</span>.</li>
+  <li><strong>MassDOT, MnDOT</strong>: return single-page-app HTML, not JSON, at the documented paths.</li>
+  <li><strong>FAA WeatherCams</strong>: 401.</li>
+  <li><strong>AlertWildfire / ALERTWest sibling domains</strong>: empty bodies or 403. ALERTCalifornia is
+    the only reachable member, so wildfire cameras outside California are not available this way.</li>
+  <li><strong>AWS <span class="m">noaa-nexrad-level2</span></strong>: 403 on anonymous listing.</li>
+  <li><strong>Iowa State RIDGE higher tilts</strong>: <span class="m">N1Q/N2Q/N3Q</span> all 503. Only
+    <span class="m">N0Q</span> and <span class="m">N0U</span> (0.5°) exist there.</li>
+  <li><strong>restcountries.com</strong>: v3.1 <em>and</em> v5 both return the v3.1 deprecation notice.
+    Unusable; World Bank replaced it.</li>
+</ul>
+
+<h3>Available but need a free key — Don's call, do not assume</h3>
+<ul>
+  <li><strong>WSDOT</strong> and <strong>Ohio OHGO</strong> camera feeds.</li>
+  <li><strong>Windy webcams</strong> (<span class="m">WINDY_WEBCAM_KEY</span>) — no longer needed for the
+    Webcams row, but would add global coverage.</li>
+</ul>
+
+<h2>Open work, roughly in order</h2>
+
+<table>
+  <tr><th>Item</th><th>Source</th><th>Note</th></tr>
+  <tr><td>County selection + area darkening</td><td class="good"><span class="m">ne_10m_admin_2_counties.zip</span> already in the repo</td><td>next up, nothing to fetch</td></tr>
+  <tr><td>Presentation mode</td><td>none needed</td><td>chrome hiding, cheap</td></tr>
+  <tr><td>Single / Dual / Quad pane</td><td>none needed</td><td><span class="k">★</span> see correction below</td></tr>
+  <tr><td>More keyless live data</td><td>USGS streamgauges, NOAA tides + buoys, OpenAQ</td><td>none in the app yet</td></tr>
+  <tr><td>Mesoanalysis grid (SBCAPE/CIN/LCL/EBWD/SRH/STP)</td><td>SPC mesoanalysis; Open-Meteo has CAPE/CIN/LI</td><td>GR Earth's big grid</td></tr>
+  <tr><td>Radar tilt / elevation selector</td><td>Unidata THREDDS serves Level II keylessly (verified 200)</td><td>needs server-side decode; a build, not a lookup</td></tr>
+  <tr><td>Custom Graphics</td><td>none needed</td><td>last unticked chart row</td></tr>
+  <tr><td><span class="m">issues.md</span> #3</td><td>—</td><td><span class="m">applyPerfPreset</span> advertises entity caps it never implements</td></tr>
+</table>
+
+<div class="card bad">
+  <strong>Correction to carry forward.</strong> I told Don that dual/quad pane was expensive because
+  "N panes is N WebGL contexts". That reasoning was lazy. Browsers allow roughly 16 contexts, so four is
+  fine, and better still, RadarScope's extra panes show <em>raster products of the same view</em>, which
+  can be plain 2D canvases drawing the same tiles with <strong>no extra WebGL context at all</strong>.
+  Build it the 2D way.
+</div>
+
+<h2>Traps this codebase has already sprung</h2>
+
+<div class="card">
+<h3>Cesium</h3>
+<ul>
+  <li><strong>Render errors are invisible.</strong> Cesium catches exceptions during
+    <span class="m">render()</span>, shows its own panel and stops drawing. Nothing reaches
+    <span class="m">window.onerror</span>. Hook <span class="m">scene.renderError</span> and assert on
+    <span class="m">.cesium-widget-errorPanel</span>.</li>
+  <li><strong><span class="m">minimumLevel</span> without a <span class="m">rectangle</span> detonates the
+    tile graph.</strong> Adding a layer walks every loaded quadtree tile; a level-0 root at
+    <span class="m">minimumLevel: 14</span> asks for 16384×8192 skeletons. Measured 37.4s of blocked main
+    thread, then <span class="m">RangeError</span>, then the renderer process dies. Always pass a bounding
+    rectangle. Gating on camera altitude does not help — root tiles stay loaded at every zoom.</li>
+  <li><strong><span class="m">imageryLayers.add()</span> returns undefined</strong>, unlike
+    <span class="m">addImageryProvider</span>. Assigning its result and then setting a property throws,
+    and if that runs during init it silently aborts the rest of the bootstrap so no UI wiring happens.</li>
+  <li><strong>Label atlas overflow.</strong> One texture atlas per LabelCollection, allocated eagerly and
+    ignoring <span class="m">distanceDisplayCondition</span> for allocation. Roughly 3,000 labels throw.
+    The 5,732 cameras cap label visibility at 120km for this reason.</li>
+  <li><strong>Non-finite positions corrupt the frustum.</strong> Roughly 900 of 2,181 ALERTCalifornia
+    records ship <span class="m">[null, null]</span>. They are dropped server-side; the verifier asserts
+    zero reach the client.</li>
+  <li><strong><span class="m">requestRenderMode</span> was never set</strong> despite ~20
+    <span class="m">requestRender()</span> calls already in the code, so all of them were no-ops. Now on
+    with <span class="m">maximumRenderTimeChange: 0.5</span>. Anything that mutates the scene from a timer
+    must call <span class="m">requestRender()</span> or it will freeze.</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>JavaScript and CSS</h3>
+<ul>
+  <li><strong>Temporal dead zone.</strong> A <span class="m">const</span> declared below
+    <span class="m">const settings</span> but read inside <span class="m">loadSettings()</span> throws
+    before <span class="m">let viewer</span> is reached. Looks like "the app does not boot" with a clean
+    <span class="m">node --check</span>. Diagnose with <span class="m">typeof x</span> throwing, which
+    proves TDZ rather than undeclared.</li>
+  <li><strong><span class="m">let</span> at top level of a classic script is script-scoped, not on
+    <span class="m">window</span>.</strong> Playwright probes must use bare identifiers with
+    <span class="m">typeof x !== 'undefined'</span>.</li>
+  <li><strong>localStorage defeats new visual defaults.</strong> There is a
+    <span class="m">renderEpoch</span> integer; bump it and list the keys to drop.</li>
+  <li><strong>The stylesheet is on a token scale now</strong> (7 font sizes, 2 radii, 3 tracking values).
+    A raw px in <span class="m">font-size</span>, <span class="m">border-radius</span> or
+    <span class="m">letter-spacing</span> is a bug. <span class="m">grep</span> proves there are none.</li>
+  <li><strong>Static is mounted at <span class="m">/static</span>, not the document root.</strong> A bare
+    <span class="m">fetch('data/x.json')</span> 404s, and a 404 does not fire
+    <span class="m">requestfailed</span>, so it looks like silence.</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Upstream data
+</h3>
+<ul>
+  <li><strong>World Bank region strings carry a trailing space.</strong>
+    <span class="m">"Sub-Saharan Africa "</span>. This silently unmapped most countries and produced a
+    zero for Latin America. The build script's <span class="m">--verify</span> caught it.</li>
+  <li><strong>Open-Meteo defaults to metric.</strong> Without unit parameters the legend printed
+    <span class="m">35.6°F</span> for a 96°F afternoon.</li>
+  <li><strong>Open-Meteo back-fills the tail of older runs</strong> with the latest run's values, so a
+    "last value" legend prints identical numbers across four runs that genuinely differ by up to 10°F
+    earlier in the window.</li>
+  <li><strong>NWS sends <span class="m">maxHailSize</span>, not <span class="m">hailSize</span></strong>.
+    The old code read the wrong key, so hail size had never once rendered.</li>
+  <li><strong>The source population board contradicts itself.</strong> Its TODAY panel implies ~217k
+    births/day while its own THIS YEAR panel implies ~362k. The second is right. Reproduce the layout,
+    not the arithmetic.</li>
+</ul>
+</div>
+
+<h2>Verification standard Don expects</h2>
+
+<div class="card ok">
+<ul>
+  <li><strong>Look at the pixels.</strong> "Verified" means the screenshot was opened and read, not that
+    the code seemed right. Every UI change in this session was screenshotted and inspected, and that is
+    how four detail-panel defects and the toolbar collision were found.</li>
+  <li><strong>A check that cannot fail proves nothing.</strong> The spotter feed returned zero features on
+    a quiet night; the parser was therefore run against a captured placefile that did carry a report, plus
+    a garbage-input negative control.</li>
+  <li><strong>Test each arm separately.</strong> Three camera networks were each opened and decoded,
+    because one working would have hidden two broken ones.</li>
+  <li><strong>Assert the negative.</strong> The tool strip test asserts that entering draw mode does
+    <em>not</em> mark the basemap bar — the assertion that fails on the old markup.</li>
+  <li><strong>Do not claim numbers this machine cannot measure.</strong> See the SwiftShader note at the
+    top.</li>
+  <li>Open every visual change in Don's browser automatically:
+    <span class="m">powershell -NoProfile -Command "Start-Process 'http://127.0.0.1:8731/'"</span>.
+    <span class="m">cmd //c start</span> fails silently on special characters.</li>
+</ul>
+</div>
+
+<h2>Running it</h2>
+<pre>cd C:/Users/dbhav/Projects/graticule
+.venv/Scripts/python.exe -m uvicorn graticule.server:app --host 127.0.0.1 --port 8731</pre>
+<p>Then <a href="http://127.0.0.1:8731/">http://127.0.0.1:8731/</a>. The server must be restarted by hand
+after editing <span class="m">graticule/server.py</span>; it is not running with
+<span class="m">--reload</span>. Rebuild the population dataset with
+<span class="m">python scripts/build_world_population.py --verify</span>.</p>
+
+<h2>Suggested skills for the next session</h2>
+<table>
+  <tr><th>Skill</th><th>When</th></tr>
+  <tr><td class="m">verify-before-delivering</td><td>Before saying anything is done, fixed or shipped. Routes the artifact to the right instrument. This is the one that matters most here.</td></tr>
+  <tr><td class="m">web-design-2026</td><td>Any further UI work. It already carries the Graticule 16/6/14 scale finding and a dashboard section on progressive disclosure that maps directly onto the remaining HUD work.</td></tr>
+  <tr><td class="m">second-opinion</td><td>Before shipping anything self-designed. It caught an overstatement in one of my own commit messages this session.</td></tr>
+  <tr><td class="m">watch-youtube</td><td>Only if the scratchpad videos are gone and they must be re-pulled.</td></tr>
+  <tr><td class="m">emil-design-eng</td><td>Motion and component feel, if the chrome polish continues.</td></tr>
+</table>
+<p class="sub" style="margin-top:10px">Do not invoke the Agent tool or workflows unless Don asks; that
+restriction was in force for this session and should be treated as standing until he says otherwise.</p>
+
+<h2>Memory written this session</h2>
+<p>All under
+<span class="path">C:/Users/dbhav/.claude/projects/C--Users-dbhav-Projects/memory/</span> and indexed in
+<span class="m">MEMORY.md</span>:</p>
+<ul>
+  <li><span class="m">project-graticule-video-feature-parity.md</span> — the running ledger of what shipped
+    versus not, with the free data source for each gap. <strong>Update this as items land.</strong></li>
+  <li><span class="m">reference-cesium-requestrendermode-and-swiftshader-control.md</span></li>
+  <li><span class="m">reference-cesium-realistic-globe-grading.md</span></li>
+  <li><span class="m">reference-cesium-render-errors-are-invisible.md</span></li>
+  <li><span class="m">reference-open-design-designmd-contradicts-tokens.md</span> — unrelated to Graticule
+    but written here: 92 of 152 Open Design systems have prose that contradicts their own tokens.</li>
+</ul>
+
+<h2>Coordination</h2>
+<p>Another agent was handed the Open Design thread and told to deliver a
+<span class="m">trading-terminal</span> token proposal for Graticule rather than editing the repo. Nothing
+has arrived. If it does, note that Graticule's stylesheet is now on its own token scale, and that
+<span class="m">trading-terminal</span>'s <span class="m">DESIGN.md</span> and
+<span class="m">tokens.css</span> describe two different design systems — use one deliberately.
+The <span class="m">claude-peers</span> MCP was down all session, so coordination has to go through Don.</p>
+
+<footer>
+Graticule · branch <span class="m">dev</span> · tip <span class="m">acf79d6</span> ·
+written 2026-08-03 by Claude Opus 5 (1M context) for the next session.
+</footer>
+
+</main>
+</body>
+</html>
