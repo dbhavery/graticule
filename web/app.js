@@ -333,6 +333,7 @@ const TICKER_MAX = 6;
   initSkyMirrors();
   initWorldPane();
   initWorldDash();
+  initModelCompare();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -428,6 +429,16 @@ async function initViewer() {
     if (Cesium.defined(picked) && picked.id) {
       showPanel(picked.id);
       pushHistory(picked.id);
+    } else if (CMP.mode !== 'single') {
+      // Empty globe click while a comparison mode is armed: read the ground
+      // point and pull the run or model spread there.
+      const ray = viewer.camera.getPickRay(c.position);
+      const cart = ray && viewer.scene.globe.pick(ray, viewer.scene);
+      if (cart) {
+        const carto = Cesium.Cartographic.fromCartesian(cart);
+        compareAtPoint(Cesium.Math.toDegrees(carto.latitude),
+                       Cesium.Math.toDegrees(carto.longitude));
+      }
     }
     spawnClickRipple(c.position);
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
@@ -6360,4 +6371,224 @@ function warnCard(feature, index) {
     li.appendChild(row);
   }
   return li;
+}
+
+/* ---------------------------------------------------------------------------
+   MODEL COMPARISON  —  Single | Compare Runs | Compare Models
+   ---------------------------------------------------------------------------
+   Weatherfront's segmented control, and the chart shape from the NOAA iDSSe
+   desktop: one field, several series, one shared axis, so what you read is the
+   spread between them.
+
+   Not a second map pane. Graticule's model field is a point grid on a globe;
+   side-by-side maps would mean a second WebGL context, which is the expensive
+   item on the list and not what makes model comparison useful anyway. The
+   question a forecaster asks is "do the models agree at this point", and that
+   is a chart.
+
+   Both axes come from Open-Meteo, free and keyless:
+     models  api.open-meteo.com/v1/forecast?...&models=a,b,c
+             -> hourly.<field>_<model> per model, one request
+     runs    previous-runs-api.open-meteo.com/v1/forecast
+             -> hourly.<field>_previous_dayN, the forecast for the same valid
+                time made by the run N days ago. Spread here is run-to-run
+                consistency, which is a different question from model spread.
+   ------------------------------------------------------------------------- */
+
+const CMP = { mode: 'single', abort: null };
+
+// Open-Meteo model ids, with the short labels the survey's apps use.
+const CMP_MODELS = [
+  ['gfs_seamless',   'GFS',   '#4dd2ff'],
+  ['ecmwf_ifs025',   'ECMWF', '#f0abfc'],
+  ['icon_seamless',  'ICON',  '#4ade80'],
+  ['gem_seamless',   'GEM',   '#fbbf24'],
+];
+const CMP_RUN_COLORS = ['#4dd2ff', '#8ab4f8', '#a78bfa', '#f0abfc', '#f97373'];
+const CMP_RUNS = 4;   // current run plus 3 older ones
+
+function initModelCompare() {
+  const seg = document.getElementById('model-mode');
+  if (!seg) return;
+  seg.querySelectorAll('.seg-b').forEach((b) => {
+    b.addEventListener('click', () => {
+      CMP.mode = b.dataset.cmp;
+      seg.querySelectorAll('.seg-b').forEach((x) => {
+        const on = x === b;
+        x.classList.toggle('is-active', on);
+        x.setAttribute('aria-pressed', String(on));
+      });
+      const note = document.getElementById('model-note');
+      if (note) {
+        note.textContent = CMP.mode === 'single'
+          ? 'Point sounding: click anywhere on the globe.'
+          : CMP.mode === 'runs'
+            ? 'Click the globe to compare the last 4 runs of this model.'
+            : 'Click the globe to compare GFS, ECMWF, ICON and GEM.';
+      }
+      if (CMP.mode === 'single') closeCompare();
+    });
+  });
+  document.getElementById('mc-close').addEventListener('click', closeCompare);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && CMP.mode !== 'single') closeCompare();
+  });
+}
+
+function closeCompare() {
+  document.getElementById('modelcompare').classList.add('hidden');
+  if (CMP.abort) { CMP.abort.abort(); CMP.abort = null; }
+}
+
+/* Called from the globe click handler when a comparison mode is active.
+   Returns true if it handled the click. */
+async function compareAtPoint(lat, lon) {
+  if (CMP.mode === 'single') return false;
+  const field = document.getElementById('model-field').value;
+  const def = FIELD_DEFS[field] || { label: field, unit: '' };
+
+  const panel = document.getElementById('modelcompare');
+  panel.classList.remove('hidden');
+  document.getElementById('mc-title').textContent =
+    `${def.label} — ${CMP.mode === 'runs' ? 'run spread' : 'model spread'}`;
+  document.getElementById('mc-sub').textContent =
+    `${lat.toFixed(3)}°, ${lon.toFixed(3)}°  ·  loading…`;
+
+  if (CMP.abort) CMP.abort.abort();
+  CMP.abort = new AbortController();
+
+  try {
+    const series = CMP.mode === 'runs'
+      ? await fetchRunSpread(lat, lon, field, CMP.abort.signal)
+      : await fetchModelSpread(lat, lon, field, CMP.abort.signal);
+    if (!series.length) throw new Error('no series returned');
+    drawCompareChart(series, def);
+    document.getElementById('mc-sub').textContent =
+      `${lat.toFixed(3)}°, ${lon.toFixed(3)}°  ·  ${series.length} series  ·  Open-Meteo`;
+  } catch (err) {
+    if (err.name === 'AbortError') return true;
+    console.warn('model comparison failed:', err);
+    document.getElementById('mc-sub').textContent =
+      `${lat.toFixed(3)}°, ${lon.toFixed(3)}°  ·  unavailable`;
+    document.getElementById('mc-svg').textContent = '';
+    document.getElementById('mc-legend').textContent = '';
+  }
+  return true;
+}
+
+async function fetchModelSpread(lat, lon, field, signal) {
+  const ids = CMP_MODELS.map((m) => m[0]).join(',');
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}`
+    + `&longitude=${lon.toFixed(4)}&hourly=${field}&models=${ids}`
+    + `&forecast_days=5&timezone=UTC&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch`;
+  const r = await fetch(url, { signal });
+  if (!r.ok) throw new Error(`open-meteo ${r.status}`);
+  const d = await r.json();
+  const t = d.hourly?.time || [];
+  return CMP_MODELS.map(([id, label, colour]) => ({
+    label, colour, time: t, values: d.hourly?.[`${field}_${id}`] || [],
+  })).filter((s) => s.values.some((v) => v != null));
+}
+
+async function fetchRunSpread(lat, lon, field, signal) {
+  const vars = [field];
+  for (let i = 1; i < CMP_RUNS; i++) vars.push(`${field}_previous_day${i}`);
+  const url = `https://previous-runs-api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}`
+    + `&longitude=${lon.toFixed(4)}&hourly=${vars.join(',')}`
+    + `&forecast_days=5&timezone=UTC&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch`;
+  const r = await fetch(url, { signal });
+  if (!r.ok) throw new Error(`open-meteo previous-runs ${r.status}`);
+  const d = await r.json();
+  const t = d.hourly?.time || [];
+  return vars.map((v, i) => ({
+    label: i === 0 ? 'Latest run' : `${i}d older`,
+    colour: CMP_RUN_COLORS[i % CMP_RUN_COLORS.length],
+    time: t, values: d.hourly?.[v] || [],
+  })).filter((s) => s.values.some((x) => x != null));
+}
+
+/* Hand-drawn SVG rather than a chart library: four polylines and an axis do
+   not justify a dependency, and this keeps the payload and the parse cost at
+   zero. */
+function drawCompareChart(series, def) {
+  const svg = document.getElementById('mc-svg');
+  const NS = 'http://www.w3.org/2000/svg';
+  const W = 1000, H = 260, PAD_L = 46, PAD_R = 10, PAD_T = 10, PAD_B = 24;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.textContent = '';
+
+  const all = series.flatMap((s) => s.values).filter((v) => v != null);
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const pad = (hi - lo) * 0.08;
+  lo -= pad; hi += pad;
+  const n = Math.max(...series.map((s) => s.values.length));
+  const x = (i) => PAD_L + (i / Math.max(1, n - 1)) * (W - PAD_L - PAD_R);
+  const y = (v) => PAD_T + (1 - (v - lo) / (hi - lo)) * (H - PAD_T - PAD_B);
+
+  const add = (tag, attrs, text) => {
+    const el = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    if (text != null) el.textContent = text;
+    svg.appendChild(el);
+    return el;
+  };
+
+  // Horizontal gridlines with value labels.
+  for (let g = 0; g <= 4; g++) {
+    const v = lo + (hi - lo) * (g / 4);
+    add('line', { x1: PAD_L, x2: W - PAD_R, y1: y(v), y2: y(v),
+                  stroke: 'rgba(255,255,255,0.07)', 'stroke-width': 1 });
+    add('text', { x: PAD_L - 6, y: y(v) + 3, fill: '#5a6373', 'font-size': 10,
+                  'text-anchor': 'end', 'font-family': 'monospace' },
+        v.toFixed(Math.abs(hi - lo) < 5 ? 1 : 0));
+  }
+
+  // A day tick wherever the hour rolls past 00Z.
+  const t0 = series[0].time;
+  for (let i = 0; i < n; i++) {
+    if (!t0[i] || !t0[i].endsWith('T00:00')) continue;
+    add('line', { x1: x(i), x2: x(i), y1: PAD_T, y2: H - PAD_B,
+                  stroke: 'rgba(255,255,255,0.10)', 'stroke-width': 1 });
+    add('text', { x: x(i) + 4, y: H - PAD_B + 14, fill: '#5a6373',
+                  'font-size': 10, 'font-family': 'monospace' }, t0[i].slice(5, 10));
+  }
+
+  for (const s of series) {
+    const pts = [];
+    s.values.forEach((v, i) => { if (v != null) pts.push(`${x(i)},${y(v)}`); });
+    if (pts.length < 2) continue;
+    add('polyline', { points: pts.join(' '), fill: 'none', stroke: s.colour,
+                      'stroke-width': 1.8, 'stroke-linejoin': 'round' });
+  }
+
+  const leg = document.getElementById('mc-legend');
+  leg.textContent = '';
+  /* In run mode the last value is the wrong number to show. Open-Meteo
+     back-fills the tail of an older run with the latest run's values — the
+     final six hours are byte-identical across all four — so a "last value"
+     legend prints four identical figures and the feature looks broken when
+     the runs actually differ by up to 10°F earlier in the window. Report the
+     largest departure from the latest run instead, which is the question run
+     comparison exists to answer. */
+  const base = series[0].values;
+  series.forEach((s, i) => {
+    const item = document.createElement('span');
+    item.className = 'mc-leg';
+    const dot = document.createElement('i');
+    dot.style.background = s.colour;
+    const lab = document.createElement('span');
+    const last = [...s.values].reverse().find((v) => v != null);
+    let text = last != null ? `${s.label} · ${last}${def.unit || ''}` : s.label;
+    if (CMP.mode === 'runs' && i > 0) {
+      let worst = 0;
+      s.values.forEach((v, k) => {
+        if (v != null && base[k] != null) worst = Math.max(worst, Math.abs(v - base[k]));
+      });
+      text = `${s.label} · max Δ ${worst.toFixed(1)}${def.unit || ''}`;
+    }
+    lab.textContent = text;
+    item.append(dot, lab);
+    leg.appendChild(item);
+  });
 }

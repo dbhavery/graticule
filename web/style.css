@@ -1953,3 +1953,56 @@ input[type=range]::-webkit-slider-runnable-track {
   .wd-live-dot { animation: none; }
   .wd-tick { transition-duration: 1ms; }
 }
+
+/* ---- Model comparison: segmented control + chart ------------------------
+   The segmented control is Weatherfront's Single | Compare Runs | Compare
+   Models; the chart is the iDSSe Impact Timeline shape. */
+.seg {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 3px; margin: 8px 0 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm); padding: 3px;
+}
+.seg-b {
+  appearance: none; background: none; border: 0;
+  color: var(--text-mute); font-family: var(--sans);
+  font-size: var(--fs-micro); font-weight: 600; line-height: 1.25;
+  letter-spacing: var(--tr-tight);
+  padding: 5px 4px; border-radius: var(--r-sm); cursor: pointer;
+}
+.seg-b:hover { color: var(--text-dim); }
+.seg-b.is-active { background: var(--accent); color: #041016; }
+
+#modelcompare {
+  position: absolute; left: 296px; right: 16px; bottom: 66px; z-index: 14;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md); padding: 10px 14px 8px;
+  backdrop-filter: blur(8px);
+  transition: opacity 180ms var(--ease-out);
+}
+#modelcompare.hidden { opacity: 0; pointer-events: none; }
+.mc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.mc-title {
+  display: block; font-size: var(--fs-sm); font-weight: 600;
+  color: var(--text); letter-spacing: var(--tr-tight);
+}
+.mc-sub {
+  display: block; font-size: var(--fs-micro); color: var(--text-mute);
+  font-family: var(--mono); margin-top: 2px;
+}
+#mc-close {
+  background: none; border: 0; color: var(--text-dim);
+  font-size: var(--fs-xl); line-height: 1; cursor: pointer; padding: 0 4px;
+}
+#mc-close:hover { color: var(--text); }
+.mc-plot { margin-top: 6px; }
+#mc-svg { width: 100%; height: 190px; display: block; }
+.mc-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 4px; }
+.mc-leg {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-micro); color: var(--text-dim);
+  font-family: var(--mono);
+}
+.mc-leg i { width: 10px; height: 2px; border-radius: 1px; display: inline-block; }

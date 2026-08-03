@@ -171,6 +171,15 @@
           </select>
         </div>
         <label class="sw"><input type="checkbox" data-layer="model"><span class="sw-t"></span><span class="sw-l">Show model field</span></label>
+        <!-- Weatherfront's Single | Compare Runs | Compare Models. Compare
+             opens a multi-series chart at the clicked point rather than a
+             second map pane: Graticule's model layer is a point grid on a
+             globe, and side-by-side maps would mean a second WebGL context. -->
+        <div class="seg" id="model-mode" role="group" aria-label="Model comparison mode">
+          <button class="seg-b is-active" data-cmp="single" aria-pressed="true">Single</button>
+          <button class="seg-b" data-cmp="runs" aria-pressed="false">Compare<br>Runs</button>
+          <button class="seg-b" data-cmp="models" aria-pressed="false">Compare<br>Models</button>
+        </div>
         <p class="pane-note" id="model-note">Point sounding: click anywhere on the globe.</p>
       </div>
 
@@ -505,6 +514,22 @@
   </div>
 
   <!-- ─────────  SETTINGS MODAL  ───────── -->
+  <!-- ─────────  MODEL COMPARISON CHART  ─────────
+       The iDSSe "Impact Timeline" shape: one field, several series, drawn on
+       a shared axis so the spread between runs or between models is the thing
+       you read. Filled by drawCompareChart(). -->
+  <div id="modelcompare" class="hidden">
+    <header class="mc-head">
+      <div>
+        <span class="mc-title" id="mc-title">—</span>
+        <span class="mc-sub" id="mc-sub">—</span>
+      </div>
+      <button id="mc-close" aria-label="Close comparison">×</button>
+    </header>
+    <div class="mc-plot"><svg id="mc-svg" preserveAspectRatio="none"></svg></div>
+    <div class="mc-legend" id="mc-legend"></div>
+  </div>
+
   <!-- ─────────  WORLD POPULATION DASHBOARD  ─────────
        A full-screen replica of the LiveStream07 world-population board:
        TODAY / odometer / THIS YEAR across the top, CONTINENT and BIG RELIGION
