@@ -5,7 +5,7 @@ discovered breakage unrelated to the current task gets logged, not fixed.
 
 ---
 
-## 1. Parcels layer hangs the app when many layers are on (PRE-EXISTING, OPEN)
+## 1. Parcels layer hangs the app when many layers are on (PRE-EXISTING, **FIXED** 2026-08-02)
 
 **Found:** 2026-08-02, during the full-layer regression for the weather rework.
 **Severity:** High — the UI becomes unresponsive for ~45 s and Playwright can
@@ -45,6 +45,32 @@ Attach the parcels imagery only when the camera is below its usable altitude
 and detach on zoom-out, the way `parcels_wa` already gates itself with
 `initParcelsWACameraHook`. Roughly a camera `moveEnd` guard around the
 add/remove, plus a note in the layer label that parcels are near-zoom only.
+
+**Root cause (deeper than the theory above).** It is not just a tile-request
+explosion. Adding an imagery layer runs Cesium's `_onLayerAdded`, which walks
+every loaded quadtree tile and builds imagery skeletons for the new layer.
+`minimumLevel: 14` floors the level for coarse tiles too, so a single level-0
+root tile asks for 16384 x 8192 skeletons. Measured on HEAD: 37,351 ms of
+synchronous main-thread block, then `RangeError: Too many properties to
+enumerate` thrown from inside `addImageryProvider`, then the renderer process
+dies. Root tiles stay loaded at every zoom, so **gating on camera altitude
+alone does not fix it** — the layer also needs a bounding `rectangle`, which
+clips the skeleton range.
+
+**Fix applied.** Altitude gate (<= 12 km) plus a box around the camera's ground
+point, rebuilt only when the view leaves that box; `addImageryProvider` wrapped
+in try/catch so a provider can never take the scene down. Also verified the
+level floor was wrong: z14 returns 404, z15 returns real geometry.
+
+**Measured after** (in-page, so the number is not CDP latency): 0.7 ms at globe
+scale (not attached, 0 tiles), 8.9 ms at 3 km, 28.2 ms at the 12 km ceiling, 0
+render errors. Parcel boundaries confirmed by eye over Seattle.
+
+**Note on the measurements in the table above:** `page.evaluate` round-trip
+time is not a usable instrument on this machine — the same code measured 3.8 ms
+and 41.7 s on consecutive runs with ~47 Chrome processes alive. Attribution
+came from a contiguous three-case run (parcels alone 3.4 ms, legacy without
+977 ms, legacy with 1,015 ms) and from in-page timing.
 
 ---
 
