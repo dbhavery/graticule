@@ -222,6 +222,37 @@ async def nws_alerts() -> JSONResponse:
     return JSONResponse(data)
 
 
+#: NWS Local Storm Reports (hail, wind, tornado, flooding) from Iowa State.
+_LSR_CACHE: tuple[float, dict] | None = None
+_LSR_TTL_S = 180.0
+
+
+@app.get("/api/lsr")
+async def local_storm_reports(hours: int = 12) -> JSONResponse:
+    """Recent local storm reports as GeoJSON."""
+    hours = max(1, min(48, hours))
+    global _LSR_CACHE
+    now = asyncio.get_event_loop().time()
+    if _LSR_CACHE and _LSR_CACHE[1].get("_hours") == hours and now - _LSR_CACHE[0] < _LSR_TTL_S:
+        return JSONResponse(_LSR_CACHE[1])
+
+    url = f"https://mesonet.agron.iastate.edu/geojson/lsr.py?hours={hours}"
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            r = await client.get(url, headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        logger.warning(f"LSR fetch failed: {exc}")
+        if _LSR_CACHE:
+            return JSONResponse(_LSR_CACHE[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    data["_hours"] = hours
+    _LSR_CACHE = (now, data)
+    return JSONResponse(data)
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()

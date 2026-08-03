@@ -1448,3 +1448,40 @@ input[type=range]::-webkit-slider-runnable-track {
 .warn-empty { font-size: 10.5px; color: var(--text-mute); padding: 8px 4px; }
 .warn-card.is-zone { cursor: default; opacity: 0.72; }
 .warn-card.is-zone:hover { background: rgba(255,255,255,0.035); }
+
+/* ---- Draw toolbar + theme picker ---- */
+#drawbar {
+  position: absolute; top: 66px; right: 16px; z-index: 13;
+  display: flex; align-items: center; gap: 5px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px; padding: 5px 7px;
+  backdrop-filter: blur(8px);
+}
+#drawbar.is-drawing { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(77,210,255,0.25); }
+.tool-btn {
+  appearance: none; background: none; border: 0;
+  color: var(--text-dim); font-size: 13px; line-height: 1;
+  padding: 5px 7px; border-radius: 3px; cursor: pointer;
+  transition: all 140ms ease;
+}
+.tool-btn:hover { color: var(--text); background: rgba(255,255,255,0.07); }
+.tool-btn.is-active { color: #041016; background: var(--accent); }
+.tool-swatch {
+  width: 18px; height: 18px; border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.22); cursor: pointer; padding: 0;
+}
+.tool-sep { width: 1px; height: 18px; background: var(--panel-rule); margin: 0 3px; }
+#theme-picker { display: flex; gap: 3px; }
+.theme-btn {
+  appearance: none; background: rgba(255,255,255,0.04);
+  border: 1px solid var(--panel-border); border-radius: 3px;
+  color: var(--text-mute); font-family: var(--sans);
+  font-size: 8.5px; font-weight: 600; letter-spacing: 0.8px;
+  padding: 4px 6px; cursor: pointer; transition: all 140ms ease;
+}
+.theme-btn:hover { color: var(--text-dim); }
+.theme-btn.is-active { background: var(--accent); border-color: var(--accent); color: #041016; }
+
+/* Compass would collide with the toolbar; drop it below. */
+#compass { top: 112px; }

@@ -188,6 +188,16 @@
           </select>
         </div>
         <label class="sw"><input type="checkbox" data-layer="airquality"><span class="sw-t"></span><span class="sw-l">Air Quality (AQI)</span></label>
+        <label class="sw"><input type="checkbox" data-layer="lsr"><span class="sw-t"></span><span class="sw-l">Local Storm Reports</span><span class="sw-n mono" id="lsr-count">0</span></label>
+        <div class="ctl">
+          <span class="ctl-l">Window</span>
+          <select id="lsr-hours" class="ctl-sel">
+            <option value="6">Past 6 h</option>
+            <option value="12" selected>Past 12 h</option>
+            <option value="24">Past 24 h</option>
+            <option value="48">Past 48 h</option>
+          </select>
+        </div>
         <label class="sw"><input type="checkbox" data-layer="webcams" disabled><span class="sw-t"></span><span class="sw-l">Webcams</span></label>
         <p class="pane-note" id="webcam-note">Webcams need a Windy API key in .env (WINDY_WEBCAM_KEY).</p>
       </div>
@@ -352,6 +362,21 @@
       <option value="300">2x</option>
       <option value="150">4x</option>
     </select>
+  </div>
+
+  <!-- ─────────  DRAW TOOLBAR + MAP THEME  ───────── -->
+  <div id="drawbar">
+    <button id="draw-toggle" class="tool-btn" title="Draw on the globe">&#9998;</button>
+    <button id="draw-undo"   class="tool-btn" title="Undo last stroke">&#8630;</button>
+    <button id="draw-clear"  class="tool-btn" title="Clear all strokes">&#9003;</button>
+    <button id="draw-color"  class="tool-swatch" title="Cycle stroke colour"></button>
+    <span class="tool-sep"></span>
+    <div id="theme-picker">
+      <button class="theme-btn" data-theme="satellite" title="Satellite">SAT</button>
+      <button class="theme-btn" data-theme="streets"   title="Streets">MAP</button>
+      <button class="theme-btn" data-theme="topo"      title="Topographic">TOPO</button>
+      <button class="theme-btn" data-theme="night"     title="Night lights">NIGHT</button>
+    </div>
   </div>
 
   <!-- ─────────  COLOUR SCALE LEGEND  ───────── -->

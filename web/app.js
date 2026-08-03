@@ -284,6 +284,8 @@ const TICKER_MAX = 6;
   initTabs();
   initTimeline();
   initWeatherControls();
+  initDrawing();
+  initMapTheme();
   initViewResampling();
   initSkyMirrors();
   initWorldPane();
@@ -759,6 +761,7 @@ function bindUI() {
       else if (layer === 'airquality') toggleAirQuality(on);
       else if (layer === 'metar')      toggleMetar(on);
       else if (layer === 'warnings')   toggleWarnings(on);
+      else if (layer === 'lsr')        toggleLsr(on);
       else if (layer === 'terminator') toggleTerminator(on);
       else if (layer === 'parcels_us') toggleParcelsUS(on);
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
@@ -4337,6 +4340,7 @@ function initWeatherControls() {
   bind('model-name',    () => refreshModelField());
   bind('model-field',   () => refreshModelField());
   bind('obs-field',     () => renderMetar());
+  bind('lsr-hours',     () => { if (isLayerOn('lsr')) refreshLsr(); });
 
   // Opacity sliders in the weather tab mirror the ones in Settings; both write
   // the same setting so the two panels can never disagree.
@@ -4994,4 +4998,227 @@ function currentWxMode() {
 function valueOf(id, dflt) {
   const el = document.getElementById(id);
   return (el && el.value) || dflt;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WAVE 4 — local storm reports, drawing tools, map themes
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ---------- Local Storm Reports ---------------------------------------------
+//
+// Ground truth reported by spotters and offices: hail size, measured gusts,
+// tornado sightings, flooding. Every desktop app in the survey carries these
+// alongside radar because they are what verifies what the radar suggested.
+
+let lsrDS = null;
+
+const LSR_TYPES = {
+  T: { label: 'Tornado',    color: '#ef4444', glyph: '🌪' },
+  H: { label: 'Hail',       color: '#38bdf8', glyph: '⬤' },
+  G: { label: 'Wind Gust',  color: '#fbbf24', glyph: '➤' },
+  D: { label: 'Wind Damage',color: '#f97316', glyph: '✖' },
+  F: { label: 'Flood',      color: '#22c55e', glyph: '≈' },
+  M: { label: 'Marine',     color: '#a78bfa', glyph: '⚓' },
+  S: { label: 'Snow',       color: '#e2e8f0', glyph: '❄' },
+  R: { label: 'Rain',       color: '#60a5fa', glyph: '☂' },
+};
+
+function lsrStyle(t) {
+  return LSR_TYPES[t] || { label: 'Report', color: '#94a3b8', glyph: '•' };
+}
+
+function toggleLsr(on) {
+  if (!lsrDS) {
+    lsrDS = new Cesium.CustomDataSource('lsr');
+    viewer.dataSources.add(lsrDS);
+  }
+  lsrDS.show = !!on;
+  if (on) refreshLsr();
+}
+
+async function refreshLsr() {
+  if (!lsrDS || !lsrDS.show) return;
+  const hours = Number(valueOf('lsr-hours', '12'));
+  let gj;
+  try {
+    const r = await fetch(`/api/lsr?hours=${hours}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    gj = await r.json();
+  } catch (err) {
+    pushEvent('LSR', `Storm reports unavailable (${err.message})`, Date.now());
+    return;
+  }
+
+  lsrDS.entities.removeAll();
+  const feats = gj.features || [];
+  for (const f of feats) {
+    const g = f.geometry;
+    if (!g || g.type !== 'Point') continue;
+    const p = f.properties || {};
+    const st = lsrStyle(p.type);
+    const mag = p.magnitude ? ` ${p.magnitude}` : '';
+    lsrDS.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(g.coordinates[0], g.coordinates[1]),
+      point: {
+        pixelSize: 8,
+        color: Cesium.Color.fromCssColorString(st.color),
+        outlineColor: Cesium.Color.BLACK.withAlpha(0.7),
+        outlineWidth: 1,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: `${st.label}${mag}`,
+        font: '600 10px Inter, sans-serif',
+        fillColor: Cesium.Color.fromCssColorString(st.color),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -13),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3_000_000),
+      },
+      properties: {
+        kind: 'lsr', type: st.label, magnitude: p.magnitude,
+        city: p.city, state: p.st, valid: p.valid, remark: p.remark,
+        source: p.source,
+      },
+    });
+  }
+  const n = document.getElementById('lsr-count');
+  if (n) n.textContent = String(feats.length);
+  viewer.scene.requestRender();
+}
+
+// ---------- Drawing tools -----------------------------------------------------
+//
+// Free-hand annotation over the globe. Present in RadarScope, Radar Omega and
+// WeatherWise; used on stream to circle a feature while talking about it.
+
+const DRAW = {
+  active: false,
+  colorIdx: 0,
+  ds: null,
+  current: null,
+  positions: [],
+  handler: null,
+  strokes: [],
+};
+
+const DRAW_COLORS = ['#38bdf8', '#ef4444', '#fbbf24', '#22c55e', '#f0abfc', '#ffffff'];
+
+function initDrawing() {
+  DRAW.ds = new Cesium.CustomDataSource('drawing');
+  viewer.dataSources.add(DRAW.ds);
+
+  const btn   = document.getElementById('draw-toggle');
+  const clear = document.getElementById('draw-clear');
+  const undo  = document.getElementById('draw-undo');
+  const swatch= document.getElementById('draw-color');
+  if (!btn) return;
+
+  btn.addEventListener('click', () => setDrawing(!DRAW.active));
+  clear.addEventListener('click', () => {
+    DRAW.ds.entities.removeAll();
+    DRAW.strokes = [];
+    viewer.scene.requestRender();
+  });
+  undo.addEventListener('click', () => {
+    const last = DRAW.strokes.pop();
+    if (last) { DRAW.ds.entities.remove(last); viewer.scene.requestRender(); }
+  });
+  swatch.addEventListener('click', () => {
+    DRAW.colorIdx = (DRAW.colorIdx + 1) % DRAW_COLORS.length;
+    swatch.style.background = DRAW_COLORS[DRAW.colorIdx];
+  });
+  swatch.style.background = DRAW_COLORS[0];
+}
+
+function setDrawing(on) {
+  DRAW.active = !!on;
+  const btn = document.getElementById('draw-toggle');
+  const bar = document.getElementById('drawbar');
+  if (btn) btn.classList.toggle('is-active', DRAW.active);
+  if (bar) bar.classList.toggle('is-drawing', DRAW.active);
+
+  // Camera control has to yield while drawing, otherwise a stroke drags the
+  // globe underneath it.
+  const c = viewer.scene.screenSpaceCameraController;
+  c.enableRotate = c.enableTranslate = c.enableZoom = c.enableTilt = c.enableLook = !DRAW.active;
+
+  if (DRAW.active && !DRAW.handler) {
+    DRAW.handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    DRAW.handler.setInputAction((e) => beginStroke(e.position), Cesium.ScreenSpaceEventType.LEFT_DOWN);
+    DRAW.handler.setInputAction((e) => extendStroke(e.endPosition), Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+    DRAW.handler.setInputAction(() => endStroke(), Cesium.ScreenSpaceEventType.LEFT_UP);
+  } else if (!DRAW.active && DRAW.handler) {
+    DRAW.handler.destroy();
+    DRAW.handler = null;
+  }
+}
+
+function pickGlobe(screenPos) {
+  const ray = viewer.camera.getPickRay(screenPos);
+  if (!ray) return null;
+  return viewer.scene.globe.pick(ray, viewer.scene) || null;
+}
+
+function beginStroke(screenPos) {
+  const p = pickGlobe(screenPos);
+  if (!p) return;
+  DRAW.positions = [p];
+  const color = Cesium.Color.fromCssColorString(DRAW_COLORS[DRAW.colorIdx]);
+  DRAW.current = DRAW.ds.entities.add({
+    polyline: {
+      // CallbackProperty keeps the line live while the pointer moves without
+      // rebuilding the entity on every sample.
+      positions: new Cesium.CallbackProperty(() => DRAW.positions, false),
+      width: 3,
+      material: color,
+      clampToGround: true,
+    },
+  });
+}
+
+function extendStroke(screenPos) {
+  if (!DRAW.current) return;
+  const p = pickGlobe(screenPos);
+  if (!p) return;
+  const last = DRAW.positions[DRAW.positions.length - 1];
+  // Thin the samples so a slow drag doesn't push thousands of vertices.
+  if (last && Cesium.Cartesian3.distance(last, p) < 6000) return;
+  DRAW.positions.push(p);
+  viewer.scene.requestRender();
+}
+
+function endStroke() {
+  if (!DRAW.current) return;
+  // Freeze the finished stroke into a static array; a live CallbackProperty
+  // per stroke would keep re-evaluating for the life of the session.
+  const frozen = DRAW.positions.slice();
+  DRAW.current.polyline.positions = frozen;
+  DRAW.strokes.push(DRAW.current);
+  DRAW.current = null;
+  DRAW.positions = [];
+  viewer.scene.requestRender();
+}
+
+// ---------- Map theme ---------------------------------------------------------
+// Light / dark / satellite base, matching the theme picker in the consumer
+// apps. Wraps the existing imagery-base setting so both stay in sync.
+
+function initMapTheme() {
+  const wrap = document.getElementById('theme-picker');
+  if (!wrap) return;
+  wrap.querySelectorAll('.theme-btn').forEach((b) => {
+    b.classList.toggle('is-active', b.dataset.theme === settings.imageryBase);
+    b.addEventListener('click', () => {
+      settings.imageryBase = b.dataset.theme;
+      saveSettings();
+      wrap.querySelectorAll('.theme-btn').forEach((x) =>
+        x.classList.toggle('is-active', x === b));
+      applyImageryBase(settings.imageryBase);
+      const radio = document.querySelector(`input[name="imageryBase"][value="${settings.imageryBase}"]`);
+      if (radio) radio.checked = true;
+    });
+  });
 }
