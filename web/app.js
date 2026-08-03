@@ -2080,12 +2080,23 @@ function toggleNightLights(on) {
   //      with Cesium's GeographicTilingScheme — every request off the doubling
   //      grid 400s. The EPSG:3857 GoogleMapsCompatible set IS standard XYZ,
   //      so we use Web Mercator and let Cesium reproject onto the globe.
-  nightLightsLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg',
-    tilingScheme: new Cesium.WebMercatorTilingScheme(),
-    maximumLevel: 8,
-    credit: 'NASA Earthdata · VIIRS City Lights',
-  }));
+  //   3. The product stops at level 8 (~610 m/px). Left ungated it keeps
+  //      drawing as you descend, upsampling into a flat yellow sheet that
+  //      completely hides the satellite imagery at neighbourhood zoom.
+  //      `maximumTerrainLevel` retires it once tiles refine past regional
+  //      scale, which is the last point the pixels still carry information.
+  // NB: `imageryLayers.add()` returns undefined, unlike `addImageryProvider`
+  // — build the layer first and keep the reference, or every later property
+  // set throws.
+  nightLightsLayer = new Cesium.ImageryLayer(
+    new Cesium.UrlTemplateImageryProvider({
+      url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg',
+      tilingScheme: new Cesium.WebMercatorTilingScheme(),
+      maximumLevel: 8,
+      credit: 'NASA Earthdata · VIIRS City Lights',
+    }),
+    { maximumTerrainLevel: 8 });
+  viewer.imageryLayers.add(nightLightsLayer);
   // Show only on the night side using Cesium's day/night alpha — Cesium 1.98+
   // supports per-imagery dayAlpha/nightAlpha when the globe has lighting.
   nightLightsLayer.dayAlpha   = 0.0;
@@ -2682,6 +2693,13 @@ function hidePanel() { document.getElementById('panel').classList.add('hidden');
 //                Pre-rendered raster tiles only return content at z≈15+, which
 //                is exactly the LOD we want. No owner data (Regrid keeps that
 //                behind their paid API). Free, no key.
+//                The provider carries `minimumLevel: 14`, and Cesium honours
+//                that floor no matter where the camera is — at globe scale it
+//                will happily try to blanket the visible hemisphere in
+//                level-14 tiles, which is millions of requests and locks the
+//                UI for ~45 s. So the imagery is ATTACHED AND DETACHED on
+//                camera altitude rather than left on the stack; see
+//                `syncParcelsUS`.
 //
 //   parcels_wa — WA statewide tax-parcel FeatureServer (DOR / WA Geoservices).
 //                Vector polygons fetched ON-DEMAND for the current viewport,
@@ -2696,12 +2714,24 @@ function hidePanel() { document.getElementById('panel').classList.add('hidden');
 
 const PARCELS_US_URL = 'https://tiles.arcgis.com/tiles/KzeiCaQsMoeCfoCq/arcgis/rest/services/Regrid_Nationwide_Parcel_Boundaries_v1/MapServer/tile/{z}/{y}/{x}';
 const PARCELS_WA_QUERY = 'https://services.arcgis.com/jsIt88o09Q0r1j8h/arcgis/rest/services/Current_Parcels/FeatureServer/0/query';
+// Attach ceiling for the US raster layer, and the half-width of the rectangle
+// it is bounded to. A level-15 tile is ~600 m across, so the 0.32°-wide box
+// this yields at the 12 km ceiling is a few thousand tiles of coverage —
+// bounded work, versus the whole planet. Both numbers matter; see
+// `syncParcelsUS` for why the rectangle is not optional.
+const PARCELS_US_MAX_ALT_M = 12000;
+const PARCELS_US_BOX_FACTOR = 1.5;    // rectangle half-width ≈ 1.5 × altitude
+const PARCELS_US_BOX_MIN_DEG = 0.02;
+const PARCELS_US_BOX_MAX_DEG = 0.20;
 const PARCELS_WA_MAX_ALT_M = 6000;       // start fetching at < 6 km
 const PARCELS_WA_FETCH_MAX_ALT_M = 4000; // stricter limit to actually issue queries
 const PARCELS_WA_MAX_FEATURES = 1500;    // entity cap
 const PARCELS_WA_PAGE_SIZE = 500;        // ArcGIS hard cap is 2000
 
 let parcelsUSLayer = null;
+let parcelsUSEnabled = false;
+let parcelsUSHooked = false;
+let parcelsUSRect = null;           // Cesium.Rectangle the current layer covers
 let parcelsWADS = null;
 let parcelsWAEnabled = false;
 let parcelsWADebounce = null;
@@ -2709,22 +2739,97 @@ let parcelsWAInflight = null;       // AbortController of current fetch
 let parcelsWALastBbox = null;       // [w, s, e, n] of last successful fetch
 
 function toggleParcelsUS(on) {
-  if (!on) {
-    if (parcelsUSLayer) {
-      const ref = parcelsUSLayer; parcelsUSLayer = null;
-      fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
-    }
+  parcelsUSEnabled = on;
+  if (!parcelsUSHooked) {
+    // moveEnd fires once the camera comes to rest, so the layer is attached
+    // and detached at most once per gesture rather than every frame.
+    viewer.camera.moveEnd.addEventListener(syncParcelsUS);
+    parcelsUSHooked = true;
+  }
+  syncParcelsUS();
+}
+
+// A box around the camera's ground point, sized from altitude. Deliberately
+// NOT `camera.computeViewRectangle` — a tilted camera near the ground sees to
+// the horizon, which would hand back a rectangle hundreds of km wide.
+function parcelsUSBox() {
+  const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
+  if (!carto) return null;
+  const lon = Cesium.Math.toDegrees(carto.longitude);
+  const lat = Cesium.Math.toDegrees(carto.latitude);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+
+  const half = Math.min(PARCELS_US_BOX_MAX_DEG,
+               Math.max(PARCELS_US_BOX_MIN_DEG,
+                        (carto.height * PARCELS_US_BOX_FACTOR) / 111320));
+  const halfLon = Math.min(PARCELS_US_BOX_MAX_DEG,
+                           half / Math.max(0.15, Math.cos(carto.latitude)));
+  return Cesium.Rectangle.fromDegrees(
+    Math.max(-180, lon - halfLon), Math.max(-90, lat - half),
+    Math.min(180, lon + halfLon), Math.min(90, lat + half));
+}
+
+function detachParcelsUS() {
+  if (!parcelsUSLayer) return;
+  const ref = parcelsUSLayer;
+  parcelsUSLayer = null;
+  parcelsUSRect = null;
+  fadeImageryLayer(ref, ref.alpha, 0, LAYER_FADE_MS, () => viewer.imageryLayers.remove(ref));
+}
+
+// Reconcile the Regrid imagery with (enabled, altitude, position). Safe to
+// call at any time.
+//
+// Two guards, and BOTH are load-bearing:
+//
+//   1. Altitude. Attaching at globe scale used to lock the UI for ~45 s.
+//   2. A bounding `rectangle`. Cesium's `_onLayerAdded` walks every loaded
+//      quadtree tile and builds imagery skeletons for the new layer. Because
+//      the provider floors at level 14, a level-0 root tile alone asks for
+//      16384 × 8192 of them, and Cesium throws `RangeError: Too many
+//      properties to enumerate` from inside `addImageryProvider` — which
+//      kills the scene, since moveEnd is raised during render. Root tiles
+//      stay loaded at every zoom, so the altitude guard does not cover this.
+//      The rectangle clips the skeleton range to a few hundred tiles.
+function syncParcelsUS() {
+  if (!parcelsUSEnabled || cameraAltitudeMeters() > PARCELS_US_MAX_ALT_M) {
+    detachParcelsUS();
+    setCount('parcels_us', parcelsUSEnabled ? 'zoom in' : '—');
+    updateCategoryCounts();
     return;
   }
-  if (parcelsUSLayer) return;
-  parcelsUSLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: PARCELS_US_URL,
-    minimumLevel: 14,        // tile cache is empty below this
-    maximumLevel: 17,        // and stops here
-    credit: 'Parcels © Regrid',
-  }));
-  fadeImageryLayer(parcelsUSLayer, 0, 0.85);
+
+  const box = parcelsUSBox();
+  if (!box) { detachParcelsUS(); setCount('parcels_us', 'zoom in'); return; }
+
+  // Still inside the box we already cover? Leave the layer alone so panning
+  // within a neighbourhood doesn't rebuild (and re-fade) the imagery.
+  if (parcelsUSLayer && parcelsUSRect &&
+      Cesium.Rectangle.contains(parcelsUSRect, Cesium.Rectangle.center(box, new Cesium.Cartographic())) &&
+      Cesium.Rectangle.intersection(parcelsUSRect, box, new Cesium.Rectangle())?.width >= box.width * 0.9) {
+    return;
+  }
+
+  detachParcelsUS();
+  try {
+    parcelsUSLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+      url: PARCELS_US_URL,
+      rectangle: box,          // see note above — not optional
+      minimumLevel: 15,        // verified: z14 404s, z15 returns real geometry
+      maximumLevel: 17,        // and stops here
+      credit: 'Parcels © Regrid',
+    }));
+  } catch (err) {
+    // Never let a provider take the scene down with it.
+    console.warn('parcels_us attach failed:', err);
+    parcelsUSLayer = null;
+    setCount('parcels_us', 'error');
+    return;
+  }
+  parcelsUSRect = box;
+  fadeImageryLayer(parcelsUSLayer, 0, settings.opParcels ?? 0.85);
   setCount('parcels_us', 'tiles');
+  updateCategoryCounts();
 }
 
 function toggleParcelsWA(on) {
