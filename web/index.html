@@ -118,17 +118,27 @@
           <span class="ctl-v mono" id="op-radar-2-val">0.70</span>
         </div>
         <label class="sw"><input type="checkbox" data-layer="lightning" disabled><span class="sw-t"></span><span class="sw-l">Lightning</span></label>
+        <p class="pane-note">Lightning needs a commercial feed (Vaisala / Blitzortung); no keyless source exists.</p>
       </div>
 
       <!-- ---- SATELLITE ---- -->
       <div class="mode-body" data-mode-body="satellite">
         <label class="sw"><input type="checkbox" data-layer="clouds"><span class="sw-t"></span><span class="sw-l">Satellite / Clouds</span></label>
         <div class="ctl">
-          <span class="ctl-l">Product</span>
+          <span class="ctl-l">Satellite</span>
+          <select id="sat-source" class="ctl-sel">
+            <option value="goes-east">GOES-East</option>
+            <option value="goes-west">GOES-West</option>
+            <option value="global">Global composite</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <span class="ctl-l">Channel</span>
           <select id="sat-product" class="ctl-sel">
-            <option value="geocolor">GeoColor</option>
             <option value="ir">Infrared</option>
+            <option value="vis">Visible</option>
             <option value="wv">Water Vapor</option>
+            <option value="truecolor">True Color</option>
           </select>
         </div>
         <div class="ctl">
@@ -160,13 +170,13 @@
             <option value="pressure_msl">MSLP</option>
           </select>
         </div>
-        <label class="sw"><input type="checkbox" data-layer="model" disabled><span class="sw-t"></span><span class="sw-l">Show model field</span></label>
+        <label class="sw"><input type="checkbox" data-layer="model"><span class="sw-t"></span><span class="sw-l">Show model field</span></label>
         <p class="pane-note" id="model-note">Point sounding: click anywhere on the globe.</p>
       </div>
 
       <!-- ---- OBSERVATIONS ---- -->
       <div class="mode-body" data-mode-body="obs">
-        <label class="sw"><input type="checkbox" data-layer="metar" disabled><span class="sw-t"></span><span class="sw-l">Surface Obs (METAR)</span></label>
+        <label class="sw"><input type="checkbox" data-layer="metar"><span class="sw-t"></span><span class="sw-l">Surface Obs (METAR)</span></label>
         <div class="ctl">
           <span class="ctl-l">Plot</span>
           <select id="obs-field" class="ctl-sel">
@@ -177,12 +187,15 @@
             <option value="visibility">Visibility</option>
           </select>
         </div>
-        <label class="sw"><input type="checkbox" data-layer="airquality" disabled><span class="sw-t"></span><span class="sw-l">Air Quality (AQI)</span></label>
+        <label class="sw"><input type="checkbox" data-layer="airquality"><span class="sw-t"></span><span class="sw-l">Air Quality (AQI)</span></label>
         <label class="sw"><input type="checkbox" data-layer="webcams" disabled><span class="sw-t"></span><span class="sw-l">Webcams</span></label>
+        <p class="pane-note" id="webcam-note">Webcams need a Windy API key in .env (WINDY_WEBCAM_KEY).</p>
       </div>
 
       <!-- ---- OUTLOOKS ---- -->
       <div class="mode-body" data-mode-body="outlooks">
+        <label class="sw"><input type="checkbox" data-layer="warnings"><span class="sw-t"></span><span class="sw-l">NWS Warnings</span><span class="sw-n mono" id="warn-count">0</span></label>
+        <ol id="warn-list" class="warn-list"></ol>
         <label class="sw"><input type="checkbox" data-layer="spc_outlook"><span class="sw-t"></span><span class="sw-l">SPC Convective Outlook</span></label>
         <div class="ctl">
           <span class="ctl-l">Day</span>

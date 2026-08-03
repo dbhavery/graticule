@@ -284,6 +284,7 @@ const TICKER_MAX = 6;
   initTabs();
   initTimeline();
   initWeatherControls();
+  initViewResampling();
   initSkyMirrors();
   initWorldPane();
   applyLegendFor('radar');
@@ -754,6 +755,10 @@ function bindUI() {
       else if (layer === 'nightlights')toggleNightLights(on);
       else if (layer === 'radar_site') toggleRadarSite(on);
       else if (layer === 'spc_outlook')toggleSpcOutlook(on);
+      else if (layer === 'model')      toggleModelField(on);
+      else if (layer === 'airquality') toggleAirQuality(on);
+      else if (layer === 'metar')      toggleMetar(on);
+      else if (layer === 'warnings')   toggleWarnings(on);
       else if (layer === 'terminator') toggleTerminator(on);
       else if (layer === 'parcels_us') toggleParcelsUS(on);
       else if (layer === 'parcels_wa') toggleParcelsWA(on);
@@ -4273,23 +4278,32 @@ function rebuildCloudsLayer() {
     try { viewer.imageryLayers.remove(cloudsLayer); } catch {}
     cloudsLayer = null;
   }
+  const source = valueOf('sat-source', 'goes-east');
   let provider;
-  if (product === 'geocolor') {
-    // GIBS true-colour corrected reflectance, updated daily.
+
+  // Live GOES imagery from Iowa State Mesonet — near-real-time visible,
+  // infrared and water-vapour channels off the operational satellites, which
+  // is what the desktop apps put behind their GOES-East / GOES-West selector.
+  const GOES = {
+    'goes-east': { vis: 'goes-east-vis-1km', ir: 'goes-east-ir-4km', wv: 'goes-east-wv-4km' },
+    'goes-west': { vis: 'goes-west-vis-1km', ir: 'goes-west-ir-4km', wv: 'goes-west-wv-4km' },
+  };
+
+  if (source !== 'global' && GOES[source] && GOES[source][product]) {
+    provider = new Cesium.UrlTemplateImageryProvider({
+      url: `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${GOES[source][product]}/{z}/{x}/{y}.png`,
+      credit: 'GOES © Iowa State Mesonet / NOAA',
+      maximumLevel: 9,
+    });
+  } else if (product === 'truecolor') {
+    // Global daily true-colour composite for the whole-Earth view, where the
+    // GOES products only cover their own hemisphere.
     const day = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     provider = new Cesium.UrlTemplateImageryProvider({
       url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${day}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
       tilingScheme: new Cesium.WebMercatorTilingScheme(),
       maximumLevel: 9,
       credit: 'NASA GIBS · MODIS True Color',
-    });
-  } else if (product === 'wv') {
-    const day = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    provider = new Cesium.UrlTemplateImageryProvider({
-      url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MERRA2_Total_Precipitable_Water_Vapor_Monthly/default/${day}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`,
-      tilingScheme: new Cesium.WebMercatorTilingScheme(),
-      maximumLevel: 6,
-      credit: 'NASA GIBS · Precipitable Water Vapor',
     });
   } else {
     if (!radarMeta || !radarMeta.host) return;
@@ -4318,7 +4332,11 @@ function initWeatherControls() {
   bind('radar-site',    () => { if (isLayerOn('radar_site')) rebuildRadarSiteLayer(); });
   bind('radar-product', () => { if (isLayerOn('radar_site')) rebuildRadarSiteLayer(); });
   bind('sat-product',   () => { if (isLayerOn('clouds'))     rebuildCloudsLayer(); });
+  bind('sat-source',    () => { if (isLayerOn('clouds'))     rebuildCloudsLayer(); });
   bind('spc-day',       () => { if (isLayerOn('spc_outlook')) rebuildSpcOutlook(); });
+  bind('model-name',    () => refreshModelField());
+  bind('model-field',   () => refreshModelField());
+  bind('obs-field',     () => renderMetar());
 
   // Opacity sliders in the weather tab mirror the ones in Settings; both write
   // the same setting so the two panels can never disagree.
@@ -4413,4 +4431,567 @@ function addSpcGeometry(geom, color, label) {
       properties: { kind: 'spc', label },
     });
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WAVE 3 — real weather data: model fields, air quality, surface obs,
+// NWS warning cards, and GOES satellite products.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ---------- Shared colour ramp helper ---------------------------------------
+
+// Piecewise-linear lookup across [stop, '#rrggbb'] pairs.
+function rampColor(stops, v) {
+  if (v == null || Number.isNaN(v)) return Cesium.Color.GRAY;
+  if (v <= stops[0][0]) return Cesium.Color.fromCssColorString(stops[0][1]);
+  const last = stops[stops.length - 1];
+  if (v >= last[0]) return Cesium.Color.fromCssColorString(last[1]);
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [a, ca] = stops[i], [b, cb] = stops[i + 1];
+    if (v >= a && v <= b) {
+      const t = (v - a) / (b - a || 1);
+      // Color.lerp is a static on Cesium.Color, not an instance method.
+      return Cesium.Color.lerp(
+        Cesium.Color.fromCssColorString(ca),
+        Cesium.Color.fromCssColorString(cb),
+        t, new Cesium.Color());
+    }
+  }
+  return Cesium.Color.GRAY;
+}
+
+const FIELD_DEFS = {
+  temperature_2m: {
+    label: '2 m Temperature', unit: '°F', legend: 'TEMPERATURE',
+    stops: [[-20,'#7c3aed'],[0,'#3b82f6'],[32,'#22d3ee'],[50,'#22c55e'],
+            [70,'#facc15'],[85,'#f97316'],[100,'#dc2626'],[115,'#7f1d1d']],
+    ticks: ['0','32','50','70','85','100'],
+  },
+  precipitation: {
+    label: 'Precipitation', unit: 'in', legend: 'PRECIP',
+    stops: [[0,'#0f172a'],[0.01,'#0ea5e9'],[0.1,'#22c55e'],[0.25,'#facc15'],
+            [0.5,'#f97316'],[1,'#dc2626'],[2,'#a21caf']],
+    ticks: ['0','0.1','0.25','0.5','1','2'],
+  },
+  wind_speed_10m: {
+    label: '10 m Wind', unit: 'mph', legend: 'WIND',
+    stops: [[0,'#0f172a'],[5,'#0ea5e9'],[15,'#22c55e'],[25,'#facc15'],
+            [40,'#f97316'],[60,'#dc2626'],[80,'#a21caf']],
+    ticks: ['0','15','25','40','60','80'],
+  },
+  cape: {
+    label: 'CAPE', unit: 'J/kg', legend: 'CAPE',
+    stops: [[0,'#0f172a'],[250,'#0ea5e9'],[1000,'#22c55e'],[2000,'#facc15'],
+            [3000,'#f97316'],[4000,'#dc2626'],[6000,'#a21caf']],
+    ticks: ['0','1000','2000','3000','4000','6000'],
+  },
+  pressure_msl: {
+    label: 'MSLP', unit: 'hPa', legend: 'PRESSURE',
+    stops: [[960,'#7c3aed'],[990,'#3b82f6'],[1005,'#22c55e'],
+            [1013,'#facc15'],[1025,'#f97316'],[1040,'#dc2626']],
+    ticks: ['980','1000','1013','1025','1040'],
+  },
+};
+
+const AQI_STOPS = [[0,'#22c55e'],[50,'#facc15'],[100,'#f97316'],
+                   [150,'#dc2626'],[200,'#7c3aed'],[300,'#7f1d1d']];
+
+// Open-Meteo model ids. "seamless" blends the run sequence, which is what the
+// desktop apps show by default for a plain model pick.
+const OM_MODELS = {
+  gfs:   'gfs_seamless',
+  hrrr:  'gfs_hrrr',
+  nam:   'ncep_nam_conus',
+  ecmwf: 'ecmwf_ifs025',
+  icon:  'icon_seamless',
+};
+
+// ---------- Grid sampling ----------------------------------------------------
+//
+// Open-Meteo accepts comma-separated coordinate lists and returns one object
+// per point, so an entire field is a single request. The grid is built over
+// the current view so zooming in genuinely increases resolution instead of
+// just magnifying coarse points.
+
+function viewGrid(stepsX = 14, stepsY = 10) {
+  const rect = viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
+  let w, s, e, n;
+  if (rect) {
+    w = Cesium.Math.toDegrees(rect.west);  e = Cesium.Math.toDegrees(rect.east);
+    s = Cesium.Math.toDegrees(rect.south); n = Cesium.Math.toDegrees(rect.north);
+  } else {
+    w = -125; e = -66; s = 24; n = 50;
+  }
+  // Guard the antimeridian and absurd global extents; clamp to something the
+  // API will answer quickly.
+  if (e < w) e += 360;
+  if (e - w > 170) { const c = (w + e) / 2; w = c - 85; e = c + 85; }
+  if (n - s > 110) { const c = (s + n) / 2; s = c - 55; n = c + 55; }
+  s = Math.max(-84, s); n = Math.min(84, n);
+
+  const pts = [];
+  for (let iy = 0; iy < stepsY; iy++) {
+    for (let ix = 0; ix < stepsX; ix++) {
+      const lat = s + ((n - s) * (iy + 0.5)) / stepsY;
+      let lon = w + ((e - w) * (ix + 0.5)) / stepsX;
+      lon = ((lon + 540) % 360) - 180;
+      // Drop points on the far side of the planet. At globe scale the view
+      // rectangle spans more than the visible hemisphere, and the plotted
+      // points are drawn without depth-testing, so back-face samples would
+      // otherwise float in space beyond the limb.
+      if (!isFrontFacing(lon, lat)) continue;
+      pts.push([Number(lat.toFixed(3)), Number(lon.toFixed(3))]);
+    }
+  }
+  return pts;
+}
+
+// True when the surface point faces the camera, i.e. the angle between the
+// camera's view direction and the outward surface normal exceeds 90 degrees.
+function isFrontFacing(lon, lat) {
+  try {
+    const surface = Cesium.Cartesian3.fromDegrees(lon, lat);
+    const toCamera = Cesium.Cartesian3.subtract(
+      viewer.camera.positionWC, surface, new Cesium.Cartesian3());
+    const normal = viewer.scene.globe.ellipsoid.geodeticSurfaceNormal(
+      surface, new Cesium.Cartesian3());
+    return Cesium.Cartesian3.dot(normal, toCamera) > 0;
+  } catch {
+    return true;
+  }
+}
+
+// ---------- Model field ------------------------------------------------------
+
+let modelDS = null;
+let _modelBusy = false;
+
+function toggleModelField(on) {
+  if (!modelDS) {
+    modelDS = new Cesium.CustomDataSource('model');
+    viewer.dataSources.add(modelDS);
+  }
+  modelDS.show = !!on;
+  if (on) refreshModelField();
+  else applyLegendFor(currentWxMode());
+}
+
+async function refreshModelField() {
+  if (!modelDS || !modelDS.show || _modelBusy) return;
+  _modelBusy = true;
+  const noteEl = document.getElementById('model-note');
+  try {
+    const modelKey = valueOf('model-name', 'gfs');
+    const fieldKey = valueOf('model-field', 'temperature_2m');
+    const def = FIELD_DEFS[fieldKey];
+    const pts = viewGrid();
+    const lat = pts.map((p) => p[0]).join(',');
+    const lon = pts.map((p) => p[1]).join(',');
+
+    const params = new URLSearchParams({
+      latitude: lat, longitude: lon,
+      current: fieldKey,
+      models: OM_MODELS[modelKey] || 'gfs_seamless',
+      temperature_unit: 'fahrenheit',
+      wind_speed_unit: 'mph',
+      precipitation_unit: 'inch',
+    });
+    if (noteEl) noteEl.textContent = `Loading ${def.label} from ${modelKey.toUpperCase()}…`;
+
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    let data = await r.json();
+    if (!Array.isArray(data)) data = [data];
+
+    modelDS.entities.removeAll();
+    let shown = 0;
+    for (const d of data) {
+      const v = d && d.current ? d.current[fieldKey] : null;
+      if (v == null) continue;
+      modelDS.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(d.longitude, d.latitude),
+        point: {
+          pixelSize: 16,
+          color: rampColor(def.stops, v).withAlpha(0.55),
+          outlineWidth: 0,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text: fieldKey === 'precipitation' ? v.toFixed(2) : String(Math.round(v)),
+          font: '600 11px Inter, sans-serif',
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        properties: { kind: 'model', field: fieldKey, value: v, unit: def.unit },
+      });
+      shown++;
+    }
+    applyLegendForField(def);
+    if (noteEl) {
+      noteEl.textContent =
+        `${def.label} · ${modelKey.toUpperCase()} · ${shown} points. Re-samples on view change.`;
+    }
+    viewer.scene.requestRender();
+  } catch (err) {
+    if (noteEl) noteEl.textContent = `Model field unavailable: ${err.message}`;
+  } finally {
+    _modelBusy = false;
+  }
+}
+
+function applyLegendForField(def) {
+  const el = document.getElementById('legend');
+  if (!el || !def) return;
+  el.classList.remove('hidden');
+  document.getElementById('lg-title').textContent = def.legend;
+  document.getElementById('lg-unit').textContent  = def.unit;
+  document.getElementById('lg-bar').style.background =
+    `linear-gradient(90deg, ${def.stops.map((s) => s[1]).join(', ')})`;
+  document.getElementById('lg-ticks').innerHTML =
+    def.ticks.map((t) => `<span>${t}</span>`).join('');
+}
+
+// ---------- Air quality ------------------------------------------------------
+
+let aqiDS = null;
+let _aqiBusy = false;
+
+function toggleAirQuality(on) {
+  if (!aqiDS) {
+    aqiDS = new Cesium.CustomDataSource('airquality');
+    viewer.dataSources.add(aqiDS);
+  }
+  aqiDS.show = !!on;
+  if (on) refreshAirQuality();
+}
+
+async function refreshAirQuality() {
+  if (!aqiDS || !aqiDS.show || _aqiBusy) return;
+  _aqiBusy = true;
+  try {
+    const pts = viewGrid(12, 9);
+    const params = new URLSearchParams({
+      latitude:  pts.map((p) => p[0]).join(','),
+      longitude: pts.map((p) => p[1]).join(','),
+      current: 'us_aqi',
+    });
+    const r = await fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    let data = await r.json();
+    if (!Array.isArray(data)) data = [data];
+
+    aqiDS.entities.removeAll();
+    for (const d of data) {
+      const v = d && d.current ? d.current.us_aqi : null;
+      if (v == null) continue;
+      aqiDS.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(d.longitude, d.latitude),
+        point: {
+          pixelSize: 14,
+          color: rampColor(AQI_STOPS, v).withAlpha(0.6),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text: String(Math.round(v)),
+          font: '600 10px Inter, sans-serif',
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        properties: { kind: 'aqi', value: v },
+      });
+    }
+    viewer.scene.requestRender();
+  } catch { /* transient network — the next view change retries */ }
+  finally { _aqiBusy = false; }
+}
+
+// ---------- Surface observations (METAR) -------------------------------------
+
+let metarDS = null;
+let metarRaw = [];
+
+function toggleMetar(on) {
+  if (!metarDS) {
+    metarDS = new Cesium.CustomDataSource('metar');
+    viewer.dataSources.add(metarDS);
+    configureClustering(metarDS, { color: '#7dd3fc', pixelRange: 34, minSize: 3 });
+  }
+  metarDS.show = !!on;
+  if (on) refreshMetar();
+}
+
+async function refreshMetar() {
+  if (!metarDS || !metarDS.show) return;
+  try {
+    const r = await fetch('/api/metar');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    metarRaw = await r.json();
+    if (!Array.isArray(metarRaw)) metarRaw = [];
+  } catch (err) {
+    pushEvent('METAR', `Surface obs unavailable (${err.message})`, Date.now());
+    return;
+  }
+  renderMetar();
+  noteFeed('metar');
+}
+
+const METAR_TEMP_STOPS = FIELD_DEFS.temperature_2m.stops;
+
+function renderMetar() {
+  if (!metarDS) return;
+  const field = valueOf('obs-field', 'temp');
+  metarDS.entities.removeAll();
+
+  for (const ob of metarRaw) {
+    const txt = metarPlotText(ob, field);
+    if (txt == null) continue;
+    const tint = field === 'temp' || field === 'dewpoint'
+      ? rampColor(METAR_TEMP_STOPS, cToF(field === 'temp' ? ob.temp : ob.dewp))
+      : Cesium.Color.fromCssColorString('#7dd3fc');
+    metarDS.entities.add({
+      id: `metar-${ob.id}`,
+      position: Cesium.Cartesian3.fromDegrees(ob.lon, ob.lat),
+      point: {
+        pixelSize: 5,
+        color: tint.withAlpha(0.95),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: txt,
+        font: '600 11px "JetBrains Mono", monospace',
+        fillColor: tint,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -12),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        // Station plots only make sense once you are close enough to read
+        // them; at globe scale they would be an unreadable smear.
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 4_000_000),
+      },
+      properties: { kind: 'metar', ...ob },
+    });
+  }
+  viewer.scene.requestRender();
+}
+
+function cToF(c) { return c == null ? null : c * 9 / 5 + 32; }
+
+function metarPlotText(ob, field) {
+  const us = settings.units === 'us';
+  switch (field) {
+    case 'temp': {
+      if (ob.temp == null) return null;
+      return us ? `${Math.round(cToF(ob.temp))}` : `${Math.round(ob.temp)}`;
+    }
+    case 'dewpoint': {
+      if (ob.dewp == null) return null;
+      return us ? `${Math.round(cToF(ob.dewp))}` : `${Math.round(ob.dewp)}`;
+    }
+    case 'wind': {
+      if (ob.wspd == null) return null;
+      const dir = ob.wdir == null ? '' : `${String(ob.wdir).padStart(3, '0')}°`;
+      return `${dir}${ob.wspd}kt`;
+    }
+    case 'gust':
+      return ob.wgst == null ? null : `G${ob.wgst}`;
+    case 'visibility':
+      return ob.visib == null ? null : `${ob.visib}`;
+    default:
+      return null;
+  }
+}
+
+// ---------- NWS warnings — rich cards + polygons ------------------------------
+//
+// The desktop apps present warnings as a scannable list of cards carrying the
+// details a spotter actually needs (hail size, wind, tornado flag, expiry),
+// with the polygon drawn on the map. This mirrors that.
+
+let warnDS = null;
+let warnFeatures = [];
+
+const WARN_STYLE = {
+  'Tornado Warning':            { c: '#ef4444', p: 100 },
+  'Severe Thunderstorm Warning':{ c: '#f59e0b', p: 90 },
+  'Flash Flood Warning':        { c: '#22c55e', p: 85 },
+  'Flood Warning':              { c: '#16a34a', p: 70 },
+  'Winter Storm Warning':       { c: '#60a5fa', p: 65 },
+  'Blizzard Warning':           { c: '#a78bfa', p: 66 },
+  'High Wind Warning':          { c: '#fbbf24', p: 60 },
+  'Special Marine Warning':     { c: '#f0abfc', p: 55 },
+  'Tornado Watch':              { c: '#dc2626', p: 50 },
+  'Severe Thunderstorm Watch':  { c: '#fb923c', p: 45 },
+};
+
+function warnStyle(evt) {
+  if (WARN_STYLE[evt]) return WARN_STYLE[evt];
+  if (/Warning/i.test(evt))  return { c: '#f87171', p: 40 };
+  if (/Watch/i.test(evt))    return { c: '#facc15', p: 30 };
+  if (/Advisory/i.test(evt)) return { c: '#94a3b8', p: 20 };
+  return { c: '#64748b', p: 10 };
+}
+
+function toggleWarnings(on) {
+  if (!warnDS) {
+    warnDS = new Cesium.CustomDataSource('warnings');
+    viewer.dataSources.add(warnDS);
+  }
+  warnDS.show = !!on;
+  if (on) refreshWarnings();
+}
+
+async function refreshWarnings() {
+  if (!warnDS || !warnDS.show) return;
+  try {
+    const r = await fetch('/api/nws/alerts');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const gj = await r.json();
+    // Keep every active alert for the card list. Most NWS alerts are issued
+    // against forecast zones and carry no polygon, so filtering on geometry
+    // would silently hide ~90% of what is actually in effect; only the
+    // polygon-bearing subset gets drawn on the globe.
+    warnFeatures = gj.features || [];
+  } catch (err) {
+    pushEvent('NWS', `Warnings unavailable (${err.message})`, Date.now());
+    return;
+  }
+
+  warnFeatures.sort((a, b) =>
+    warnStyle(b.properties.event).p - warnStyle(a.properties.event).p);
+
+  warnDS.entities.removeAll();
+  for (const f of warnFeatures) {
+    if (!f.geometry) continue;               // zone-only alert: card, no polygon
+    addWarnGeometry(f, warnStyle(f.properties.event).c);
+  }
+  renderWarningCards();
+  noteFeed('nws');
+  viewer.scene.requestRender();
+}
+
+function addWarnGeometry(f, color) {
+  const g = f.geometry;
+  const polys = g.type === 'Polygon' ? [g.coordinates]
+              : g.type === 'MultiPolygon' ? g.coordinates : [];
+  for (const poly of polys) {
+    const ring = poly[0];
+    if (!ring || ring.length < 3) continue;
+    warnDS.entities.add({
+      polygon: {
+        hierarchy: new Cesium.PolygonHierarchy(
+          Cesium.Cartesian3.fromDegreesArray(ring.flatMap(([x, y]) => [x, y]))),
+        material: Cesium.Color.fromCssColorString(color).withAlpha(0.22),
+        outline: true,
+        outlineColor: Cesium.Color.fromCssColorString(color),
+        outlineWidth: 2,
+        height: 0,
+      },
+      properties: { kind: 'warning', ...f.properties },
+    });
+  }
+}
+
+function fmtExpiry(iso) {
+  if (!iso) return '';
+  const ms = new Date(iso).getTime() - Date.now();
+  if (Number.isNaN(ms)) return '';
+  if (ms <= 0) return 'expired';
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+function renderWarningCards() {
+  const list = document.getElementById('warn-list');
+  const count = document.getElementById('warn-count');
+  if (!list) return;
+  if (count) count.textContent = String(warnFeatures.length);
+
+  if (!warnFeatures.length) {
+    list.innerHTML = '<li class="warn-empty">No active NWS alerts.</li>';
+    return;
+  }
+
+  list.innerHTML = warnFeatures.slice(0, 120).map((f, i) => {
+    const p = f.properties;
+    const st = warnStyle(p.event);
+    const par = p.parameters || {};
+    const bits = [];
+    if (par.hailSize)          bits.push(`Hail ${par.hailSize[0]}"`);
+    if (par.maxWindGust)       bits.push(`Wind ${par.maxWindGust[0]}`);
+    if (par.tornadoDetection)  bits.push(`Tornado ${par.tornadoDetection[0]}`);
+    if (par.flashFloodDetection) bits.push(String(par.flashFloodDetection[0]));
+    const area = (p.areaDesc || '').split(';').slice(0, 3).join(',').trim();
+    const mappable = !!f.geometry;
+    return `<li class="warn-card${mappable ? '' : ' is-zone'}" data-warn="${i}" style="--wc:${st.c}"
+      title="${mappable ? 'Click to zoom to the warning polygon' : 'Zone-based alert — no polygon issued'}">
+      <div class="wc-top"><span class="wc-evt">${p.event || 'Alert'}</span>
+      <span class="wc-exp">${fmtExpiry(p.expires)}</span></div>
+      <div class="wc-area">${area}</div>
+      ${bits.length ? `<div class="wc-bits">${bits.join(' · ')}</div>` : ''}
+    </li>`;
+  }).join('');
+
+  // Click a card to fly to that warning's polygon.
+  list.querySelectorAll('.warn-card').forEach((el) => {
+    el.addEventListener('click', () => {
+      const f = warnFeatures[Number(el.dataset.warn)];
+      if (f && f.geometry) flyToGeometry(f.geometry);
+    });
+  });
+}
+
+function flyToGeometry(g) {
+  const polys = g.type === 'Polygon' ? [g.coordinates]
+              : g.type === 'MultiPolygon' ? g.coordinates : [];
+  const flat = [];
+  for (const poly of polys) for (const [x, y] of (poly[0] || [])) flat.push(x, y);
+  if (flat.length < 4) return;
+  // Any camera move counts as interaction so the NA lock doesn't yank us back.
+  _lastInteractionAt = performance.now();
+  viewer.camera.flyTo({
+    destination: Cesium.Rectangle.fromDegrees(
+      Math.min(...flat.filter((_, i) => i % 2 === 0)) - 0.6,
+      Math.min(...flat.filter((_, i) => i % 2 === 1)) - 0.6,
+      Math.max(...flat.filter((_, i) => i % 2 === 0)) + 0.6,
+      Math.max(...flat.filter((_, i) => i % 2 === 1)) + 0.6),
+    duration: 1.6,
+  });
+}
+
+// ---------- View-change resampling -------------------------------------------
+//
+// Grid layers are sampled over the current view, so they need to re-fetch when
+// the camera settles. Debounced so a drag doesn't fire dozens of requests.
+
+let _viewSampleTimer = null;
+function initViewResampling() {
+  viewer.camera.moveEnd.addEventListener(() => {
+    clearTimeout(_viewSampleTimer);
+    _viewSampleTimer = setTimeout(() => {
+      if (modelDS && modelDS.show) refreshModelField();
+      if (aqiDS && aqiDS.show)     refreshAirQuality();
+    }, 700);
+  });
+
+  // Obs and warnings are national feeds, so poll on a timer instead.
+  setInterval(() => { if (metarDS && metarDS.show) refreshMetar(); }, 5 * 60_000);
+  setInterval(() => { if (warnDS && warnDS.show) refreshWarnings(); }, 60_000);
+}
+
+function currentWxMode() {
+  const el = document.querySelector('#wx-modes .chip.is-active');
+  return el ? el.dataset.mode : 'radar';
+}
+
+function valueOf(id, dflt) {
+  const el = document.getElementById(id);
+  return (el && el.value) || dflt;
 }

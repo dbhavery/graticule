@@ -1425,3 +1425,26 @@ input[type=range]::-webkit-slider-runnable-track {
 /* Legend sits lower-left of the map area, clear of the feed strip and
    timeline, mirroring where the desktop radar apps put their colour bar. */
 #legend { right: auto; left: 296px; bottom: 16px; }
+
+/* ---- NWS warning cards ---- */
+.sw-n {
+  flex: 0 0 auto; font-size: 10px; color: var(--text-mute);
+  background: rgba(255,255,255,0.07); border-radius: 8px; padding: 1px 6px;
+}
+.warn-list { list-style: none; margin: 6px 0 10px; padding: 0; max-height: 340px; overflow-y: auto; }
+.warn-card {
+  border-left: 2px solid var(--wc, #64748b);
+  background: rgba(255,255,255,0.035);
+  border-radius: 0 3px 3px 0;
+  padding: 6px 8px; margin-bottom: 4px; cursor: pointer;
+  transition: background 140ms ease;
+}
+.warn-card:hover { background: rgba(255,255,255,0.08); }
+.wc-top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.wc-evt { font-size: 11px; font-weight: 600; color: var(--wc, #cbd5e1); line-height: 1.3; }
+.wc-exp { font-size: 9.5px; color: var(--text-mute); font-family: var(--mono); flex: 0 0 auto; }
+.wc-area { font-size: 10px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
+.wc-bits { font-size: 9.5px; color: var(--text-mute); margin-top: 3px; font-family: var(--mono); }
+.warn-empty { font-size: 10.5px; color: var(--text-mute); padding: 8px 4px; }
+.warn-card.is-zone { cursor: default; opacity: 0.72; }
+.warn-card.is-zone:hover { background: rgba(255,255,255,0.035); }

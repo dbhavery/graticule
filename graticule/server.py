@@ -126,6 +126,102 @@ async def spc_outlook(day: str = "1") -> JSONResponse:
     return JSONResponse(data)
 
 
+#: METAR surface observations. Proxied because aviationweather.gov sends no
+#: CORS header. Short TTL — METARs cycle hourly with specials in between.
+_METAR_CACHE: tuple[float, list] | None = None
+_METAR_TTL_S = 300.0
+
+
+@app.get("/api/metar")
+async def metar() -> JSONResponse:
+    """CONUS + nearby surface observations as a trimmed JSON array."""
+    global _METAR_CACHE
+    now = asyncio.get_event_loop().time()
+    if _METAR_CACHE and now - _METAR_CACHE[0] < _METAR_TTL_S:
+        return JSONResponse(_METAR_CACHE[1])
+
+    # Bounding box covers CONUS, southern Canada, Mexico, Alaska and Hawaii.
+    # NOTE: aviationweather.gov orders bbox as lat0,lon0,lat1,lon1 — the
+    # lon-first ordering used by most GIS APIs silently returns 204 No Content
+    # here, which then fails JSON decoding rather than erroring usefully.
+    url = (
+        "https://aviationweather.gov/api/data/metar"
+        "?format=json&taf=false&hours=2&bbox=15,-170,72,-60"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            r = await client.get(url, headers={"User-Agent": "graticule/1.0"})
+            r.raise_for_status()
+            raw = r.json()
+    except Exception as exc:
+        logger.warning(f"METAR fetch failed: {exc}")
+        if _METAR_CACHE:
+            return JSONResponse(_METAR_CACHE[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    # Keep one observation per station (the API returns a 2-hour history) and
+    # only the fields the station plot actually renders.
+    latest: dict[str, dict] = {}
+    for ob in raw if isinstance(raw, list) else []:
+        sid = ob.get("icaoId")
+        if not sid or ob.get("lat") is None or ob.get("lon") is None:
+            continue
+        prev = latest.get(sid)
+        if prev and (prev.get("obsTime") or 0) >= (ob.get("obsTime") or 0):
+            continue
+        latest[sid] = {
+            "id":    sid,
+            "lat":   ob.get("lat"),
+            "lon":   ob.get("lon"),
+            "temp":  ob.get("temp"),
+            "dewp":  ob.get("dewp"),
+            "wdir":  ob.get("wdir"),
+            "wspd":  ob.get("wspd"),
+            "wgst":  ob.get("wgst"),
+            "visib": ob.get("visib"),
+            "altim": ob.get("altim"),
+            "name":  ob.get("name"),
+            "obsTime": ob.get("obsTime"),
+        }
+
+    out = list(latest.values())
+    _METAR_CACHE = (now, out)
+    logger.info(f"METAR: {len(out)} stations")
+    return JSONResponse(out)
+
+
+#: Active NWS watches/warnings/advisories with polygons, for the alert cards.
+_NWS_CACHE: tuple[float, dict] | None = None
+_NWS_TTL_S = 60.0
+
+
+@app.get("/api/nws/alerts")
+async def nws_alerts() -> JSONResponse:
+    """Active NWS alerts as GeoJSON, newest first."""
+    global _NWS_CACHE
+    now = asyncio.get_event_loop().time()
+    if _NWS_CACHE and now - _NWS_CACHE[0] < _NWS_TTL_S:
+        return JSONResponse(_NWS_CACHE[1])
+
+    url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert"
+    try:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            r = await client.get(url, headers={
+                "User-Agent": "graticule/1.0 (dbhavery@gmail.com)",
+                "Accept": "application/geo+json",
+            })
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        logger.warning(f"NWS alerts fetch failed: {exc}")
+        if _NWS_CACHE:
+            return JSONResponse(_NWS_CACHE[1])
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    _NWS_CACHE = (now, data)
+    return JSONResponse(data)
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()
