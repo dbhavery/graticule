@@ -35,3 +35,4 @@ ne_*.zip
 # constraint as the upstream. Don't commit; build locally.
 web/data/airspace.json
 graphify-out/
+.code-review-graph/

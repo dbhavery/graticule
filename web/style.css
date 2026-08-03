@@ -1506,3 +1506,61 @@ input[type=range]::-webkit-slider-runnable-track {
 
 /* Compass would collide with the toolbar; drop it below. */
 #compass { top: 112px; }
+
+/* ============================================================================
+   Chrome polish — 2026-08-02 (Emil Kowalski / Apple design-eng pass)
+   Chrome only. The --c-* layer colours are semantic map encoding (planes
+   amber, ships cyan, quakes red) and are deliberately left alone: a legend
+   needs them distinguishable. The one-accent rule applies to chrome.
+   ========================================================================= */
+:root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); }
+
+/* 1. The HUD hugged the viewport instead of its content. `top:56px` plus
+      `bottom:16px` pinned both edges, so a ~340px stack of radar controls
+      sat above ~570px of empty translucent slab — the single loudest
+      "unfinished" tell in the whole frame. Size to content, cap at viewport. */
+#hud {
+  bottom: auto;
+  max-height: calc(100vh - 72px);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+/* 2. Press feedback. There was not one `:active` rule in 49KB of CSS, so
+      nothing in the app ever acknowledged a click. Also replaces
+      `transition: all`, which animates properties you did not intend. */
+.chip, .hud-tab, .tl-btn, .tool-btn, .theme-btn, .settings-btn,
+.hdr-toggle, .tool-swatch {
+  transition: background-color 140ms var(--ease-out),
+              border-color     140ms var(--ease-out),
+              color            140ms var(--ease-out),
+              transform        140ms var(--ease-out);
+}
+.chip:active, .hud-tab:active, .tl-btn:active, .tool-btn:active,
+.theme-btn:active, .settings-btn:active, .hdr-toggle:active,
+.tool-swatch:active { transform: scale(0.97); }
+
+/* 3. Hover is for real pointers; touch devices fire it on tap. */
+@media (hover: hover) and (pointer: fine) {
+  .chip:hover, .tool-btn:hover, .theme-btn:hover, .tl-btn:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+    color: var(--text);
+  }
+}
+
+/* 4. Motion is a preference, not a given. Keep the colour feedback, drop
+      the movement — reduced motion means gentler, not none. */
+@media (prefers-reduced-motion: reduce) {
+  .chip, .hud-tab, .tl-btn, .tool-btn, .theme-btn, .settings-btn,
+  .hdr-toggle, .tool-swatch { transition-duration: 1ms; }
+  .chip:active, .hud-tab:active, .tl-btn:active, .tool-btn:active,
+  .theme-btn:active, .settings-btn:active, .hdr-toggle:active,
+  .tool-swatch:active { transform: none; }
+}
+
+/* 5. A one-pixel overflow was drawing a full-width horizontal scrollbar across
+      the bottom of the HUD. `.ctl-sel` is `flex: 1` with the default
+      `min-width: auto`, so it refused to shrink below its content and pushed
+      263px into a 262px pane. `min-width: 0` is the canonical fix — done here
+      rather than hiding overflow-x, which would mask real overflow later. */
+.ctl-sel { min-width: 0; max-width: 100%; box-sizing: border-box; }
