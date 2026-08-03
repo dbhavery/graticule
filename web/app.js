@@ -292,6 +292,12 @@ const settings = Object.assign({
   presenting: false,                // broadcast framing; chrome hidden
   paneMode: 'single',               // 'single' | 'dual' | 'quad'
   paneProducts: ['live', 'satellite', 'warnings', 'model'],
+  // ---- Broadcast graphics --------------------------------------------------
+  // gfxModes holds only what the user changed. A mode that has never been
+  // touched is not in here at all, so it keeps tracking whatever the built-in
+  // look becomes; the moment a slider moves, that mode is theirs.
+  gfxMode: 'Default',
+  gfxModes: {},
   renderEpoch: 0,                   // bumped when visual defaults change
 }, loadSettings());
 function loadSettings() {
@@ -330,6 +336,17 @@ let countriesDS = null, statesDS = null, airspaceDS = null, citiesDS = null;
 // dead zone until its own line evaluates, so updateCategoryCounts reading them
 // from a callback that fires early would throw rather than read null.
 let riversDS = null, tidesDS = null, buoysDS = null;
+// Broadcast-graphics state, hoisted here for the same reason. See the GRAPHICS
+// section at the bottom of this file for what each field is for.
+const GFX = {
+  root: null,
+  els: {},                 // key -> the graphic's outer element
+  stamp: null,             // { kind, src, when } pushed by the radar timeline
+  tick: null,
+  warnTimer: null,
+  dismissed: new Set(),    // alert ids the operator closed on air
+  ready: false,            // gate: this module's consts evaluate at EOF
+};
 let countriesBuilt = false, statesBuilt = false, airspaceBuilt = false, citiesBuilt = false;
 const feedActivity = {};   // layer -> last update timestamp (ms)
 const recentEvents = [];   // ticker entries (newest first)
@@ -356,6 +373,7 @@ const TICKER_MAX = 6;
   initAreaDarkening();
   initPresentation();
   initPanes();
+  initGraphics();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -3059,12 +3077,18 @@ const US_CONVERT = {
   hPa:   { unit: 'inHg', dp: 2, fn: (v) => v * 0.02952998751 },
 };
 
+/* Returns dp alongside the value because rounding is not formatting. 27.8 °C
+   converts to 82.04 °F, toFixed(1) gives "82.0", and Number("82.0") is 82 --
+   so a table of sea-surface temperatures printed 82.1, 82, 82.3 and lost a
+   digit of real NDBC precision on every tenth reading. dp === null means no
+   conversion happened and the caller should not impose one. */
 function convertUnit(value, meta) {
   const n = Number(value);
   const unit = meta.unit || '';
-  if (!Number.isFinite(n) || settings.units !== 'us' || !meta.us) return { n, unit };
+  if (!Number.isFinite(n) || settings.units !== 'us' || !meta.us) return { n, unit, dp: null };
   const c = US_CONVERT[unit];
-  return c ? { n: Number(c.fn(n).toFixed(c.dp)), unit: c.unit } : { n, unit };
+  if (!c) return { n, unit, dp: null };
+  return { n: Number(c.fn(n).toFixed(c.dp)), unit: c.unit, dp: c.dp };
 }
 
 function detailRow(key, value) {
@@ -3111,9 +3135,12 @@ function detailRow(key, value) {
     v.textContent = meta.fmt(value);
     v.classList.add('is-num');
   } else if (meta.num || typeof value === 'number') {
-    const { n, unit } = convertUnit(value, meta);
+    const { n, unit, dp } = convertUnit(value, meta);
+    const opts = dp == null
+      ? { maximumFractionDigits: 2 }
+      : { minimumFractionDigits: dp, maximumFractionDigits: dp };
     v.textContent = Number.isFinite(n)
-      ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) + (unit ? ` ${unit}` : '')
+      ? n.toLocaleString('en-US', opts) + (unit ? ` ${unit}` : '')
       : String(value);
     v.classList.add('is-num');
   } else {
@@ -4713,10 +4740,13 @@ function positionNowMarker() {
 
 function syncTimelineVisibility() {
   const tl = document.getElementById('timeline');
-  const fs = document.getElementById('frame-stamp');
   const on = isLayerOn('radar') && TL.frames.length > 1;
   if (tl) tl.classList.toggle('hidden', !on);
-  if (fs) fs.classList.toggle('hidden', !on);
+  // The frame stamp used to be hidden alongside the transport. It is now the
+  // Data Readout graphic, which names whatever product is on the globe, so it
+  // has no business disappearing because radar happens to be off.
+  if (!on) GFX.stamp = null;
+  gfxRender();
 }
 
 // Frames are swapped by alpha rather than add/remove: rebuilding an imagery
@@ -4753,19 +4783,13 @@ function showFrame(i) {
   viewer.scene.requestRender();
 }
 
-/* Fill the frame stamp. `when` is a Date; everything is shown in UTC because
-   a weather product's valid time is meaningless in an unstated local zone. */
+/* Hand the loaded frame's identity to the Data Readout graphic. `when` is the
+   frame's VALID time, not the wall clock: an animating loop that stamps "now"
+   on a frame from 40 minutes ago is the exact ambiguity the readout exists to
+   remove. The graphic decides how to draw it. */
 function setStamp(product, source, when) {
-  const set = (id, txt) => {
-    const el = document.getElementById(id);
-    if (el && el.textContent !== txt) el.textContent = txt;
-  };
-  const p2 = (n) => String(n).padStart(2, '0');
-  set('fs-kind', product);
-  set('fs-src', source);
-  set('fs-time', `${p2(when.getUTCHours())}:${p2(when.getUTCMinutes())} UTC`);
-  set('fs-date', `${p2(when.getUTCMonth() + 1)}/${p2(when.getUTCDate())}/`
-                 + String(when.getUTCFullYear()).slice(2));
+  GFX.stamp = { kind: product, src: source, when };
+  gfxRender();
 }
 
 function ensureFrameLayer(i) {
@@ -5843,8 +5867,12 @@ function toggleWarnings(on) {
   if (on) refreshWarnings();
 }
 
-async function refreshWarnings() {
-  if (!warnDS || !warnDS.show) return;
+/* Pull the active alert list and leave it sorted by severity. Split out of
+   refreshWarnings because the broadcast warning banner needs the same list
+   while the polygon layer is switched off -- a presenter who does not want the
+   shapes on the map still wants the headline, and the old shape made the list
+   a side effect of drawing. Returns whether it succeeded. */
+async function fetchWarnFeatures() {
   try {
     const r = await fetch('/api/nws/alerts');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -5856,11 +5884,16 @@ async function refreshWarnings() {
     warnFeatures = gj.features || [];
   } catch (err) {
     pushEvent('NWS', `Warnings unavailable (${err.message})`, Date.now());
-    return;
+    return false;
   }
-
   warnFeatures.sort((a, b) =>
     warnStyle(b.properties.event).p - warnStyle(a.properties.event).p);
+  return true;
+}
+
+async function refreshWarnings() {
+  if (!warnDS || !warnDS.show) return;
+  if (!(await fetchWarnFeatures())) return;
 
   warnDS.entities.removeAll();
   for (const f of warnFeatures) {
@@ -5869,6 +5902,7 @@ async function refreshWarnings() {
   }
   renderWarningCards();
   noteFeed('nws');
+  gfxRender();
   viewer.scene.requestRender();
 }
 
@@ -7563,9 +7597,11 @@ function waveNum(metres) {
   const c = convertUnit(metres, { unit: 'm', us: true });
   return { value: Number(c.n.toFixed(1)), unit: c.unit };
 }
+/* Always one decimal. Same reason as convertUnit: a map label reading "3 ft"
+   next to one reading "3.3 ft" looks like two different measurements. */
 function waveText(metres) {
   const w = waveNum(metres);
-  return `${w.value} ${w.unit}`;
+  return `${w.value.toFixed(1)} ${w.unit}`;
 }
 function windNum(mps) {
   const c = convertUnit(mps, { unit: 'm/s', us: true });
@@ -7891,6 +7927,11 @@ function applyPresenting(on) {
   // Selection mode locks the camera and its bar is one of the things hidden,
   // so entering presentation while armed would strand the globe.
   if (on && typeof AD !== 'undefined' && AD.arming) adSetSelecting(false);
+
+  // The broadcast graphics stay up, but their safe area tightens once the
+  // telemetry bar is gone -- a readout still sitting 58px down has a band of
+  // dead globe above it in every shot.
+  gfxRender();
 
   // Cesium sizes its canvas to the container, which does not change here, but
   // the vignette opacity and the hidden overlays both want a repaint.
@@ -8243,4 +8284,710 @@ function initPanes() {
   });
 
   applyPaneMode(settings.paneMode || 'single');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BROADCAST GRAPHICS  ("Custom Graphics" — the last row of the StormCat5 chart)
+//
+//  The reference app's Overlays tab: a list of named graphics that draw over
+//  the map, each with a style, a nine-point anchor, a scale and a pixel nudge,
+//  and the whole set saved under a named MODE so a broadcaster can flip between
+//  their own look and the built-in one.
+//
+//  Two things make this a feature rather than decoration:
+//
+//  1. Nothing here is typed in. The readout names whatever product is actually
+//     on the globe and stamps the frame's valid time; the warning banner is the
+//     highest-priority live NWS alert with a real countdown; the colour scale is
+//     the ramp the pixels were painted with. A graphic that says TEMPERATURE
+//     over a radar loop is worse than no graphic, so the text is derived, and
+//     the override fields are blank by default.
+//
+//  2. They survive presentation mode. Everything else in the chrome hides; this
+//     layer is the broadcast, so it stays.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const GFX_POS = ['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br'];
+
+/* Safe area. Asymmetric on purpose while the chrome is up: "top left" has to
+   mean the top left of the MAP, and the map starts at the right edge of the
+   264px HUD rail. Anchoring to the true window corner would park the readout
+   underneath the layer panel, which is where the old fixed frame-stamp's
+   hardcoded left:296px came from. Presentation mode drops the rail, so the
+   whole frame opens up.
+
+   The bottom inset clears the transport in both, because the timeline is one
+   of the few pieces of chrome that deliberately survives presenting. */
+const GFX_INSET = { top: 58, left: 296, right: 20, bottom: 66 };
+const GFX_INSET_PRESENT = { top: 22, left: 22, right: 22, bottom: 66 };
+
+const GFX_STYLE_NAMES = { 1: 'Rule', 2: 'Solid', 3: 'Bar' };
+
+/* Each graphic: what it is, whether it takes a style, and which free-text
+   overrides it accepts. The editor UI is generated from this, so a control can
+   never drift from the config key it writes. */
+const GFX_ITEMS = [
+  {
+    key: 'readout', label: 'Data Readout', accent: 'accent',
+    hint: 'The product on the globe and the frame time',
+    styles: true, fields: [['title', 'Title'], ['sub', 'Subtitle']],
+  },
+  {
+    key: 'warning', label: 'Warning Banner', accent: 'live',
+    hint: 'Highest-priority live NWS alert, with its countdown',
+    styles: true, fields: [],
+  },
+  {
+    key: 'scale', label: 'Colour Scale', accent: 'accent',
+    hint: 'The ramp the pixels on screen were painted with',
+    styles: false, fields: [],
+  },
+  {
+    key: 'bug', label: 'Station Bug', accent: 'accent',
+    hint: 'Your name, bottom corner, out of the way',
+    styles: false, fields: [['text', 'Text']],
+  },
+];
+
+function gfxDefaultConfig() {
+  return {
+    readout: { on: true,  style: 1, pos: 'tl', scale: 100, dx: 0, dy: 0, clock: true, title: '', sub: '' },
+    warning: { on: true,  style: 1, pos: 'tr', scale: 100, dx: 0, dy: 0 },
+    // On by default. The HUD legend is hidden on air, so leaving this off
+    // would mean presenting a radar loop with no key to its colours; and it
+    // draws nothing at all unless a live ramp is actually on the globe.
+    scale:   { on: true,  style: 1, pos: 'bl', scale: 100, dx: 0, dy: 0 },
+    bug:     { on: false, style: 1, pos: 'br', scale: 100, dx: 0, dy: 0, text: 'GRATICULE' },
+  };
+}
+
+// GFX (the module's mutable state) is declared with the other hoisted state at
+// the top of this file, not here: `const` at classic-script top level stays in
+// its temporal dead zone until its own line evaluates, and syncTimelineVisibility
+// touches GFX.stamp from a change event that can fire during bootstrap.
+
+/* The built-in mode is generated from code, not persisted, and a stored copy
+   only appears once the user edits it. Seeding localStorage with it at first
+   run would freeze whatever the defaults were that day, so a later change to
+   the built-in look would never reach anyone who had merely opened the app. */
+function gfxModes() {
+  const saved = settings.gfxModes && typeof settings.gfxModes === 'object' ? settings.gfxModes : {};
+  return Object.assign({ Default: gfxDefaultConfig() }, saved);
+}
+
+function gfxCfg() {
+  const all = gfxModes();
+  const cfg = all[settings.gfxMode] || all.Default;
+  // Fill in anything a mode saved before a key existed.
+  const base = gfxDefaultConfig();
+  const out = {};
+  for (const k of Object.keys(base)) out[k] = Object.assign({}, base[k], cfg[k] || {});
+  return out;
+}
+
+function gfxSetCfg(key, patch) {
+  const name = settings.gfxMode || 'Default';
+  const cfg = gfxCfg();
+  Object.assign(cfg[key], patch);
+  settings.gfxModes = Object.assign({}, settings.gfxModes, { [name]: cfg });
+  saveSettings();
+  gfxRender();
+}
+
+// ---------- What the graphics say --------------------------------------------
+
+function gfxLayerOn(key) {
+  const cb = document.querySelector(`input[data-layer="${key}"]`);
+  return !!(cb && cb.checked);
+}
+
+/* Read the product off the globe, most specific first. Model field beats radar
+   because turning it on is a deliberate act; radar is the app's resting state. */
+function gfxProduct() {
+  if (gfxLayerOn('model')) {
+    const def = FIELD_DEFS[valueOf('model-field', 'temperature_2m')];
+    const model = valueOf('model-name', 'gfs').toUpperCase();
+    return {
+      title: (def && (def.legend || def.label) || 'MODEL FIELD').toUpperCase(),
+      sub: `FORECAST · ${model}`,
+    };
+  }
+  if (gfxLayerOn('radar') && GFX.stamp) {
+    return { title: GFX.stamp.kind, sub: GFX.stamp.src, when: GFX.stamp.when };
+  }
+  if (gfxLayerOn('radar'))       return { title: 'RADAR',      sub: 'MRMS COMPOSITE' };
+  if (gfxLayerOn('clouds'))      return { title: 'SATELLITE',  sub: 'GOES INFRARED' };
+  if (gfxLayerOn('spc_outlook')) return { title: 'SPC OUTLOOK', sub: 'STORM PREDICTION CENTER' };
+  if (gfxLayerOn('warnings'))    return { title: 'WATCHES & WARNINGS', sub: 'NATIONAL WEATHER SERVICE' };
+  if (gfxLayerOn('metar'))       return { title: 'SURFACE OBS', sub: 'METAR' };
+  return { title: 'GRATICULE', sub: 'SITUATIONAL AWARENESS' };
+}
+
+/* The clock block. A weather graphic that shows a wall clock in an unstated
+   zone is ambiguous, so the zone is always on the label. When a radar frame is
+   loaded its valid time is what matters, not the current time. */
+function gfxTimeBlock(cfg) {
+  const p = GFX.stamp && gfxLayerOn('radar') ? GFX.stamp.when : new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  if (settings.timeFormat === 'local') {
+    const h = p.getHours(), ap = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return {
+      big: `${h12}:${p2(p.getMinutes())} ${ap}`,
+      sub: `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][p.getDay()]} `
+         + `${p2(p.getMonth() + 1)}/${p2(p.getDate())}/${String(p.getFullYear()).slice(2)}`,
+    };
+  }
+  return {
+    big: `${p2(p.getUTCHours())}:${p2(p.getUTCMinutes())} UTC`,
+    sub: `${p2(p.getUTCMonth() + 1)}/${p2(p.getUTCDate())}/${String(p.getUTCFullYear()).slice(2)}`,
+  };
+}
+
+/* The alert the banner is about: highest priority, still in force, not
+   dismissed. warnFeatures is already sorted by warnStyle().p. */
+function gfxTopAlert() {
+  const now = Date.now();
+  for (const f of warnFeatures) {
+    const p = f.properties || {};
+    if (GFX.dismissed.has(p.id || p['@id'])) continue;
+    const exp = Date.parse(p.expires || p.ends || '');
+    if (Number.isFinite(exp) && exp <= now) continue;
+    return f;
+  }
+  return null;
+}
+
+function gfxCountdown(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const m = Math.floor(ms / 60000);
+  const h = Math.floor(m / 60);
+  return h > 0 ? `${h}H ${m % 60}M` : `${m}M`;
+}
+
+/* "Maricopa, AZ; Pinal, AZ" -> "MARICOPA · PINAL". The state suffix repeats on
+   every entry and eats the width the county names need.
+
+   Marine and fire zones are not counties and do not follow that shape: a
+   Special Marine Warning's areaDesc is a prose description of the water body,
+   and one of them measured 1,156px of banner across a 1,600px frame. So the
+   budget is characters, not entries -- names are taken until the line is full
+   and the rest become a count. */
+const GFX_AREA_CHARS = 38;
+
+/* Whether the areas an alert names are counties. The third character of an NWS
+   UGC code is 'C' for a county/parish and 'Z' for a forecast or marine zone --
+   ANZ533 is a stretch of the Chesapeake, not a county, and labelling it
+   COUNTIES on air is a caption that is simply false. Derived, not assumed. */
+function gfxAreaLabel(p) {
+  const ugc = (p && p.geocode && p.geocode.UGC) || [];
+  if (!ugc.length) return 'AREA';
+  return ugc.every((u) => String(u)[2] === 'C') ? 'COUNTIES' : 'AREA';
+}
+
+function gfxCounties(areaDesc) {
+  if (!areaDesc) return '';
+  const parts = String(areaDesc).split(';')
+    .map((s) => s.split(',')[0].trim()).filter(Boolean);
+  const kept = [];
+  let used = 0;
+  for (const p of parts) {
+    if (kept.length && used + p.length > GFX_AREA_CHARS) break;
+    kept.push(p.length > GFX_AREA_CHARS ? `${p.slice(0, GFX_AREA_CHARS - 1)}…` : p);
+    used += p.length + 3;
+  }
+  const head = kept.join(' · ').toUpperCase();
+  return parts.length > kept.length ? `${head} +${parts.length - kept.length}` : head;
+}
+
+/* The ramp on screen, whichever layer painted it. Returns the same shape the
+   HUD legend uses so one source of truth feeds both. */
+function gfxScaleData() {
+  if (gfxLayerOn('model')) {
+    const def = FIELD_DEFS[valueOf('model-field', 'temperature_2m')];
+    if (!def) return null;
+    return {
+      title: (def.legend || def.label).toUpperCase(), unit: def.unit,
+      stops: def.stops.map((s) => s[1]), ticks: def.ticks || [],
+    };
+  }
+  const mode = currentWxMode();
+  const s = SCALES[mode];
+  if (!s || !legendModeIsLive(mode)) return null;
+  return { title: s.title, unit: s.unit, stops: s.stops, ticks: s.ticks };
+}
+
+// ---------- Rendering ---------------------------------------------------------
+
+function gfxEnsureRoot() {
+  if (GFX.root) return GFX.root;
+  GFX.root = document.getElementById('gfx');
+  return GFX.root;
+}
+
+function gfxEl(key) {
+  const root = gfxEnsureRoot();
+  if (!root) return null;
+  if (GFX.els[key] && GFX.els[key].isConnected) return GFX.els[key];
+  const el = document.createElement('div');
+  el.className = `gfx gfx-${key}`;
+  root.appendChild(el);
+  GFX.els[key] = el;
+  return el;
+}
+
+/* Anchor + scale + nudge in one transform. Anchoring by left/top with a
+   translate keeps the element's own size out of the maths, so a graphic that
+   grows (a longer warning name) stays pinned to the corner it was placed in
+   instead of drifting. */
+function gfxPlace(el, cfg) {
+  const inset = settings.presenting ? GFX_INSET_PRESENT : GFX_INSET;
+  const v = cfg.pos[0], h = cfg.pos[1];
+  const s = Math.max(0.5, Math.min(2.5, (cfg.scale || 100) / 100));
+
+  el.style.left = el.style.right = el.style.top = el.style.bottom = '';
+  // '0px', not '0'. calc() cannot add a unitless zero to a length, and an
+  // invalid value in a transform drops the WHOLE declaration silently -- which
+  // is exactly what happened: the anchor still worked, because that is
+  // left/top, while scale and the pixel nudge did nothing at all.
+  let tx = '0px', ty = '0px', origin = 'top left';
+
+  if (h === 'l') { el.style.left = `${inset.left}px`; }
+  else if (h === 'r') { el.style.right = `${inset.right}px`; origin = 'top right'; }
+  else { el.style.left = '50%'; tx = '-50%'; origin = 'top center'; }
+
+  if (v === 't') { el.style.top = `${inset.top}px`; }
+  else if (v === 'b') {
+    el.style.bottom = `${inset.bottom}px`;
+    origin = origin.replace('top', 'bottom');
+  } else { el.style.top = '50%'; ty = '-50%'; origin = origin.replace('top', 'center'); }
+
+  el.style.transformOrigin = origin;
+  el.style.transform =
+    `translate(calc(${tx} + ${cfg.dx || 0}px), calc(${ty} + ${cfg.dy || 0}px)) scale(${s})`;
+}
+
+function gfxRender() {
+  // Layer checkboxes fire change events during bootstrap, before this module's
+  // top-level consts have evaluated. Reading GFX_INSET from gfxPlace() then
+  // throws on the temporal dead zone, so nothing paints until initGraphics()
+  // has run and set this.
+  if (!GFX.ready) return;
+  const root = gfxEnsureRoot();
+  if (!root) return;
+  const cfg = gfxCfg();
+
+  gfxRenderReadout(cfg.readout);
+  gfxRenderWarning(cfg.warning);
+  gfxRenderScale(cfg.scale);
+  gfxRenderBug(cfg.bug);
+}
+
+function gfxShell(key, cfg, on) {
+  const el = gfxEl(key);
+  if (!el) return null;
+  if (!on) { el.classList.add('hidden'); return null; }
+  el.classList.remove('hidden');
+  el.dataset.style = String(cfg.style || 1);
+  gfxPlace(el, cfg);
+  return el;
+}
+
+function gfxRenderReadout(cfg) {
+  const el = gfxShell('readout', cfg, cfg.on);
+  if (!el) return;
+  const p = gfxProduct();
+  const title = (cfg.title || p.title || '').toUpperCase();
+  const sub = (cfg.sub || p.sub || '').toUpperCase();
+  const t = cfg.clock ? gfxTimeBlock(cfg) : null;
+
+  el.innerHTML = '';
+  el.appendChild(gfxAccentBar());
+  const cols = document.createElement('div');
+  cols.className = 'gfx-cols';
+  cols.appendChild(gfxCol(title, sub, 'gfx-head'));
+  if (t) {
+    const rule = document.createElement('div');
+    rule.className = 'gfx-rule';
+    cols.appendChild(rule);
+    cols.appendChild(gfxCol(t.big, t.sub, 'gfx-time mono'));
+  }
+  el.appendChild(cols);
+}
+
+function gfxRenderWarning(cfg) {
+  const f = cfg.on ? gfxTopAlert() : null;
+  const el = gfxShell('warning', cfg, !!f);
+  if (!el) return;
+  const p = f.properties || {};
+  const tone = warnStyle(p.event).c;
+  el.style.setProperty('--gfx-accent', tone);
+
+  const now = Date.now();
+  const exp = Date.parse(p.expires || p.ends || '');
+  const start = Date.parse(p.onset || p.effective || p.sent || '');
+  const left = gfxCountdown(exp - now);
+  const expTxt = Number.isFinite(exp)
+    ? `EXPIRES ${new Date(exp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+    : 'IN EFFECT';
+
+  el.innerHTML = '';
+  el.appendChild(gfxAccentBar());
+  const body = document.createElement('div');
+  body.className = 'gfx-cols';
+  body.appendChild(gfxCol(
+    String(p.event || 'ALERT').toUpperCase(),
+    left ? `${expTxt} (${left})` : expTxt,
+    'gfx-head gfx-alarm'));
+  const counties = gfxCounties(p.areaDesc);
+  if (counties) {
+    const rule = document.createElement('div');
+    rule.className = 'gfx-rule';
+    body.appendChild(rule);
+    body.appendChild(gfxCol(counties, gfxAreaLabel(p), 'gfx-area'));
+  }
+  el.appendChild(body);
+
+  // The bar is the share of the alert's own lifetime that is left, not a
+  // fixed window: a 6-hour flood warning and a 30-minute tornado warning both
+  // read as "how much of this is still ahead of you".
+  if (Number.isFinite(exp) && Number.isFinite(start) && exp > start) {
+    const pct = Math.max(0, Math.min(1, (exp - now) / (exp - start)));
+    const track = document.createElement('div');
+    track.className = 'gfx-prog';
+    const fill = document.createElement('div');
+    fill.className = 'gfx-prog-fill';
+    fill.style.width = `${(pct * 100).toFixed(1)}%`;
+    track.appendChild(fill);
+    el.appendChild(track);
+  }
+
+  // Dismiss. The only interactive thing in this layer, so it opts back into
+  // pointer events on its own.
+  const x = document.createElement('button');
+  x.className = 'gfx-x';
+  x.textContent = '×';
+  x.title = 'Dismiss this alert graphic';
+  x.setAttribute('aria-label', `Dismiss ${p.event || 'alert'} graphic`);
+  x.addEventListener('click', () => {
+    GFX.dismissed.add(p.id || p['@id']);
+    gfxRender();
+  });
+  el.appendChild(x);
+}
+
+function gfxRenderScale(cfg) {
+  const d = cfg.on ? gfxScaleData() : null;
+  // Two ramps on screen describing the same pixels is one too many, and the
+  // broadcast one wins because it is the one that stays up on air.
+  document.getElementById('legend')?.classList.toggle('gfx-superseded', !!d);
+  const el = gfxShell('scale', cfg, !!d);
+  if (!el) return;
+  el.innerHTML = '';
+  el.appendChild(gfxAccentBar());
+  const head = document.createElement('div');
+  head.className = 'gfx-scale-head';
+  head.innerHTML = `<span>${d.title}</span><span class="mono">${d.unit}</span>`;
+  const bar = document.createElement('div');
+  bar.className = 'gfx-scale-bar';
+  bar.style.background = `linear-gradient(90deg, ${d.stops.join(', ')})`;
+  const ticks = document.createElement('div');
+  ticks.className = 'gfx-scale-ticks mono';
+  ticks.innerHTML = d.ticks.map((t) => `<span>${t}</span>`).join('');
+  el.append(head, bar, ticks);
+}
+
+function gfxRenderBug(cfg) {
+  const txt = (cfg.text || '').trim();
+  const el = gfxShell('bug', cfg, cfg.on && !!txt);
+  if (!el) return;
+  el.textContent = txt.toUpperCase();
+}
+
+function gfxAccentBar() {
+  const d = document.createElement('div');
+  d.className = 'gfx-accent';
+  return d;
+}
+
+function gfxCol(big, sub, cls) {
+  const col = document.createElement('div');
+  col.className = `gfx-col ${cls || ''}`;
+  const b = document.createElement('span');
+  b.className = 'gfx-big';
+  b.textContent = big;
+  const s = document.createElement('span');
+  s.className = 'gfx-sub';
+  s.textContent = sub;
+  col.append(b, s);
+  return col;
+}
+
+// ---------- The editor panel --------------------------------------------------
+
+function gfxBuildPanel() {
+  const host = document.getElementById('gfx-items');
+  if (!host) return;
+  host.textContent = '';
+  const cfg = gfxCfg();
+
+  for (const item of GFX_ITEMS) {
+    const c = cfg[item.key];
+    const box = document.createElement('details');
+    box.className = 'gfx-item';
+    box.open = item.key === 'readout';
+
+    const sum = document.createElement('summary');
+    sum.innerHTML = `<span class="gfx-item-name">${item.label}</span>`
+                  + `<span class="gfx-item-hint">${item.hint}</span>`;
+
+    // The rail's own pill switch, not a bare checkbox: every other on/off in
+    // this panel is a `.sw`, and a stock checkbox next to them is the exact
+    // kind of mixed idiom that reads as unfinished.
+    const swl = document.createElement('label');
+    swl.className = 'sw gfx-item-on';
+    const tog = document.createElement('input');
+    tog.type = 'checkbox';
+    tog.checked = !!c.on;
+    tog.setAttribute('aria-label', `${item.label} on`);
+    const knob = document.createElement('span');
+    knob.className = 'sw-t';
+    swl.append(tog, knob);
+    // Inside a <summary>, a click on the control also toggles the disclosure,
+    // which reads as the panel fighting the user.
+    swl.addEventListener('click', (e) => e.stopPropagation());
+    tog.addEventListener('change', () => gfxSetCfg(item.key, { on: tog.checked }));
+    sum.appendChild(swl);
+    box.appendChild(sum);
+
+    const body = document.createElement('div');
+    body.className = 'gfx-item-body';
+
+    if (item.styles) {
+      body.appendChild(gfxRowSelect('Style', [1, 2, 3].map((n) => [n, `Style ${n} · ${GFX_STYLE_NAMES[n]}`]),
+        c.style, (v) => gfxSetCfg(item.key, { style: Number(v) })));
+    }
+    body.appendChild(gfxRowAnchor(c.pos, (v) => gfxSetCfg(item.key, { pos: v })));
+    body.appendChild(gfxRowRange('Scale', 50, 250, 5, c.scale, '%',
+      (v) => gfxSetCfg(item.key, { scale: v })));
+    body.appendChild(gfxRowRange('Shift X', -400, 400, 2, c.dx, 'px',
+      (v) => gfxSetCfg(item.key, { dx: v })));
+    body.appendChild(gfxRowRange('Shift Y', -400, 400, 2, c.dy, 'px',
+      (v) => gfxSetCfg(item.key, { dy: v })));
+
+    if (item.key === 'readout') {
+      body.appendChild(gfxRowCheck('Show the clock', c.clock,
+        (v) => gfxSetCfg(item.key, { clock: v })));
+    }
+    for (const [field, label] of item.fields) {
+      body.appendChild(gfxRowText(label, c[field] || '',
+        item.key === 'bug' ? 'Your name' : 'Auto',
+        (v) => gfxSetCfg(item.key, { [field]: v })));
+    }
+
+    box.appendChild(body);
+    host.appendChild(box);
+  }
+}
+
+/* Rows reuse the HUD's own `.ctl` furniture rather than the settings modal's.
+   Two control idioms inside one 264px rail is exactly the inconsistency that
+   reads as unfinished. */
+function gfxRow(label) {
+  const row = document.createElement('div');
+  row.className = 'ctl';
+  const l = document.createElement('span');
+  l.className = 'ctl-l';
+  l.textContent = label;
+  row.appendChild(l);
+  return row;
+}
+
+function gfxRowSelect(label, opts, value, onChange) {
+  const row = gfxRow(label);
+  const sel = document.createElement('select');
+  sel.className = 'gfx-sel';
+  for (const [v, t] of opts) {
+    const o = document.createElement('option');
+    o.value = String(v); o.textContent = t;
+    sel.appendChild(o);
+  }
+  sel.value = String(value);
+  sel.addEventListener('change', () => onChange(sel.value));
+  row.appendChild(sel);
+  return row;
+}
+
+function gfxRowRange(label, min, max, step, value, unit, onChange) {
+  const row = gfxRow(label);
+  const r = document.createElement('input');
+  r.type = 'range'; r.min = min; r.max = max; r.step = step; r.value = value;
+  const out = document.createElement('span');
+  out.className = 'ctl-v mono';
+  out.textContent = `${value}${unit}`;
+  r.addEventListener('input', () => {
+    out.textContent = `${r.value}${unit}`;
+    onChange(Number(r.value));
+  });
+  row.append(r, out);
+  return row;
+}
+
+function gfxRowCheck(label, value, onChange) {
+  const l = document.createElement('label');
+  l.className = 'sw gfx-sw';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.checked = !!value;
+  cb.addEventListener('change', () => onChange(cb.checked));
+  const t = document.createElement('span');
+  t.className = 'sw-t';
+  const s = document.createElement('span');
+  s.className = 'sw-l';
+  s.textContent = label;
+  l.append(cb, t, s);
+  return l;
+}
+
+function gfxRowText(label, value, placeholder, onChange) {
+  const row = gfxRow(label);
+  const i = document.createElement('input');
+  i.type = 'text'; i.value = value; i.placeholder = placeholder; i.maxLength = 42;
+  i.className = 'gfx-text';
+  i.addEventListener('input', () => onChange(i.value));
+  row.appendChild(i);
+  return row;
+}
+
+/* The nine-point anchor, laid out as the 3x3 it represents. A dropdown of
+   "top left / top centre / ..." is the same information in a form you have to
+   read instead of point at. */
+function gfxRowAnchor(value, onChange) {
+  const row = gfxRow('Position');
+  const grid = document.createElement('div');
+  grid.className = 'gfx-anchor';
+  for (const p of GFX_POS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'gfx-anchor-b';
+    b.dataset.pos = p;
+    b.setAttribute('aria-label', p);
+    b.setAttribute('aria-pressed', String(p === value));
+    b.classList.toggle('is-active', p === value);
+    b.addEventListener('click', () => {
+      grid.querySelectorAll('.gfx-anchor-b').forEach((o) => {
+        const on = o.dataset.pos === p;
+        o.classList.toggle('is-active', on);
+        o.setAttribute('aria-pressed', String(on));
+      });
+      onChange(p);
+    });
+    grid.appendChild(b);
+  }
+  row.appendChild(grid);
+  return row;
+}
+
+function gfxRenderModes() {
+  const host = document.getElementById('gfx-modes');
+  if (!host) return;
+  host.textContent = '';
+  const all = gfxModes();
+  for (const name of Object.keys(all)) {
+    const row = document.createElement('div');
+    row.className = 'gfx-mode';
+    row.classList.toggle('is-active', name === (settings.gfxMode || 'Default'));
+
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'gfx-mode-pick';
+    pick.innerHTML = `<span>${name}</span>`
+      + (name === 'Default' ? '<span class="gfx-mode-tag">BUILT IN</span>' : '');
+    pick.addEventListener('click', () => {
+      settings.gfxMode = name;
+      saveSettings();
+      gfxRenderModes();
+      gfxBuildPanel();
+      gfxRender();
+    });
+    row.appendChild(pick);
+
+    if (name !== 'Default') {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'gfx-mode-del';
+      del.textContent = '×';
+      del.title = `Delete the ${name} mode`;
+      del.setAttribute('aria-label', `Delete the ${name} mode`);
+      del.addEventListener('click', () => {
+        const modes = Object.assign({}, settings.gfxModes);
+        delete modes[name];
+        settings.gfxModes = modes;
+        if (settings.gfxMode === name) settings.gfxMode = 'Default';
+        saveSettings();
+        gfxRenderModes();
+        gfxBuildPanel();
+        gfxRender();
+      });
+      row.appendChild(del);
+    }
+    host.appendChild(row);
+  }
+}
+
+function gfxSaveModeAs() {
+  const input = document.getElementById('gfx-mode-name');
+  const name = (input.value || '').trim().slice(0, 28);
+  if (!name || name === 'Default') return;
+  settings.gfxModes = Object.assign({}, settings.gfxModes, { [name]: gfxCfg() });
+  settings.gfxMode = name;
+  saveSettings();
+  input.value = '';
+  gfxRenderModes();
+  gfxBuildPanel();
+  gfxRender();
+}
+
+// ---------- Wiring ------------------------------------------------------------
+
+function initGraphics() {
+  GFX.ready = true;
+  gfxEnsureRoot();
+  gfxRenderModes();
+  gfxBuildPanel();
+
+  document.getElementById('gfx-mode-add')?.addEventListener('click', gfxSaveModeAs);
+  document.getElementById('gfx-mode-name')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') gfxSaveModeAs();
+  });
+
+  // A graphic is only honest if it repaints when what it describes changes.
+  // Layer checkboxes, the model selectors and the wx mode chips are the three
+  // places a product swap can originate.
+  document.querySelectorAll('input[data-layer]').forEach((cb) =>
+    cb.addEventListener('change', () => gfxRender()));
+  for (const id of ['model-field', 'model-name']) {
+    document.getElementById(id)?.addEventListener('change', () => gfxRender());
+  }
+  document.querySelectorAll('#wx-modes .chip').forEach((c) =>
+    c.addEventListener('click', () => setTimeout(gfxRender, 0)));
+
+  // One second is the coarsest tick that still lets a countdown read as live.
+  GFX.tick = setInterval(() => {
+    const cfg = gfxCfg();
+    if (cfg.readout.on && cfg.readout.clock) gfxRenderReadout(cfg.readout);
+    if (cfg.warning.on) gfxRenderWarning(cfg.warning);
+  }, 1000);
+
+  // The banner has to work with the warning POLYGONS switched off -- a
+  // broadcaster who does not want the shapes on the map still wants the
+  // headline. So it keeps its own copy of the alert list current.
+  const pollWarnings = () => {
+    if (!gfxCfg().warning.on) return;
+    if (warnDS && warnDS.show) return;         // the layer is already polling
+    fetchWarnFeatures().then(() => gfxRender());
+  };
+  pollWarnings();
+  GFX.warnTimer = setInterval(pollWarnings, 120000);
+
+  gfxRender();
 }

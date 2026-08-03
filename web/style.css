@@ -1427,30 +1427,9 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
    date on the right. The single "12:40 UTC RADAR" line it replaced could not
    say which satellite or which product you were looking at, which is the whole
    reason these apps pin a stamp to the map. */
-#frame-stamp {
-  position: absolute; top: 66px; left: 296px; z-index: 12;
-  background: var(--panel-bg-strong);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--r-sm);
-  overflow: hidden;
-  backdrop-filter: blur(8px);
-}
-.fs-accent {
-  height: 2px;
-  background: linear-gradient(90deg, var(--accent), #7c6cf0 65%, #b06cf0);
-}
-.fs-cols { display: flex; align-items: stretch; gap: 12px; padding: 7px 12px; }
-.fs-col { display: flex; flex-direction: column; gap: 1px; justify-content: center; }
-.fs-rule { width: 1px; background: var(--panel-rule); }
-.fs-big {
-  font-size: var(--fs-lg); font-weight: 600; color: var(--text);
-  line-height: 1.15; letter-spacing: var(--tr-tight);
-  font-variant-numeric: tabular-nums;
-}
-.fs-sub {
-  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
-  color: var(--text-mute); text-transform: uppercase;
-}
+/* The #frame-stamp rules that lived here are gone: the chip is now the Data
+   Readout graphic at the bottom of this file, which does the same job under
+   operator control instead of pinned to a hardcoded 66/296. */
 
 /* ---- Timeline ---- */
 #timeline {
@@ -2125,6 +2104,7 @@ body.is-presenting #ticker,
 body.is-presenting #history-strip,
 body.is-presenting #alerts-panel,
 body.is-presenting #compass,
+body.is-presenting #legend,
 body.is-presenting #panel {
   visibility: hidden;
   pointer-events: none;
@@ -2243,3 +2223,210 @@ body.panes-quad .pane-cell:nth-child(-n+2) .pane-bar { top: 52px; }
 }
 body.panes-dual .pane-cell.is-live .pane-bar,
 body.panes-quad .pane-cell.is-live .pane-bar { top: auto; }
+
+/* ─────────  BROADCAST GRAPHICS  ─────────
+   The layer that stays up when everything else goes away. It sits above the
+   HUD and below the modal, and it must never eat a click: the globe underneath
+   has to stay draggable through it, so only the dismiss button opts back in. */
+#gfx {
+  position: absolute; inset: 0; z-index: 14;
+  pointer-events: none;
+}
+.gfx {
+  position: absolute;
+  --gfx-accent: var(--accent);
+  font-family: var(--sans);
+}
+.gfx.hidden { display: none; }
+
+.gfx-cols { display: flex; align-items: stretch; gap: 12px; padding: 7px 12px; }
+.gfx-col { display: flex; flex-direction: column; gap: 1px; justify-content: center; }
+.gfx-rule { width: 1px; background: var(--panel-rule); }
+.gfx-big {
+  font-size: var(--fs-lg); font-weight: 600; color: var(--text);
+  line-height: 1.15; letter-spacing: var(--tr-tight);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.gfx-sub {
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  color: var(--text-mute); text-transform: uppercase; white-space: nowrap;
+}
+.gfx-alarm .gfx-big { color: var(--gfx-accent); }
+/* Backstop for the area line. gfxCounties() budgets characters, but character
+   count is a proxy for width and a wide glyph run can still push a banner
+   across the frame. This is what actually bounds it. */
+.gfx-area .gfx-big {
+  font-size: var(--fs-sm); letter-spacing: var(--tr-wide);
+  max-width: 22vw; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---- Style 1 · Rule ----
+   Dark card, hairline gradient along the top edge. The resting look. */
+.gfx[data-style="1"] {
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+.gfx[data-style="1"] .gfx-accent {
+  height: 2px;
+  background: linear-gradient(90deg, var(--gfx-accent), transparent 92%);
+}
+
+/* ---- Style 2 · Solid ----
+   The accent fills the head cell and the type reverses out of it. Squared off,
+   because at broadcast scale a rounded solid block reads as a web button. */
+.gfx[data-style="2"] {
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 0;
+  overflow: hidden;
+}
+.gfx[data-style="2"] .gfx-accent { display: none; }
+.gfx[data-style="2"] .gfx-head {
+  background: var(--gfx-accent);
+  margin: -7px 0 -7px -12px; padding: 7px 14px;
+  justify-content: center;
+}
+.gfx[data-style="2"] .gfx-head .gfx-big { color: #05070b; }
+.gfx[data-style="2"] .gfx-head .gfx-sub { color: rgba(5, 7, 11, 0.72); }
+.gfx[data-style="2"] .gfx-rule { display: none; }
+
+/* ---- Style 3 · Bar ----
+   No card at all: an accent spine and a gradient that fades into the map. The
+   least furniture, for a full-frame shot where a boxed graphic reads as a
+   screenshot of an app rather than a broadcast. */
+.gfx[data-style="3"] {
+  background: linear-gradient(90deg, rgba(6, 9, 14, 0.9), rgba(6, 9, 14, 0));
+  border: 0; border-left: 3px solid var(--gfx-accent);
+  border-radius: 0;
+}
+.gfx[data-style="3"] .gfx-accent { display: none; }
+.gfx[data-style="3"] .gfx-cols { padding: 6px 40px 6px 11px; }
+.gfx[data-style="3"] .gfx-big { text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
+
+/* ---- Warning banner extras ---- */
+.gfx-prog { height: 2px; background: rgba(255, 255, 255, 0.08); }
+.gfx-prog-fill { height: 100%; background: var(--gfx-accent); transition: width 900ms linear; }
+.gfx-x {
+  position: absolute; top: 4px; right: 5px;
+  appearance: none; background: none; border: 0; padding: 0 3px;
+  color: var(--text-mute); font-size: var(--fs-base); line-height: 1;
+  cursor: pointer; pointer-events: auto;
+}
+.gfx-x:hover { color: var(--text); }
+
+/* ---- Colour scale ---- */
+.gfx-scale { min-width: 210px; }
+.gfx-scale-head {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 6px 10px 4px;
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  color: var(--text-dim); text-transform: uppercase;
+}
+.gfx-scale-bar { height: 8px; margin: 0 10px; border-radius: var(--r-sm); }
+.gfx-scale-ticks {
+  display: flex; justify-content: space-between;
+  padding: 3px 10px 7px;
+  font-size: var(--fs-micro); color: var(--text-mute);
+}
+
+/* ---- Station bug ----
+   Type only. A drawn logo would be an invented brand; the operator's own name
+   set in the app's face is the honest version of the corner bug. */
+.gfx-bug {
+  font-size: var(--fs-xl); font-weight: 700;
+  letter-spacing: var(--tr-xwide); color: var(--text);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+  opacity: 0.9;
+}
+
+/* ─────────  GRAPHICS PANEL  ───────── */
+.gfx-grp { margin-top: 16px; }
+.gfx-grp-label {
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  color: var(--text-mute); text-transform: uppercase;
+  padding-bottom: 6px; border-bottom: 1px solid var(--panel-rule);
+  margin-bottom: 7px;
+}
+#gfx-modes { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.gfx-mode {
+  display: flex; align-items: center;
+  border: 1px solid transparent; border-radius: var(--r-sm);
+}
+.gfx-mode.is-active {
+  border-color: var(--panel-border);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.gfx-mode-pick {
+  flex: 1; display: flex; align-items: center; gap: 8px;
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 6px 9px; text-align: left;
+  color: var(--text-dim); font-family: var(--sans); font-size: var(--fs-sm);
+}
+.gfx-mode.is-active .gfx-mode-pick { color: var(--text); font-weight: 600; }
+.gfx-mode-tag {
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  color: var(--text-mute);
+}
+.gfx-mode-del {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 4px 8px; color: var(--text-mute); font-size: var(--fs-base);
+}
+.gfx-mode-del:hover { color: var(--bad); }
+
+.gfx-mode-new { display: flex; gap: 5px; }
+.gfx-mode-new input {
+  flex: 1; min-width: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border); border-radius: var(--r-sm);
+  color: var(--text); font-family: var(--sans); font-size: var(--fs-sm);
+  padding: 5px 8px;
+}
+
+.gfx-item { border-top: 1px solid var(--panel-rule); }
+.gfx-item > summary {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 2px; cursor: pointer; list-style: none;
+}
+.gfx-item > summary::-webkit-details-marker { display: none; }
+.gfx-item-name {
+  font-size: var(--fs-sm); font-weight: 600; color: var(--text);
+}
+.gfx-item-hint {
+  flex: 1; font-size: var(--fs-micro); color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gfx-item-on { flex: none; padding: 0; gap: 0; }
+.gfx-item-on:hover { background: none; }
+.gfx-item-body { padding: 2px 0 10px; }
+.gfx-sel, .gfx-text {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border); border-radius: var(--r-sm);
+  color: var(--text); font-family: var(--sans); font-size: var(--fs-xs);
+  padding: 4px 6px; min-width: 0; flex: 1;
+}
+
+.gfx-sw { padding-left: 4px; }
+
+/* The 3x3 anchor, laid out as the thing it selects. Cells are 24x16 so the
+   whole control matches the height of the slider rows it sits between and each
+   target still clears the 24px minimum on its long axis. */
+.gfx-anchor {
+  display: grid; grid-template-columns: repeat(3, 24px);
+  grid-auto-rows: 16px; gap: 2px;
+}
+.gfx-anchor-b {
+  appearance: none; cursor: pointer;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border); border-radius: var(--r-sm);
+  padding: 0;
+}
+.gfx-anchor-b:hover { background: rgba(255, 255, 255, 0.12); }
+.gfx-anchor-b.is-active { background: var(--accent); border-color: var(--accent); }
+.gfx-anchor-b:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+/* The HUD legend stands down when the broadcast colour scale is up. */
+#legend.gfx-superseded { display: none; }

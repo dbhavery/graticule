@@ -21,6 +21,10 @@
   <!-- Vignette + scanline overlay (cosmetic) -->
   <div id="overlay-vignette"></div>
 
+  <!-- Broadcast graphics. Built entirely by gfxRender(); the only chrome that
+       survives presentation mode, because it IS the broadcast. -->
+  <div id="gfx"></div>
+
   <!-- ─────────  TOP TELEMETRY BAR  ───────── -->
   <header id="topbar">
     <div class="brand">
@@ -86,6 +90,7 @@
       <button class="hud-tab" data-tab="earth"   role="tab" aria-selected="false">EARTH</button>
       <button class="hud-tab" data-tab="sky"     role="tab" aria-selected="false">SKY</button>
       <button class="hud-tab" data-tab="world"   role="tab" aria-selected="false">WORLD</button>
+      <button class="hud-tab" data-tab="graphics" role="tab" aria-selected="false">GFX</button>
     </nav>
 
     <div id="hud-panes">
@@ -372,28 +377,36 @@
       </div>
     </section>
 
+    <!-- ═══════════  GRAPHICS  ═══════════
+         The broadcast layer. Every graphic here derives its text from what is
+         actually on the globe, so the overrides are blank by default and a
+         blank override means "keep telling me the truth". -->
+    <section class="hud-pane" data-pane="graphics">
+      <p class="pane-note">Graphics drawn over the globe. These are the only chrome
+        that stays up in presentation mode.</p>
+
+      <div class="gfx-grp">
+        <div class="gfx-grp-label">MODES</div>
+        <div id="gfx-modes"></div>
+        <div class="gfx-mode-new">
+          <input id="gfx-mode-name" type="text" placeholder="Name a look" maxlength="28"
+                 aria-label="Name for a new graphics mode">
+          <button id="gfx-mode-add" class="sm-btn">Save</button>
+        </div>
+      </div>
+
+      <div class="gfx-grp">
+        <div class="gfx-grp-label">OVERLAYS</div>
+        <div id="gfx-items"></div>
+      </div>
+    </section>
+
     </div>
   </aside>
 
-  <!-- ─────────  FRAME TIMESTAMP CHIP  ─────────
-       Every app in the survey pins the valid-time of the displayed frame to
-       the top-left of the map. Without it an animating radar loop is
-       ambiguous about whether you are looking at past or forecast data —
-       the exact complaint levelled at weather.com in the review. -->
-  <div id="frame-stamp" class="hidden">
-    <div class="fs-accent"></div>
-    <div class="fs-cols">
-      <div class="fs-col">
-        <span id="fs-kind" class="fs-big">RADAR</span>
-        <span id="fs-src" class="fs-sub">—</span>
-      </div>
-      <div class="fs-rule"></div>
-      <div class="fs-col">
-        <span id="fs-time" class="fs-big mono">—</span>
-        <span id="fs-date" class="fs-sub mono">—</span>
-      </div>
-    </div>
-  </div>
+  <!-- The frame timestamp chip that used to live here is now the Data Readout
+       graphic in #gfx: same job, but positionable, styleable and it names any
+       product on the globe rather than only radar. setStamp() feeds it. -->
 
   <!-- ─────────  RADAR / SATELLITE TIMELINE  ───────── -->
   <div id="timeline" class="hidden">
