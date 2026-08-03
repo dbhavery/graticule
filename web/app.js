@@ -332,8 +332,9 @@ const TICKER_MAX = 6;
   initViewResampling();
   initSkyMirrors();
   initWorldPane();
-  applyLegendFor('radar');
   applyInitialLayerState();
+  refreshLegend();
+  syncControlAvailability();
   initContextMenu();
   renderPresetsList();
   startClocks();
@@ -623,6 +624,26 @@ function initFeedChips() {
     el.innerHTML = `<span class="chip-dot"></span>${f.label}`;
     host.appendChild(el);
   }
+
+  // Collapsed by default. Fourteen chips reading ADS-B / TLE / LL2 / EONET /
+  // SWPC is an operator's debug view, not something a user should have to
+  // parse before they can look at the weather. The health summary stays
+  // visible; the breakdown is one click away.
+  const strip = document.getElementById('feedstrip');
+  const head  = strip?.querySelector('.strip-head');
+  if (!strip || !head) return;
+  strip.classList.add('is-collapsed');
+  head.setAttribute('role', 'button');
+  head.setAttribute('tabindex', '0');
+  head.setAttribute('aria-expanded', 'false');
+  const toggle = () => {
+    const open = strip.classList.toggle('is-collapsed') === false;
+    head.setAttribute('aria-expanded', String(open));
+  };
+  head.addEventListener('click', toggle);
+  head.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  });
 }
 
 async function applyServerCapabilities() {
@@ -820,6 +841,8 @@ function bindUI() {
       else if (layer === 'airspace')   toggleAirspace(on);
       else if (dataSources[layer])     fadeDataSource(dataSources[layer], on ? 'in' : 'out');
       updateCategoryCounts();
+      refreshLegend();
+      syncControlAvailability();
     });
   });
   document.getElementById('panel-close').addEventListener('click', hidePanel);
@@ -4281,11 +4304,45 @@ const SCALES = {
   },
 };
 
+// Controls that only act on a layer are dead weight while that layer is off,
+// and a live-looking control that does nothing is the thing that makes an app
+// feel unfinished. Each is tagged data-requires="<layer>" in the markup.
+function syncControlAvailability() {
+  document.querySelectorAll('.ctl[data-requires]').forEach((row) => {
+    const cb = document.querySelector(`input[data-layer="${row.dataset.requires}"]`);
+    const live = !!(cb && cb.checked);
+    row.classList.toggle('is-off', !live);
+    row.querySelectorAll('select, input').forEach((el) => { el.disabled = !live; });
+  });
+}
+
+// A legend describes what is on the globe, not which tab happens to be open.
+// Showing a dBZ ramp over a globe with no radar on it is worse than showing
+// nothing: it implies the colours out there mean something.
+const LEGEND_LAYERS = {
+  radar: ['radar', 'radar_site'],
+  satellite: ['clouds'],
+};
+
+function legendModeIsLive(mode) {
+  const layers = LEGEND_LAYERS[mode];
+  if (!layers) return true;
+  return layers.some((l) => {
+    const cb = document.querySelector(`input[data-layer="${l}"]`);
+    return cb && cb.checked;
+  });
+}
+
+function refreshLegend() {
+  if (document.querySelector('input[data-layer="model"]')?.checked) return;
+  applyLegendFor(currentWxMode());
+}
+
 function applyLegendFor(mode) {
   const el = document.getElementById('legend');
   if (!el) return;
   const scale = SCALES[mode];
-  if (!scale) { el.classList.add('hidden'); return; }
+  if (!scale || !legendModeIsLive(mode)) { el.classList.add('hidden'); return; }
   el.classList.remove('hidden');
   document.getElementById('lg-title').textContent = scale.title;
   document.getElementById('lg-unit').textContent  = scale.unit;

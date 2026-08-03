@@ -193,11 +193,14 @@ html, body {
   letter-spacing: 2.5px;
   color: var(--text-mute);
   margin-bottom: 2px;
+  white-space: nowrap;
 }
 .tm-val {
   font-size: 12.5px;
   font-weight: 500;
   color: var(--text);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .tm-sep {
   width: 1px;
@@ -550,7 +553,22 @@ html, body {
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
 }
+.strip-head::after {
+  content: '';
+  width: 5px; height: 5px;
+  border-right: 1px solid var(--text-mute);
+  border-bottom: 1px solid var(--text-mute);
+  transform: rotate(-135deg);
+  transition: transform 180ms ease;
+  margin-left: 2px;
+}
+#feedstrip.is-collapsed .strip-head { margin-bottom: 0; }
+#feedstrip.is-collapsed .strip-head::after { transform: rotate(45deg); }
+#feedstrip.is-collapsed #feedstrip-chips { display: none; }
+.strip-head:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
 .strip-label { font-size: 9px; font-weight: 600; letter-spacing: 3px; color: var(--text-mute); }
 .strip-rule  { flex: 1; height: 1px; background: var(--panel-rule); min-width: 12px; }
 
@@ -1233,7 +1251,10 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 .sw-l { flex: 1; }
 
 /* ---- Labelled control rows ---- */
-.ctl { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 11px; }
+.ctl { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 11px;
+       transition: opacity 160ms ease; }
+.ctl.is-off { opacity: 0.32; }
+.ctl.is-off select, .ctl.is-off input { cursor: default; }
 .ctl-l { flex: 0 0 62px; color: var(--text-mute); letter-spacing: 0.4px; }
 .ctl-sel {
   flex: 1; appearance: none;

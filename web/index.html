@@ -101,18 +101,18 @@
       <div class="mode-body is-active" data-mode-body="radar">
         <label class="sw"><input type="checkbox" data-layer="radar"><span class="sw-t"></span><span class="sw-l">National Radar</span></label>
         <label class="sw"><input type="checkbox" data-layer="radar_site"><span class="sw-t"></span><span class="sw-l">Local Hi-Res Site</span></label>
-        <div class="ctl">
+        <div class="ctl" data-requires="radar_site">
           <span class="ctl-l">Site</span>
           <select id="radar-site" class="ctl-sel"><option value="">— nearest —</option></select>
         </div>
-        <div class="ctl">
+        <div class="ctl" data-requires="radar_site">
           <span class="ctl-l">Product</span>
           <select id="radar-product" class="ctl-sel">
             <option value="reflectivity">Base Reflectivity</option>
             <option value="velocity">Base Velocity</option>
           </select>
         </div>
-        <div class="ctl">
+        <div class="ctl" data-requires="radar">
           <span class="ctl-l">Opacity</span>
           <input type="range" id="op-radar-2" min="0" max="1" step="0.05" value="0.70">
           <span class="ctl-v mono" id="op-radar-2-val">0.70</span>
@@ -124,7 +124,7 @@
       <!-- ---- SATELLITE ---- -->
       <div class="mode-body" data-mode-body="satellite">
         <label class="sw"><input type="checkbox" data-layer="clouds"><span class="sw-t"></span><span class="sw-l">Satellite / Clouds</span></label>
-        <div class="ctl">
+        <div class="ctl" data-requires="clouds">
           <span class="ctl-l">Satellite</span>
           <select id="sat-source" class="ctl-sel">
             <option value="goes-east">GOES-East</option>
@@ -132,7 +132,7 @@
             <option value="global">Global composite</option>
           </select>
         </div>
-        <div class="ctl">
+        <div class="ctl" data-requires="clouds">
           <span class="ctl-l">Channel</span>
           <select id="sat-product" class="ctl-sel">
             <option value="ir">Infrared</option>
@@ -141,7 +141,7 @@
             <option value="truecolor">True Color</option>
           </select>
         </div>
-        <div class="ctl">
+        <div class="ctl" data-requires="clouds">
           <span class="ctl-l">Opacity</span>
           <input type="range" id="op-clouds-2" min="0" max="1" step="0.05" value="0.55">
           <span class="ctl-v mono" id="op-clouds-2-val">0.55</span>
@@ -177,7 +177,7 @@
       <!-- ---- OBSERVATIONS ---- -->
       <div class="mode-body" data-mode-body="obs">
         <label class="sw"><input type="checkbox" data-layer="metar"><span class="sw-t"></span><span class="sw-l">Surface Obs (METAR)</span></label>
-        <div class="ctl">
+        <div class="ctl" data-requires="metar">
           <span class="ctl-l">Plot</span>
           <select id="obs-field" class="ctl-sel">
             <option value="temp">Temperature</option>
@@ -189,7 +189,7 @@
         </div>
         <label class="sw"><input type="checkbox" data-layer="airquality"><span class="sw-t"></span><span class="sw-l">Air Quality (AQI)</span></label>
         <label class="sw"><input type="checkbox" data-layer="lsr"><span class="sw-t"></span><span class="sw-l">Local Storm Reports</span><span class="sw-n mono" id="lsr-count">0</span></label>
-        <div class="ctl">
+        <div class="ctl" data-requires="lsr">
           <span class="ctl-l">Window</span>
           <select id="lsr-hours" class="ctl-sel">
             <option value="6">Past 6 h</option>
