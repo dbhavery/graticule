@@ -555,7 +555,13 @@ function configureClustering(ds, opts) {
   c.enabled = true;
   c.pixelRange = opts.pixelRange ?? 60;
   c.minimumClusterSize = opts.minSize ?? 4;
-  const baseColor = opts.color || Cesium.Color.WHITE;
+  // Accept either a Cesium.Color (as COLORS.* supplies) or a CSS string.
+  // Passing a raw string used to throw "baseColor.withAlpha is not a function"
+  // from inside the cluster event, which Cesium surfaces as a render error and
+  // then stops rendering entirely.
+  const baseColor = typeof opts.color === 'string'
+    ? Cesium.Color.fromCssColorString(opts.color)
+    : (opts.color || Cesium.Color.WHITE);
   c.clusterEvent.addEventListener((entities, cluster) => {
     cluster.billboard.show = false;
     cluster.point.show = true;
@@ -2511,10 +2517,27 @@ async function buildCities() {
     const labelOutline = Cesium.Color.fromCssColorString('#000000').withAlpha(0.95);
     const dotColor = COLORS.cities.withAlpha(0.85);
 
+    // Label LOD. Cesium builds one glyph atlas for the whole LabelCollection
+    // and allocates eagerly, ignoring distanceDisplayCondition — so creating
+    // 7,342 populated labels overflows the atlas and the resize computes an
+    // invalid array length, killing the scene from createPotentiallyVisibleSet.
+    // Measured threshold: 1,000 labels render, 3,000 crash.
+    //
+    // Every city still gets a point. Labels exist as objects on all of them but
+    // carry text only for the current working set, so text can be swapped on
+    // camera move without rebuilding entities. See relabelCities().
+    const feats = (fc.features || []).filter((f) => f.geometry && f.geometry.coordinates);
+    // Most important first: lower scalerank wins, then larger population.
+    feats.sort((a, b) =>
+      ((a.properties?.scalerank ?? 9) - (b.properties?.scalerank ?? 9)) ||
+      ((b.properties?.pop_max ?? 0) - (a.properties?.pop_max ?? 0)));
+
+    cityRecords = [];
     let added = 0;
-    for (const f of (fc.features || [])) {
+    for (const f of feats) {
       const c = f.geometry?.coordinates;
       if (!c) continue;
+      if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) continue;
       const p = f.properties || {};
       const sr = p.scalerank ?? 6;
       const farM = _cityMaxDist(sr);
@@ -2522,10 +2545,17 @@ async function buildCities() {
       const fontPx = sr <= 1 ? 12 : sr <= 3 ? 11 : sr <= 6 ? 10 : 9;
       // Dot size scales gently with rank too
       const dotPx = sr <= 1 ? 4.5 : sr <= 4 ? 3.5 : 2.5;
-      // Fade-in distance: a third of the visibility range so the city
-      // softly appears as the camera approaches.
-      const fadeStart = Math.min(farM, farM * 0.6);
-      const fadeFull  = Math.min(farM, farM * 0.35);
+      // Fade-in distance: the city is fully opaque once the camera is inside
+      // ~35% of its visibility range and fades to nothing by ~60%.
+      //
+      // NearFarScalar requires far > near. These were previously passed as
+      // (0.6·farM → 0, 0.35·farM → 1), i.e. far < near, which Cesium cannot
+      // interpolate: it yields a non-finite translucency, corrupts the frustum
+      // computation, and kills the whole scene with "Invalid array length"
+      // from createPotentiallyVisibleSet. Enabling Cities alone was enough to
+      // stop rendering.
+      const fadeFull  = Math.min(farM, farM * 0.35);   // nearer  → opaque
+      const fadeStart = Math.min(farM, farM * 0.6);    // further → transparent
       citiesDS.entities.add({
         position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
         point: {
@@ -2534,10 +2564,12 @@ async function buildCities() {
           outlineColor: Cesium.Color.BLACK,
           outlineWidth: 0.5,
           distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, farM),
-          translucencyByDistance: new Cesium.NearFarScalar(fadeStart, 0.0, fadeFull, 1.0),
+          translucencyByDistance: new Cesium.NearFarScalar(fadeFull, 1.0, fadeStart, 0.0),
         },
         label: {
-          text: p.name || '',
+          // Text is assigned by relabelCities(); leaving it empty here keeps
+          // the glyph atlas within its limit.
+          text: '',
           font: `500 ${fontPx}px "Inter", system-ui, sans-serif`,
           fillColor: labelFill,
           outlineColor: labelOutline,
@@ -2547,20 +2579,61 @@ async function buildCities() {
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           pixelOffset: new Cesium.Cartesian2(6, 0),
           distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, farM),
-          translucencyByDistance: new Cesium.NearFarScalar(fadeStart, 0.0, fadeFull, 1.0),
+          translucencyByDistance: new Cesium.NearFarScalar(fadeFull, 1.0, fadeStart, 0.0),
           // Depth-test ON so cities on the far side of the globe are occluded.
         },
         properties: { kind: 'city_label', ...p },
       });
+      cityRecords.push({
+        entity: citiesDS.entities.values[citiesDS.entities.values.length - 1],
+        name: p.name || '', farM,
+      });
       added++;
+    }
+    relabelCities();
+    if (!buildCities._hooked) {
+      buildCities._hooked = true;
+      let t = null;
+      viewer.camera.moveEnd.addEventListener(() => {
+        clearTimeout(t);
+        t = setTimeout(relabelCities, 250);
+      });
     }
     setCount('cities', added);
     updateCategoryCounts();
-    console.log(`Built ${added} city/town labels`);
+    console.log(`Built ${added} city points (labels capped at ${CITY_LABEL_CAP})`);
   } catch (e) {
     console.warn('Cities failed to load:', e);
     citiesBuilt = false;
   }
+}
+
+// Assign label text to the most important cities that are in range at the
+// current camera altitude, and clear the rest. Keeps the live label count
+// under the glyph-atlas ceiling while still revealing smaller towns as you
+// zoom in — which is what the per-entity distanceDisplayCondition implies but
+// cannot deliver on its own.
+const CITY_LABEL_CAP = 900;
+let cityRecords = [];
+
+function relabelCities() {
+  if (!citiesDS || !cityRecords.length) return;
+  let camHeight = Infinity;
+  try {
+    const carto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
+    if (carto) camHeight = carto.height;
+  } catch { /* keep Infinity: falls back to the highest-rank cities only */ }
+
+  let shown = 0;
+  for (const rec of cityRecords) {
+    const inRange = camHeight <= rec.farM;
+    const want = inRange && shown < CITY_LABEL_CAP ? rec.name : '';
+    if (want) shown++;
+    // Only touch Cesium when the value actually changes; assigning text is
+    // what triggers glyph work.
+    if (rec.entity.label.text !== want) rec.entity.label.text = want;
+  }
+  viewer.scene.requestRender();
 }
 
 function showPanel(entity) {
@@ -4690,6 +4763,11 @@ async function refreshModelField() {
     for (const d of data) {
       const v = d && d.current ? d.current[fieldKey] : null;
       if (v == null) continue;
+      // Open-Meteo can return an error object without coordinates for a point
+      // it rejects. fromDegrees(undefined, undefined) yields a NaN position,
+      // which corrupts Cesium's frustum maths and kills the whole scene with
+      // "Invalid array length" out of createPotentiallyVisibleSet.
+      if (!Number.isFinite(d.longitude) || !Number.isFinite(d.latitude)) continue;
       modelDS.entities.add({
         position: Cesium.Cartesian3.fromDegrees(d.longitude, d.latitude),
         point: {
@@ -4769,6 +4847,7 @@ async function refreshAirQuality() {
     for (const d of data) {
       const v = d && d.current ? d.current.us_aqi : null;
       if (v == null) continue;
+      if (!Number.isFinite(d.longitude) || !Number.isFinite(d.latitude)) continue;
       aqiDS.entities.add({
         position: Cesium.Cartesian3.fromDegrees(d.longitude, d.latitude),
         point: {
@@ -4833,6 +4912,7 @@ function renderMetar() {
   for (const ob of metarRaw) {
     const txt = metarPlotText(ob, field);
     if (txt == null) continue;
+    if (!Number.isFinite(ob.lon) || !Number.isFinite(ob.lat)) continue;
     const tint = field === 'temp' || field === 'dewpoint'
       ? rampColor(METAR_TEMP_STOPS, cToF(field === 'temp' ? ob.temp : ob.dewp))
       : Cesium.Color.fromCssColorString('#7dd3fc');
@@ -5132,6 +5212,7 @@ async function refreshLsr() {
   for (const f of feats) {
     const g = f.geometry;
     if (!g || g.type !== 'Point') continue;
+    if (!Number.isFinite(g.coordinates[0]) || !Number.isFinite(g.coordinates[1])) continue;
     const p = f.properties || {};
     const st = lsrStyle(p.type);
     const mag = p.magnitude ? ` ${p.magnitude}` : '';

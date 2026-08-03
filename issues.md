@@ -48,7 +48,38 @@ add/remove, plus a note in the layer label that parcels are near-zoom only.
 
 ---
 
-## 2. `applyPerfPreset` does not implement the entity caps it advertises (OPEN)
+## 2. Cities layer killed the renderer (PRE-EXISTING, **FIXED** 2026-08-02)
+
+**Symptom:** enabling Cities alone stopped the scene with
+`RangeError: Failed to set the 'length' property on 'Array': Invalid array
+length` thrown from `createPotentiallyVisibleSet`. Cesium catches this into
+its own error panel, so it never reached `window.onerror` — automated checks
+watching `pageerror` reported "no errors" while the app was dead on screen.
+Detection now hooks `viewer.scene.renderError`.
+
+**Root cause:** Cesium builds a single glyph texture atlas per LabelCollection
+and allocates eagerly, ignoring `distanceDisplayCondition`. All 7,342
+populated places were created with label text, overflowing the atlas.
+Measured threshold: 1,000 labels fine, 3,000 crash.
+
+Ruled out along the way: coordinates (all 7,342 finite and in range), empty
+label strings, `distanceDisplayCondition`, and `translucencyByDistance`.
+
+**Fix:** every city keeps a point; labels exist as objects on all of them but
+carry text only for a working set of up to `CITY_LABEL_CAP` (900), chosen by
+scalerank then population and filtered to those in range at the current camera
+altitude. `relabelCities()` re-runs debounced on `camera.moveEnd`, so smaller
+towns still appear as you zoom in. Verified: 41 labels at globe view, 900 at
+regional, no render errors at any zoom.
+
+**Also corrected nearby:** the city fade used
+`NearFarScalar(0.6·farM → 0, 0.35·farM → 1)`, i.e. `far < near`, which the
+class does not accept. Reordered. This was a genuine bug but was *not* the
+crash cause — worth recording so nobody re-derives that dead end.
+
+---
+
+## 3. `applyPerfPreset` does not implement the entity caps it advertises (OPEN)
 
 **Found:** 2026-08-02.
 **Severity:** Low, but it is a UI that lies.
@@ -61,7 +92,7 @@ or reword the preset hints to describe what actually changes.
 
 ---
 
-## 3. Cesium ion 401 on boot (EXPECTED, not a bug)
+## 4. Cesium ion 401 on boot (EXPECTED, not a bug)
 
 `api.cesium.com/v1/assets/2` returns 401 when `CESIUM_ION_TOKEN` is unset. The
 app falls back to ESRI World Imagery and works fine. Only worth setting a
