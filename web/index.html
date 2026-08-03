@@ -518,7 +518,7 @@
             <label class="sm-check"><input type="checkbox" id="night-lights"><span>City lights on the night side</span><span class="sm-hint">NASA VIIRS Black Marble</span></label>
             <label class="sm-check"><input type="checkbox" id="show-moon"><span>Moon (true position &amp; phase)</span></label>
             <label class="sm-check"><input type="checkbox" id="show-stars"><span>Stars</span></label>
-            <label class="sm-check"><input type="checkbox" id="hdr"><span>HDR tone mapping</span><span class="sm-hint">stops the daylight limb clipping to white</span></label>
+            <label class="sm-check"><input type="checkbox" id="hdr"><span>HDR tone mapping</span><span class="sm-hint">ACES curve; desaturates terrain, off by default</span></label>
             <label class="sm-check"><input type="checkbox" id="lens-flare"><span>Sun glow / lens flare</span></label>
             <label class="sm-check"><input type="checkbox" id="lock-na"><span>Stay centred on North America</span><span class="sm-hint">re-centres after 12 s idle; sun still sweeps in real time</span></label>
           </div>
@@ -531,8 +531,8 @@
           </div>
           <div class="sm-row">
             <label class="sm-row-lbl">Atmosphere intensity</label>
-            <input type="range" id="atmos-intensity" min="0" max="30" step="0.5" value="12">
-            <span id="atmos-intensity-val" class="mono">12.0</span>
+            <input type="range" id="atmos-intensity" min="0" max="15" step="0.5" value="5">
+            <span id="atmos-intensity-val" class="mono">5.0</span>
           </div>
           <div class="sm-row">
             <label class="sm-row-lbl">Vignette intensity</label>

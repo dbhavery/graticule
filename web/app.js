@@ -231,6 +231,19 @@ const FEED_BY_ID = Object.fromEntries(FEEDS.map(f => [f.id, f]));
 // User-tunable settings persisted in localStorage. Defaults reflect Don's
 // preferences: nothing checked, US Customary units, globe view, 500 ms hover.
 const SETTINGS_KEY = 'graticule.settings.v1';
+
+// Anything stored before RENDER_EPOCH predates the globe re-grade. Those keys
+// are visual defaults, not choices the user made deliberately, and leaving a
+// stale copy in localStorage means an existing browser keeps rendering the
+// washed-out planet no matter what ships. Drop just those keys and keep the
+// rest of the user's settings intact.
+//
+// These must be declared ABOVE `settings` — loadSettings() runs inside its
+// initializer, so a const declared below would still be in its temporal dead
+// zone and throw before `let viewer` is ever reached.
+const RENDER_EPOCH = 2;
+const EPOCH_KEYS = ['hdr', 'atmosIntensity'];
+
 const settings = Object.assign({
   units: 'us',
   view: 'globe',
@@ -247,10 +260,10 @@ const settings = Object.assign({
   nightLights: true,                // VIIRS Black Marble on the dark side only
   showMoon: true,                   // real-time lunar position + phase
   showStars: true,                  // celestial sphere
-  hdr: true,                        // high dynamic range tone mapping
+  hdr: false,                       // ACES tone curve; washes out terrain, see initRealisticEarth
   lensFlare: true,                  // sun glow when the star is in frame
   lockNorthAmerica: true,           // hold NA centred; let the sun sweep across
-  atmosIntensity: 12,
+  atmosIntensity: 5,
   vignetteIntensity: 0.5,
   idleRotateSec: 0,                 // 0 = disabled (NA lock owns the camera)
   opCountries: 0.45,
@@ -265,10 +278,18 @@ const settings = Object.assign({
   diagnostics: false,
   ambientSound: false,
   soundAlerts: false,
+  renderEpoch: 0,                   // bumped when visual defaults change
 }, loadSettings());
 function loadSettings() {
-  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); }
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); }
   catch { return {}; }
+  if ((stored.renderEpoch || 0) < RENDER_EPOCH) {
+    for (const k of EPOCH_KEYS) delete stored[k];
+    stored.renderEpoch = RENDER_EPOCH;
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(stored)); } catch {}
+  }
+  return stored;
 }
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
@@ -277,7 +298,9 @@ function saveSettings() {
 // Camera home. Declared up here (not beside applyNorthAmericaLock) because
 // initViewer's setView reads it during bootstrap, before the bottom of the
 // module has evaluated.
-const NA_HOME = { lon: -98.0, lat: 39.5, alt: 22_000_000 };
+// 14 Mm frames the planet at roughly 60% of viewport height. The old
+// 22 Mm left it a small ball adrift in dead black.
+const NA_HOME = { lon: -98.0, lat: 39.5, alt: 14_000_000 };
 
 let viewer;
 const dataSources = {};
@@ -3099,17 +3122,30 @@ function initRealisticEarth() {
   globe.atmosphereBrightnessShift = 0.05;
 
   // 4. Atmosphere — sky + ground scattering.
+  //
+  // These numbers were chosen by rendering the globe and looking at it, not
+  // from the Cesium defaults, which are tuned for a stylised look. At the
+  // stock scattering intensity of 2.0 the ground atmosphere floods the day
+  // side: oceans go flat electric cyan and land loses nearly all its colour,
+  // which is most of why the app read as cheap. Pulling scattering and light
+  // intensity down lets ESRI's imagery show through — real bathymetry, green
+  // forest, tan desert, snow on the Rockies.
   scene.skyAtmosphere.show             = true;
   scene.skyAtmosphere.hueShift         = -0.04;
-  scene.skyAtmosphere.saturationShift  =  0.18;
-  scene.skyAtmosphere.brightnessShift  = -0.06;
+  scene.skyAtmosphere.saturationShift  = -0.05;
+  scene.skyAtmosphere.brightnessShift  = -0.15;
   globe.showGroundAtmosphere           = true;
-  globe.atmosphereLightIntensity       = Number(settings.atmosIntensity) || 12.0;
+  globe.atmosphereScatteringIntensity  = 0.6;
+  globe.atmosphereLightIntensity       = Number(settings.atmosIntensity) || 5.0;
 
-  // HDR keeps the sunlit limb from blowing out to flat white while still
-  // letting the night side sit near black. Without it the daylight band
-  // clips and the planet looks like plastic.
+  // HDR's ACES tone curve desaturates the midtones, which is exactly where
+  // terrain colour lives. Compared side by side it washed the planet out
+  // rather than protecting the highlights. Off by default; still a toggle.
   scene.highDynamicRange = !!settings.hdr;
+
+  // Grade the base imagery itself. Satellite basemaps are shot flat on
+  // purpose so they can be styled; without this the globe stays hazy.
+  gradeBaseImagery();
 
   // 3. Sun, moon, stars. Cesium computes all three from viewer.clock, so the
   //    moon shows its true phase and libration for the current instant.
@@ -3331,11 +3367,14 @@ async function applyImageryBase(kind) {
         credit: 'Tiles © OpenTopoMap (CC-BY-SA)',
       });
     } else if (kind === 'night') {
+      // Same two GIBS traps as the night-lights overlay: VIIRS_Black_Marble is
+      // not a served layer id, and the EPSG:4326 "500m" set is not a
+      // power-of-two grid. Every tile here used to 400.
       provider = new Cesium.UrlTemplateImageryProvider({
-        url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_Black_Marble/default/2016-01-01/500m/{z}/{y}/{x}.jpg',
-        tilingScheme: new Cesium.GeographicTilingScheme(),
+        url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg',
+        tilingScheme: new Cesium.WebMercatorTilingScheme(),
         maximumLevel: 8,
-        credit: 'NASA Earthdata · VIIRS Black Marble',
+        credit: 'NASA Earthdata · VIIRS City Lights',
       });
     } else {
       // Satellite: prefer Cesium ion when token is present, else ESRI.
@@ -3358,6 +3397,7 @@ async function applyImageryBase(kind) {
       }
     }
     baseImageryLayer = viewer.imageryLayers.addImageryProvider(provider);
+    gradeBaseImagery();
     // Keep it on the bottom; other overlays (radar, clouds, parcels) ride on top
     while (viewer.imageryLayers.indexOf(baseImageryLayer) > 0) {
       viewer.imageryLayers.lower(baseImageryLayer);
@@ -3365,6 +3405,18 @@ async function applyImageryBase(kind) {
   } catch (e) {
     console.warn('Imagery base swap failed:', e);
   }
+}
+
+// Colour grade for the bottom-most imagery layer. Re-applied on every basemap
+// swap, since a new provider means a new ImageryLayer with default values.
+// Streets and topo basemaps are already styled artwork — grading them just
+// makes them garish, so only the photographic bases get it.
+function gradeBaseImagery() {
+  if (!baseImageryLayer) return;
+  const photographic = settings.imageryBase !== 'streets' && settings.imageryBase !== 'topo';
+  baseImageryLayer.contrast   = photographic ? 1.40 : 1.0;
+  baseImageryLayer.saturation = photographic ? 1.25 : 1.0;
+  baseImageryLayer.gamma      = photographic ? 0.95 : 1.0;
 }
 
 // ---------- Boundary / imagery opacity sliders -----------------------------
