@@ -2113,8 +2113,12 @@ body.is-presenting #panel {
    dirty lens. */
 body.is-presenting #overlay-vignette { opacity: 0.35; }
 
+/* Bottom-left, not top-right. Top-right is where the warning banner anchors by
+   default, and a chip that says PRESENTING bleeding through a live alert
+   graphic is chrome sitting on the broadcast. Down here it is clear of the
+   colour scale's bottom:66 anchor and out of most framings. */
 #present-exit {
-  position: absolute; top: 14px; right: 16px; z-index: 40;
+  position: absolute; bottom: 22px; left: 22px; z-index: 40;
   display: flex; align-items: center; gap: 8px;
   padding: 5px 8px 5px 10px;
   background: var(--panel-bg-strong);
@@ -2430,3 +2434,93 @@ body.panes-quad .pane-cell.is-live .pane-bar { top: auto; }
 
 /* The HUD legend stands down when the broadcast colour scale is up. */
 #legend.gfx-superseded { display: none; }
+
+/* ─────────  SCENES  ─────────
+   A still slide covers the globe entirely. contain, not cover: a broadcast
+   graphic someone made at 16:9 must not be cropped by a 21:9 window, and the
+   letterbox is black because that is what the rest of the frame already is. */
+/* z-index 8: over the globe and the pane grid, UNDER the HUD. A still that
+   covered the layer rail would hide the only control that switches back off
+   it. In presentation mode the rail is gone anyway, so on air it is
+   full-frame with nothing but the broadcast graphics on top. */
+#scene-still {
+  position: absolute; inset: 0; z-index: 8;
+  background: #000 center / contain no-repeat;
+  pointer-events: none;
+}
+#scene-still.hidden { display: none; }
+
+/* Bottom-centre, above the transport. Shares this lane with #countybar, which
+   is only up while county selection is armed, and that is a modal gesture the
+   presenter is not in the middle of. */
+#scenebar {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 92px;
+  z-index: 16;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  backdrop-filter: blur(8px);
+  font-family: var(--sans); font-size: var(--fs-xs);
+}
+#scenebar.hidden { display: none; }
+#sb-pos { color: var(--text-dim); font-size: var(--fs-micro); }
+#sb-name {
+  color: var(--text); max-width: 260px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Armed county selection puts its own bar in this lane. */
+body.is-selecting-counties #scenebar { display: none; }
+
+.scene-actions { display: flex; gap: 5px; margin-bottom: 4px; }
+.scene-actions .sm-btn { flex: 1; }
+
+.scene-card {
+  border: 1px solid var(--panel-border); border-radius: var(--r-sm);
+  padding: 6px 7px 7px; margin-bottom: 6px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 140ms var(--ease-out), background 140ms var(--ease-out);
+}
+.scene-card:hover { background: rgba(255, 255, 255, 0.05); }
+.scene-card.is-active {
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.scene-head { display: flex; align-items: center; gap: 5px; }
+.scene-n {
+  flex: 0 0 auto; width: 15px; text-align: center;
+  font-size: var(--fs-micro); color: var(--text-mute);
+}
+.scene-name {
+  flex: 1; min-width: 0;
+  background: none; border: 0; padding: 1px 2px;
+  color: var(--text); font-family: var(--sans); font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.scene-name:hover, .scene-name:focus {
+  background: rgba(255, 255, 255, 0.06); border-radius: var(--r-sm); outline: none;
+}
+/* Low-explicitness actions: they are per-slide housekeeping, not the primary
+   gesture, so they stay quiet until the card is under the pointer. */
+.scene-act {
+  flex: 0 0 auto;
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 1px 3px; color: var(--text-mute); font-size: var(--fs-xs);
+  opacity: 0; transition: opacity 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+.scene-card:hover .scene-act, .scene-act:focus-visible { opacity: 1; }
+.scene-act:hover { color: var(--text); }
+.scene-sub {
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  color: var(--text-mute); text-transform: uppercase;
+  padding: 1px 0 5px 20px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.scene-thumb {
+  display: block; width: 100%; border-radius: var(--r-sm);
+  aspect-ratio: 236 / 133; object-fit: cover; background: #05070b;
+}
+
+#scene-note { margin: 2px 0 6px; }
+#scene-note.is-bad { color: var(--bad); }

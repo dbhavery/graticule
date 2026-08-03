@@ -21,6 +21,11 @@
   <!-- Vignette + scanline overlay (cosmetic) -->
   <div id="overlay-vignette"></div>
 
+  <!-- A still-image slide, full frame, under the graphics and over everything
+       else. Sits above #gfx in the DOM so the readout and banner stay legible
+       on top of it. -->
+  <div id="scene-still" class="hidden"></div>
+
   <!-- Broadcast graphics. Built entirely by gfxRender(); the only chrome that
        survives presentation mode, because it IS the broadcast. -->
   <div id="gfx"></div>
@@ -399,6 +404,26 @@
         <div class="gfx-grp-label">OVERLAYS</div>
         <div id="gfx-items"></div>
       </div>
+
+      <!-- Scenes. A slide stores the camera, the layer set and the model
+           field, so recalling one puts the LIVE globe back rather than a
+           picture of it. Image slides exist for the one graphic that really
+           is a still. -->
+      <div class="gfx-grp">
+        <div class="gfx-grp-label">SCENES</div>
+        <div class="scene-actions">
+          <button id="scene-add" class="sm-btn">Add slide</button>
+          <button id="scene-image" class="sm-btn">Image…</button>
+          <input id="scene-file" type="file" accept="image/*" hidden>
+        </div>
+        <div class="ctl">
+          <span class="ctl-l">Auto dwell</span>
+          <input type="range" id="scene-dwell" min="3" max="30" step="1" value="9">
+          <span class="ctl-v mono" id="scene-dwell-val">9s</span>
+        </div>
+        <p class="pane-note" id="scene-note"></p>
+        <div id="scene-list"></div>
+      </div>
     </section>
 
     </div>
@@ -478,6 +503,18 @@
        settings sidebar open next to the map; this one is a modal over the
        globe, so the controls that have to stay reachable during selection
        move out here. -->
+  <!-- ─────────  SCENE TRANSPORT  ─────────
+       Only present once a deck exists, and deliberately left visible in
+       presentation mode: it is how the presenter drives the show. -->
+  <div id="scenebar" class="hidden" role="group" aria-label="Scene transport">
+    <button id="sb-prev" class="tool-btn" aria-label="Previous slide" title="Previous slide">◀</button>
+    <button id="sb-play" class="tool-btn" aria-label="Play the deck" aria-pressed="false"
+            title="Auto-advance">▶</button>
+    <button id="sb-next" class="tool-btn" aria-label="Next slide" title="Next slide">▶|</button>
+    <span id="sb-pos" class="mono">0 / 0</span>
+    <span id="sb-name"></span>
+  </div>
+
   <div id="countybar" class="hidden" role="group" aria-label="County selection">
     <span class="bar-cap">SELECT COUNTIES</span>
     <span id="cb-hint">Click or drag to add. Click a selected county to remove.</span>

@@ -374,6 +374,7 @@ const TICKER_MAX = 6;
   initPresentation();
   initPanes();
   initGraphics();
+  initScenes();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -7345,6 +7346,9 @@ async function adSetSelecting(on) {
   AD.arming = on;
 
   document.getElementById('countybar')?.classList.toggle('hidden', !on);
+  // The county bar and the scene transport share the bottom-centre lane. The
+  // class is on <body> so anything else that lands there can stand down too.
+  document.body.classList.toggle('is-selecting-counties', on);
   const btn = document.getElementById('ad-select');
   if (btn) btn.textContent = on ? 'Selecting on globe' : 'Select on globe';
 
@@ -8990,4 +8994,468 @@ function initGraphics() {
   GFX.warnTimer = setInterval(pollWarnings, 120000);
 
   gfxRender();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SCENES  ("a PowerPoint presentation, but within a radar app")
+//
+//  The other half of the reference app's broadcast tab. A scene is not a
+//  screenshot: it is the camera, the layer set, the model field and the pane
+//  layout, so recalling it puts the LIVE globe back where it was. Frame 1311
+//  of v1.mp4 is explicit about this -- "these aren't just static images, this
+//  is the actual radar" -- and it is the whole point. A deck of stills is a
+//  deck of stills; a deck of camera states is a weather show whose data is
+//  still updating while you talk over it.
+//
+//  Image slides exist too, for the one-off graphic that is genuinely a
+//  picture, and they are stored separately from `settings` because a couple of
+//  photographs would blow the 5 MB localStorage budget the rest of the app's
+//  preferences live in.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SCENES_KEY = 'graticule.scenes.v1';
+
+// A 16:9 thumb at the rail's content width. Big enough to recognise a scene
+// by its shape, small enough that twenty of them are ~90 KB of storage.
+const SCENE_THUMB_W = 236;
+const SCENE_THUMB_H = 133;
+
+/* Uploaded stills are re-encoded before they are stored. A phone screenshot is
+   2-4 MB and there is no reason to keep more than the broadcast frame needs.
+
+   Dimensions alone are not a budget: 1600x900 of fine detail encodes to 800 KB
+   at q0.72 while a typical photograph of the same size lands near 200 KB, and
+   three of the former fill the whole 5 MB localStorage allowance. So quality
+   steps down until the slide fits the budget, and the last step is taken even
+   if it does not -- an over-budget slide is the operator's problem to see,
+   which scenesSave() reports, rather than something to refuse silently. */
+const SCENE_IMAGE_MAX = 1600;
+const SCENE_IMAGE_QS = [0.72, 0.6, 0.5, 0.42];
+const SCENE_IMAGE_BUDGET = 460_000;   // chars of data URL, ~340 KB of bytes
+
+// Layers a scene captures. Restoring drives the HUD checkbox rather than the
+// data source, because the checkbox is what LOADS a layer that has never been
+// switched on -- setting .show on a null data source is a no-op that looks
+// like a working restore.
+const SCENE_LAYERS = [
+  'radar', 'radar_site', 'clouds', 'warnings', 'spc_outlook', 'lsr', 'metar',
+  'model', 'rivers', 'tides', 'buoys', 'cities', 'states', 'countries',
+  'quakes', 'fires', 'hurricanes', 'cameras', 'spotters',
+];
+
+const SCENES = {
+  list: [],
+  index: -1,
+  playing: false,
+  timer: null,
+  dwellMs: 9000,
+  restoring: false,
+};
+
+function scenesLoad() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SCENES_KEY) || '{}');
+    SCENES.list = Array.isArray(raw.list) ? raw.list : [];
+    SCENES.dwellMs = Number(raw.dwellMs) || 9000;
+  } catch { SCENES.list = []; }
+}
+
+/* Returns an error string rather than throwing. A deck that silently fails to
+   save is worse than one that refuses to add the slide that broke it, and the
+   thing that breaks it is always an image. */
+function scenesSave() {
+  try {
+    localStorage.setItem(SCENES_KEY,
+      JSON.stringify({ list: SCENES.list, dwellMs: SCENES.dwellMs }));
+    return null;
+  } catch (err) {
+    return err && err.name === 'QuotaExceededError'
+      ? 'Out of local storage. Delete an image slide.'
+      : `Could not save: ${err.message}`;
+  }
+}
+
+// ---------- Capture -----------------------------------------------------------
+
+function sceneCaptureState() {
+  const layers = {};
+  for (const key of SCENE_LAYERS) {
+    const cb = document.querySelector(`input[data-layer="${key}"]`);
+    if (cb && !cb.disabled) layers[key] = cb.checked;
+  }
+  const c = viewer.camera;
+  return {
+    cam: {
+      pos: [c.positionWC.x, c.positionWC.y, c.positionWC.z],
+      hpr: [c.heading, c.pitch, c.roll],
+    },
+    layers,
+    wx: currentWxMode(),
+    model: { name: valueOf('model-name', 'gfs'), field: valueOf('model-field', 'temperature_2m') },
+    panes: PANES.mode,
+    // The north-America lock owns the camera. A scene recalled while it is on
+    // would be dragged back to the home view a frame later, so the lock's
+    // state is part of the scene.
+    lock: !!settings.lockNorthAmerica,
+  };
+}
+
+/* Grab the current frame as a thumbnail. Cesium clears its drawing buffer
+   after every render unless preserveDrawingBuffer is set, which it is (the
+   pane snapshots need it too), so this has to render immediately before
+   reading rather than trusting whatever is in the buffer. */
+function sceneThumb() {
+  try {
+    viewer.scene.requestRender();
+    viewer.render();
+    const cv = document.createElement('canvas');
+    cv.width = SCENE_THUMB_W;
+    cv.height = SCENE_THUMB_H;
+    const ctx = cv.getContext('2d');
+    const src = viewer.canvas;
+    // Cover, not stretch: a squashed globe in the strip is unreadable.
+    const scale = Math.max(SCENE_THUMB_W / src.width, SCENE_THUMB_H / src.height);
+    const w = src.width * scale, h = src.height * scale;
+    ctx.drawImage(src, (SCENE_THUMB_W - w) / 2, (SCENE_THUMB_H - h) / 2, w, h);
+    return cv.toDataURL('image/jpeg', 0.62);
+  } catch (err) {
+    // Cross-origin imagery can taint the canvas, and toDataURL throws on a
+    // tainted one. A missing thumbnail is survivable; a thrown exception
+    // mid-capture would lose the slide.
+    console.warn('scene thumbnail unavailable:', err.message);
+    return '';
+  }
+}
+
+function sceneAddMap() {
+  const s = Object.assign({
+    id: `s${Date.now().toString(36)}${SCENES.list.length}`,
+    kind: 'map',
+    name: `Slide ${SCENES.list.length + 1}`,
+    thumb: sceneThumb(),
+  }, sceneCaptureState());
+  SCENES.list.push(s);
+  SCENES.index = SCENES.list.length - 1;
+  sceneAfterChange();
+}
+
+async function sceneAddImage(file) {
+  const url = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = () => rej(new Error('could not read the file'));
+    fr.readAsDataURL(file);
+  });
+  const img = await new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => rej(new Error('not an image this browser can decode'));
+    i.src = url;
+  });
+
+  const scale = Math.min(1, SCENE_IMAGE_MAX / Math.max(img.width, img.height));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(img.width * scale);
+  cv.height = Math.round(img.height * scale);
+  cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+
+  const tc = document.createElement('canvas');
+  tc.width = SCENE_THUMB_W; tc.height = SCENE_THUMB_H;
+  const tctx = tc.getContext('2d');
+  const ts = Math.max(SCENE_THUMB_W / img.width, SCENE_THUMB_H / img.height);
+  const tw = img.width * ts, th = img.height * ts;
+  tctx.drawImage(img, (SCENE_THUMB_W - tw) / 2, (SCENE_THUMB_H - th) / 2, tw, th);
+
+  let data = '';
+  for (const q of SCENE_IMAGE_QS) {
+    data = cv.toDataURL('image/jpeg', q);
+    if (data.length <= SCENE_IMAGE_BUDGET) break;
+  }
+
+  SCENES.list.push({
+    id: `s${Date.now().toString(36)}i`,
+    kind: 'image',
+    name: file.name.replace(/\.[^.]+$/, '').slice(0, 30) || 'Image',
+    image: data,
+    thumb: tc.toDataURL('image/jpeg', 0.62),
+  });
+  SCENES.index = SCENES.list.length - 1;
+  sceneAfterChange();
+}
+
+function sceneAfterChange() {
+  const err = scenesSave();
+  sceneRenderList();
+  sceneApplyIndex();
+  const note = document.getElementById('scene-note');
+  if (note) note.textContent = err || '';
+  if (note) note.classList.toggle('is-bad', !!err);
+}
+
+// ---------- Recall ------------------------------------------------------------
+
+function sceneApplyIndex() {
+  const s = SCENES.list[SCENES.index];
+  const still = document.getElementById('scene-still');
+  if (still) {
+    const show = !!(s && s.kind === 'image');
+    still.classList.toggle('hidden', !show);
+    still.style.backgroundImage = show ? `url(${s.image})` : '';
+  }
+  sceneRenderBar();
+}
+
+async function sceneGo(i) {
+  if (!SCENES.list.length) return;
+  const n = SCENES.list.length;
+  SCENES.index = ((i % n) + n) % n;
+  const s = SCENES.list[SCENES.index];
+
+  if (s.kind === 'map') {
+    SCENES.restoring = true;
+    try {
+      // The lock first: it steers the camera, so restoring the view before
+      // releasing it means flying to a position that is immediately overridden.
+      if (s.lock !== undefined && s.lock !== settings.lockNorthAmerica) {
+        settings.lockNorthAmerica = s.lock;
+        saveSettings();
+        const cb = document.getElementById('lock-na');
+        if (cb) cb.checked = s.lock;
+        // Takes the state as an argument; calling it bare turns the lock OFF.
+        applyNorthAmericaLock(s.lock);
+      }
+
+      for (const [key, want] of Object.entries(s.layers || {})) {
+        const cb = document.querySelector(`input[data-layer="${key}"]`);
+        if (!cb || cb.disabled || cb.checked === want) continue;
+        cb.checked = want;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      if (s.model) {
+        for (const [id, v] of [['model-name', s.model.name], ['model-field', s.model.field]]) {
+          const el = document.getElementById(id);
+          if (el && v && el.value !== v) {
+            el.value = v;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+      }
+      if (s.panes && s.panes !== PANES.mode) applyPaneMode(s.panes);
+
+      if (s.cam) {
+        viewer.camera.flyTo({
+          destination: new Cesium.Cartesian3(s.cam.pos[0], s.cam.pos[1], s.cam.pos[2]),
+          orientation: { heading: s.cam.hpr[0], pitch: s.cam.hpr[1], roll: s.cam.hpr[2] },
+          duration: 1.4,
+        });
+      }
+    } finally {
+      SCENES.restoring = false;
+    }
+  }
+
+  sceneApplyIndex();
+  sceneRenderList();
+  gfxRender();
+}
+
+function sceneNext() { sceneGo(SCENES.index + 1); }
+function scenePrev() { sceneGo(SCENES.index - 1); }
+
+function scenePlay(on) {
+  SCENES.playing = !!on && SCENES.list.length > 1;
+  if (SCENES.timer) { clearInterval(SCENES.timer); SCENES.timer = null; }
+  if (SCENES.playing) SCENES.timer = setInterval(sceneNext, SCENES.dwellMs);
+  sceneRenderBar();
+}
+
+function sceneDelete(id) {
+  const i = SCENES.list.findIndex((s) => s.id === id);
+  if (i < 0) return;
+  SCENES.list.splice(i, 1);
+  if (SCENES.index >= SCENES.list.length) SCENES.index = SCENES.list.length - 1;
+  if (!SCENES.list.length) { SCENES.index = -1; scenePlay(false); }
+  sceneAfterChange();
+}
+
+function sceneMove(id, delta) {
+  const i = SCENES.list.findIndex((s) => s.id === id);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= SCENES.list.length) return;
+  const [s] = SCENES.list.splice(i, 1);
+  SCENES.list.splice(j, 0, s);
+  if (SCENES.index === i) SCENES.index = j;
+  sceneAfterChange();
+}
+
+/* Re-shoot a slide against the current globe. The alternative is deleting and
+   re-adding, which loses the slide's place in the running order. */
+function sceneUpdate(id) {
+  const s = SCENES.list.find((x) => x.id === id);
+  if (!s || s.kind !== 'map') return;
+  Object.assign(s, sceneCaptureState(), { thumb: sceneThumb() });
+  sceneAfterChange();
+}
+
+// ---------- The strip ---------------------------------------------------------
+
+/* One line under the title saying what the slide will put back. Without it a
+   deck of thumbnails of the same continent is unreadable, which is why the
+   reference app prints "Radar · KLCH · N0B" under each of its own. */
+function sceneSummary(s) {
+  if (s.kind === 'image') return 'Still image';
+  const on = Object.entries(s.layers || {}).filter(([, v]) => v).map(([k]) => k);
+  const parts = [];
+  if (on.includes('radar')) parts.push('Radar');
+  if (on.includes('clouds')) parts.push('Satellite');
+  if (on.includes('warnings')) parts.push('Warnings');
+  if (on.includes('model')) {
+    const def = FIELD_DEFS[s.model && s.model.field];
+    parts.push(def ? (def.legend || def.label) : 'Model');
+  }
+  if (!parts.length) parts.push('Base map');
+  if (s.panes && s.panes !== 'single') parts.push(`${s.panes} pane`);
+  return parts.join(' · ');
+}
+
+function sceneRenderList() {
+  const host = document.getElementById('scene-list');
+  if (!host) return;
+  host.textContent = '';
+
+  if (!SCENES.list.length) {
+    const p = document.createElement('p');
+    p.className = 'pane-note';
+    p.textContent = 'No slides yet. Frame the globe, then Add slide: the camera, '
+                  + 'the layers and the model field come back live, not as a picture.';
+    host.appendChild(p);
+    sceneRenderBar();
+    return;
+  }
+
+  SCENES.list.forEach((s, i) => {
+    const card = document.createElement('div');
+    card.className = 'scene-card';
+    card.classList.toggle('is-active', i === SCENES.index);
+
+    const head = document.createElement('div');
+    head.className = 'scene-head';
+
+    const num = document.createElement('span');
+    num.className = 'scene-n mono';
+    num.textContent = String(i + 1);
+
+    const name = document.createElement('input');
+    name.className = 'scene-name';
+    name.value = s.name;
+    name.maxLength = 30;
+    name.setAttribute('aria-label', `Slide ${i + 1} name`);
+    name.addEventListener('change', () => { s.name = name.value; scenesSave(); });
+    name.addEventListener('click', (e) => e.stopPropagation());
+
+    head.append(num, name);
+    for (const [txt, title, fn] of [
+      ['↑', 'Move earlier', () => sceneMove(s.id, -1)],
+      ['↓', 'Move later', () => sceneMove(s.id, 1)],
+      ['⟳', 'Re-shoot from the current globe', () => sceneUpdate(s.id)],
+      ['×', 'Delete this slide', () => sceneDelete(s.id)],
+    ]) {
+      if (txt === '⟳' && s.kind !== 'map') continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'scene-act';
+      b.textContent = txt;
+      b.title = title;
+      b.setAttribute('aria-label', `${title}, slide ${i + 1}`);
+      b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+      head.appendChild(b);
+    }
+    card.appendChild(head);
+
+    const sub = document.createElement('div');
+    sub.className = 'scene-sub';
+    sub.textContent = sceneSummary(s);
+    card.appendChild(sub);
+
+    if (s.thumb) {
+      const im = document.createElement('img');
+      im.className = 'scene-thumb';
+      im.src = s.thumb;
+      im.alt = '';
+      card.appendChild(im);
+    }
+
+    card.addEventListener('click', () => sceneGo(i));
+    host.appendChild(card);
+  });
+  sceneRenderBar();
+}
+
+function sceneRenderBar() {
+  const bar = document.getElementById('scenebar');
+  if (!bar) return;
+  const n = SCENES.list.length;
+  bar.classList.toggle('hidden', n === 0);
+  const pos = document.getElementById('sb-pos');
+  if (pos) pos.textContent = n ? `${SCENES.index + 1} / ${n}` : '0 / 0';
+  const play = document.getElementById('sb-play');
+  if (play) {
+    play.textContent = SCENES.playing ? '❚❚' : '▶';
+    play.setAttribute('aria-pressed', String(SCENES.playing));
+  }
+  const name = document.getElementById('sb-name');
+  if (name) name.textContent = SCENES.list[SCENES.index]?.name || '';
+}
+
+// ---------- Wiring ------------------------------------------------------------
+
+function initScenes() {
+  scenesLoad();
+  sceneRenderList();
+
+  document.getElementById('scene-add')?.addEventListener('click', sceneAddMap);
+
+  const file = document.getElementById('scene-file');
+  document.getElementById('scene-image')?.addEventListener('click', () => file?.click());
+  file?.addEventListener('change', async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    const note = document.getElementById('scene-note');
+    try {
+      await sceneAddImage(f);
+    } catch (err) {
+      if (note) { note.textContent = err.message; note.classList.add('is-bad'); }
+    }
+    file.value = '';
+  });
+
+  const dwell = document.getElementById('scene-dwell');
+  const dwellVal = document.getElementById('scene-dwell-val');
+  if (dwell) {
+    dwell.value = String(Math.round(SCENES.dwellMs / 1000));
+    if (dwellVal) dwellVal.textContent = `${dwell.value}s`;
+    dwell.addEventListener('input', () => {
+      SCENES.dwellMs = Number(dwell.value) * 1000;
+      if (dwellVal) dwellVal.textContent = `${dwell.value}s`;
+      scenesSave();
+      if (SCENES.playing) scenePlay(true);   // restart on the new interval
+    });
+  }
+
+  document.getElementById('sb-prev')?.addEventListener('click', scenePrev);
+  document.getElementById('sb-next')?.addEventListener('click', sceneNext);
+  document.getElementById('sb-play')?.addEventListener('click', () => scenePlay(!SCENES.playing));
+
+  // Arrow keys drive the deck, the same way they drive every other presenter.
+  // Only once a deck exists, so they keep their default meaning otherwise.
+  document.addEventListener('keydown', (e) => {
+    if (!SCENES.list.length) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); sceneNext(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); scenePrev(); }
+  });
+
+  sceneApplyIndex();
 }
