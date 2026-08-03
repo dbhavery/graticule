@@ -1,24 +1,55 @@
 # Graticule
 
-Personal situational-awareness globe. Live planes, ships, satellites, quakes,
-fires, weather, alerts, parcels — all on a single dark Cesium-driven Earth.
-Local-first, single window, no cloud sync.
+Personal situational-awareness globe and weather workstation. A physically
+real Earth — real-time sun, moon, day/night and city lights — carrying live
+radar, satellite, models, observations, warnings, plus planes, ships,
+satellites, quakes, fires and parcels. Local-first, single window, no cloud
+sync.
 
-## What's on the globe
+## The Earth
 
-- **AIR** — planes (OpenSky ADS-B), satellites (Celestrak TLE, propagated client-side), airports, TFRs
-- **SEA** — ships (AISStream), hurricanes (NOAA NHC)
-- **EARTH** — earthquakes (USGS), volcanoes (Smithsonian GVP), wildfires (NASA FIRMS)
-- **WEATHER** — radar (RainViewer), aurora (NOAA SWPC), city-lights overlay (NASA GIBS), day/night terminator
-- **REFERENCE** — submarine cables (TeleGeography)
-- **LAND** — parcel boundaries (Regrid US-wide tiles + WA statewide vector)
-- **3D** — OSM buildings + Google Photorealistic 3D Tiles (key-gated)
-- **SPACE** — rocket launches (Launch Library 2)
-- **ALERTS** — tsunami, severe weather, EONET natural events
+The globe runs on the system clock, so the solar terminator sweeps westward at
+a true 15°/hour and matches real UTC:
 
-Plus a top telemetry bar (UTC, cursor, altitude, Kp, X-ray, tracked total),
-a docked alerts panel, optional live-feed ticker, compass + tilt indicator,
-camera presets, and a settings modal.
+- Real-time sun lighting with a wide dusk falloff and dynamic ground/sky
+  atmospheric scattering
+- VIIRS city lights composited onto the night hemisphere only
+- Moon at its true ephemeris position and phase; stars; HDR tone mapping;
+  sun glow
+- **Stay centred on North America** — the camera holds the continent while the
+  sunlight rotates around it. Re-centres only after 12 s idle, above 3 Mm, and
+  past 12° of drift, so panning and zooming stay free.
+
+## Tabs
+
+The left rail is tabbed: **WEATHER / EARTH / SKY / WORLD**.
+
+**WEATHER** — mode chips for Radar, Satellite, Model, Observations and Outlooks
+
+- *Radar* — national mosaic as a scrubable, playable frame loop over past and
+  nowcast frames with an explicit NOW marker; local hi-res single-site NEXRAD
+  (30 sites, reflectivity + velocity); dBZ legend and frame timestamp
+- *Satellite* — GOES-East / GOES-West visible, infrared and water vapour, plus
+  a global true-colour composite
+- *Model* — GFS / HRRR / NAM / ECMWF / ICON fields for 2 m temperature,
+  precipitation, 10 m wind, CAPE and MSLP, sampled over the current view
+- *Observations* — METAR station plots, US AQI, Local Storm Reports
+- *Outlooks* — NWS warning cards with polygons, SPC convective outlooks
+  (days 1-3), tropical, aurora
+
+**EARTH** — quakes (USGS), volcanoes (GVP), wildfires (FIRMS), ships
+(AISStream), submarine cables, boundaries, cities, parcels, 3D buildings
+
+**SKY** — planes (OpenSky), airports, TFRs, airspace, satellites (Celestrak
+TLE propagated client-side), launches, and the celestial realism switches
+
+**WORLD** — live world-population telemetry: running total, today's
+births/deaths/growth, per-continent and top-15 country ranks, next-milestone
+tracker. Projected from UN WPP 2024, and the pane says so.
+
+Plus a telemetry bar (UTC, cursor, altitude, subsolar point, moon phase, Kp,
+X-ray, tracked total), warning cards, drawing tools, a map theme picker,
+alerts panel, live-feed ticker, compass, camera presets and a settings modal.
 
 ## Quick start
 

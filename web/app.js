@@ -45,7 +45,27 @@ const KIND_LABEL = {
   severe: 'SEVERE WX',
   airports: 'AIRPORT', tfrs: 'FLIGHT RESTRICTION',
   parcels_wa: 'PARCEL',
+  metar: 'SURFACE OBS', lsr: 'STORM REPORT', warning: 'NWS ALERT',
+  spc: 'SPC OUTLOOK', model: 'MODEL FIELD', aqi: 'AIR QUALITY',
 };
+
+// SPC categorical risk names, for the outlook detail panel.
+const SPC_RISK_LABEL = {
+  TSTM: 'General Thunderstorms', MRGL: 'Marginal Risk (1/5)',
+  SLGT: 'Slight Risk (2/5)',     ENH:  'Enhanced Risk (3/5)',
+  MDT:  'Moderate Risk (4/5)',   HIGH: 'High Risk (5/5)',
+};
+
+// EPA AQI category bands.
+function aqiCategory(v) {
+  if (v == null) return 'Unknown';
+  if (v <= 50)  return 'Good';
+  if (v <= 100) return 'Moderate';
+  if (v <= 150) return 'Unhealthy for sensitive groups';
+  if (v <= 200) return 'Unhealthy';
+  if (v <= 300) return 'Very unhealthy';
+  return 'Hazardous';
+}
 
 // ─────────  LOD: distance-aware billboard icons  ─────────
 // Top-down silhouette SVGs, north-up. Cesium rotates them by -toRadians(heading).
@@ -889,6 +909,44 @@ function hideHoverTip() {
 
 function summarizeEntity(p) {
   const k = p.kind;
+  if (k === 'metar') {
+    const us = settings.units === 'us';
+    const t = p.temp == null ? null : (us ? cToF(p.temp) : p.temp);
+    const d = p.dewp == null ? null : (us ? cToF(p.dewp) : p.dewp);
+    const bits = [];
+    if (t != null) bits.push(`${Math.round(t)}°${us ? 'F' : 'C'}`);
+    if (d != null) bits.push(`dew ${Math.round(d)}°`);
+    if (p.wspd != null) bits.push(`${p.wdir ?? '--'}° ${p.wspd}kt${p.wgst ? `G${p.wgst}` : ''}`);
+    if (p.visib != null) bits.push(`vis ${p.visib}`);
+    return { title: p.id, subtitle: p.name || 'Surface observation', meta: bits.join(' · ') };
+  }
+  if (k === 'lsr') {
+    const when = p.valid ? new Date(p.valid).toISOString().slice(11, 16) + 'Z' : '';
+    return {
+      title: `${p.type}${p.magnitude ? ` ${p.magnitude}` : ''}`,
+      subtitle: `${p.city || ''}${p.state ? `, ${p.state}` : ''}`,
+      meta: [when, p.source].filter(Boolean).join(' · '),
+    };
+  }
+  if (k === 'warning') {
+    return {
+      title: p.event || 'Alert',
+      subtitle: (p.areaDesc || '').split(';').slice(0, 2).join(', '),
+      meta: p.expires ? `expires in ${fmtExpiry(p.expires)}` : '',
+    };
+  }
+  if (k === 'spc') {
+    return { title: SPC_RISK_LABEL[p.label] || p.label || 'Outlook',
+             subtitle: 'SPC convective outlook', meta: '' };
+  }
+  if (k === 'model') {
+    const def = FIELD_DEFS[p.field];
+    return { title: `${p.value}${p.unit || ''}`,
+             subtitle: def ? def.label : 'Model field', meta: '' };
+  }
+  if (k === 'aqi') {
+    return { title: `AQI ${p.value}`, subtitle: aqiCategory(p.value), meta: '' };
+  }
   if (k === 'planes') {
     const sub = p.country ? p.country : 'Aircraft';
     const bits = [];
@@ -2521,6 +2579,12 @@ function showPanel(entity) {
   else if (kind === 'launches')   { title = props.name || 'Launch'; subtitle = `${props.vehicle || ''} · ${props.pad_location || ''}`; }
   else if (kind === 'news')       { title = props.name || 'Natural event'; subtitle = (props.categories && props.categories.join(' · ')) || ''; }
   else if (kind === 'parcels_wa') { title = props.address || `Parcel ${props.parcel_id || ''}`; subtitle = `${props.city || 'Washington'} · APN ${props.parcel_id || '—'}`; }
+  else if (kind === 'metar')      { title = props.id || 'Station'; subtitle = props.name || 'Surface observation'; }
+  else if (kind === 'lsr')        { title = `${props.type}${props.magnitude ? ` ${props.magnitude}` : ''}`; subtitle = `${props.city || ''}${props.state ? `, ${props.state}` : ''}`; }
+  else if (kind === 'warning')    { title = props.event || 'Alert'; subtitle = (props.areaDesc || '').split(';').slice(0, 3).join(', '); }
+  else if (kind === 'spc')        { title = `SPC ${props.label || 'Outlook'}`; subtitle = SPC_RISK_LABEL[props.label] || 'Convective outlook'; }
+  else if (kind === 'model')      { title = `${props.value}${props.unit || ''}`; subtitle = FIELD_DEFS[props.field] ? FIELD_DEFS[props.field].label : 'Model field'; }
+  else if (kind === 'aqi')        { title = `AQI ${props.value}`; subtitle = aqiCategory(props.value); }
   else                            { title = entity.id; subtitle = ''; }
 
   document.getElementById('panel-kind').textContent = KIND_LABEL[kind] || (kind || '').toUpperCase();
@@ -4259,9 +4323,23 @@ function rebuildRadarSiteLayer() {
   const prod = document.getElementById('radar-product');
   const site = (sel && sel.value) || nearestRadarSite();
   const kind = (prod && prod.value) === 'velocity' ? 'N0U' : 'N0Q';
+
+  // A single-site product only exists inside that radar's ~460 km range.
+  // Without a bounding rectangle Cesium requests tiles for the whole globe and
+  // every one outside coverage 404s. 5 degrees is a comfortable envelope.
+  const meta = NEXRAD_SITES.find((s) => s[0] === site);
+  const rect = meta
+    ? Cesium.Rectangle.fromDegrees(meta[3] - 5, meta[2] - 5, meta[3] + 5, meta[2] + 5)
+    : undefined;
+
+  // IEM's per-site RIDGE caches are named "ridge::<SITE>-<PRODUCT>-<tilt>".
+  // A bare "<SITE>-<PRODUCT>" 404s on every tile — verified against the live
+  // service, not assumed.
   radarSiteLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${site}-${kind}/{z}/{x}/{y}.png`,
+    url: `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/ridge::${site}-${kind}-0/{z}/{x}/{y}.png`,
     credit: 'NEXRAD © Iowa State Mesonet',
+    rectangle: rect,
+    minimumLevel: 4,
     maximumLevel: 9,
   }));
   fadeImageryLayer(radarSiteLayer, 0, Number(settings.opRadar) || 0.7);
