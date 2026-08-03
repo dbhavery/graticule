@@ -2724,8 +2724,291 @@ function showPanel(entity) {
   const display = { ...props };
   delete display.kind;
   if (display.ts) display.last_seen = new Date(display.ts * 1000).toISOString();
-  document.getElementById('panel-body').textContent = JSON.stringify(display, null, 2);
+  renderDetail(kind, display);
   document.getElementById('panel').classList.remove('hidden');
+}
+
+/* ---------------------------------------------------------------------------
+   Detail rendering
+   ---------------------------------------------------------------------------
+   This used to be `JSON.stringify(props, null, 2)` in a <pre>. Every one of
+   the ~20 entity kinds produced the same wall of quoted keys and raw epochs,
+   which is a debug view, not a way to read a storm.
+
+   Three rules borrowed from how the NOAA iDSSe desktop and the point-popup
+   pattern actually work:
+     - one headline number per thing, at display size, with its unit;
+     - everything else in a label/value grid, values monospace and
+       right-aligned so digits line up by place value;
+     - a value drawn from a fixed set becomes a chip, and its colour comes
+       from the data (a red severity chip reads faster than the word).
+   The raw object is still one click away, collapsed, for when a field is
+   missing from the schema.
+
+   FIELD_META is keyed on the field names the feeds in graticule/feeds/*.py
+   actually emit — read off the source, not guessed. Anything not listed still
+   renders, under a humanised label, so a new upstream field is never silently
+   dropped. */
+
+const CHIP_TONE = {
+  // NWS / USGS severity vocabularies, plus the small enums our feeds emit.
+  extreme: 'bad', severe: 'bad', red: 'bad', high: 'bad', immediate: 'bad',
+  warning: 'bad', destructive: 'bad',
+  moderate: 'warn', orange: 'warn', expected: 'warn', watch: 'warn',
+  yellow: 'warn', possible: 'warn',
+  minor: 'ok', green: 'ok', low: 'ok', past: 'ok', likely: 'ok',
+  actual: 'ok', nominal: 'ok', success: 'ok', active: 'ok',
+  day: 'ok', night: 'dim', unknown: 'dim', unlikely: 'dim',
+};
+
+const FIELD_META = {
+  // shared
+  lat:            { label: 'Latitude',    fmt: (v) => `${(+v).toFixed(4)}°` },
+  lon:            { label: 'Longitude',   fmt: (v) => `${(+v).toFixed(4)}°` },
+  name:           { label: 'Name' },
+  country:        { label: 'Country' },
+  region:         { label: 'Region' },
+  status:         { label: 'Status',      chip: true },
+  url:            { label: 'Source',      link: 'Open' },
+  link:           { label: 'Source',      link: 'Open' },
+  last_seen:      { label: 'Last seen',   time: true },
+  // aircraft
+  callsign:       { label: 'Callsign' },
+  alt:            { label: 'Altitude',    unit: 'm',    num: true },
+  velocity:       { label: 'Ground speed', unit: 'm/s', num: true },
+  heading:        { label: 'Heading',     fmt: (v) => `${Math.round(v)}°` },
+  on_ground:      { label: 'On ground',   chip: true },
+  // vessels
+  speed:          { label: 'Speed',       unit: 'kn',   num: true },
+  course:         { label: 'Course',      fmt: (v) => `${Math.round(v)}°` },
+  destination:    { label: 'Destination' },
+  // quakes
+  mag:            { label: 'Magnitude',   num: true },
+  depth_km:       { label: 'Depth',       unit: 'km',   num: true },
+  place:          { label: 'Location' },
+  alert:          { label: 'PAGER alert', chip: true },
+  felt:           { label: 'Felt reports', num: true },
+  tsunami:        { label: 'Tsunami flag', chip: true },
+  time:           { label: 'Origin time', time: true },
+  // storms
+  classification: { label: 'Classification' },
+  basin:          { label: 'Basin' },
+  intensity:      { label: 'Max wind',    unit: 'kt',   num: true },
+  pressure:       { label: 'Min pressure', unit: 'hPa', num: true },
+  movement:       { label: 'Movement' },
+  last_update:    { label: 'Updated',     time: true },
+  advisory_url:   { label: 'Advisory',    link: 'Read' },
+  track_url:      { label: 'Track',       link: 'Open' },
+  // fires
+  frp:            { label: 'Radiative power', unit: 'MW', num: true },
+  brightness:     { label: 'Brightness',  unit: 'K',    num: true },
+  confidence:     { label: 'Confidence',  chip: true },
+  daynight:       { label: 'Overpass',    chip: true },
+  satellite:      { label: 'Satellite' },
+  acq_date:       { label: 'Acquired' },
+  acq_time:       { label: 'Acq. time' },
+  // volcanoes
+  elevation_m:    { label: 'Summit',      unit: 'm',    num: true },
+  last_eruption:  { label: 'Last eruption' },
+  active:         { label: 'Active',      chip: true },
+  // launches
+  vehicle:        { label: 'Vehicle' },
+  mission_name:   { label: 'Mission' },
+  mission_type:   { label: 'Mission type' },
+  mission_orbit:  { label: 'Target orbit' },
+  agency:         { label: 'Provider' },
+  pad_name:       { label: 'Pad' },
+  pad_location:   { label: 'Site' },
+  net:            { label: 'T-0 (NET)',   time: true },
+  window_start:   { label: 'Window opens', time: true },
+  window_end:     { label: 'Window closes', time: true },
+  // alerts / tsunami / warnings
+  event:          { label: 'Event' },
+  headline:       { label: 'Headline' },
+  severity:       { label: 'Severity',    chip: true },
+  urgency:        { label: 'Urgency',     chip: true },
+  certainty:      { label: 'Certainty',   chip: true },
+  area:           { label: 'Area' },
+  areaDesc:       { label: 'Area' },
+  sent:           { label: 'Issued',      time: true },
+  expires:        { label: 'Expires',     time: true },
+  description:    { label: 'Details',     wide: true },
+  instruction:    { label: 'Instruction', wide: true },
+  // airports / satellites / misc
+  iata:           { label: 'IATA' },
+  icao:           { label: 'ICAO' },
+  municipality:   { label: 'City' },
+  elevation_ft:   { label: 'Elevation',   unit: 'ft',   num: true },
+  group_label:    { label: 'Constellation' },
+  categories:     { label: 'Categories',  fmt: (v) => Array.isArray(v) ? v.join(' · ') : v },
+  sources:        { label: 'Sources',     fmt: (v) => Array.isArray(v) ? v.length + ' linked' : v },
+  magnitude:      { label: 'Magnitude' },
+  magnitude_value: { label: 'Magnitude',  num: true },
+  magnitude_unit: { label: 'Unit' },
+};
+
+/* Headline = the one number you actually came for. Kinds absent from this map
+   simply get no headline block rather than a fabricated one. */
+const KIND_HEADLINE = {
+  quakes:     (p) => p.mag       != null && { value: `M${p.mag}`, note: p.depth_km != null ? `${p.depth_km} km deep` : '' },
+  fires:      (p) => p.frp       != null && { value: p.frp, unit: 'MW', note: 'fire radiative power' },
+  hurricanes: (p) => p.intensity != null && { value: p.intensity, unit: 'kt', note: p.pressure ? `${p.pressure} hPa` : 'max sustained' },
+  model:      (p) => p.value     != null && { value: p.value, unit: p.unit || '', note: FIELD_DEFS[p.field] ? FIELD_DEFS[p.field].label : '' },
+  aqi:        (p) => p.value     != null && { value: p.value, note: aqiCategory(p.value) },
+  planes:     (p) => p.alt       != null && { value: Math.round(p.alt), unit: 'm', note: p.velocity != null ? `${Math.round(p.velocity)} m/s` : 'altitude' },
+  ships:      (p) => p.speed     != null && { value: p.speed, unit: 'kn', note: 'speed over ground' },
+  volcanoes:  (p) => p.elevation_m != null && { value: p.elevation_m, unit: 'm', note: 'summit elevation' },
+  airports:   (p) => p.elevation_ft != null && { value: p.elevation_ft, unit: 'ft', note: p.iata || 'field elevation' },
+};
+
+function humanise(key) {
+  return key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+}
+
+/* Relative first, absolute in the tooltip. A raw epoch in a panel is a fact
+   the reader has to do arithmetic on. */
+function relTime(v) {
+  const d = typeof v === 'number' ? new Date(v > 1e11 ? v : v * 1000) : new Date(v);
+  if (Number.isNaN(d.getTime())) return { text: String(v), title: '' };
+  const secs = (Date.now() - d.getTime()) / 1000;
+  const abs = Math.abs(secs);
+  const ahead = secs < 0;
+  let text;
+  if (abs < 45)          text = 'just now';
+  else if (abs < 5400)   text = `${Math.round(abs / 60)} min`;
+  else if (abs < 172800) text = `${Math.round(abs / 3600)} h`;
+  else                   text = `${Math.round(abs / 86400)} d`;
+  if (text !== 'just now') text = ahead ? `in ${text}` : `${text} ago`;
+  return { text, title: d.toISOString().replace('T', ' ').replace('.000Z', ' UTC') };
+}
+
+function detailRow(key, value) {
+  const meta = FIELD_META[key] || {};
+  const row = document.createElement('div');
+  row.className = meta.wide ? 'dt-row is-wide' : 'dt-row';
+
+  const k = document.createElement('span');
+  k.className = 'dt-key';
+  k.textContent = meta.label || humanise(key);
+  row.appendChild(k);
+
+  if (meta.link && typeof value === 'string' && /^https?:/.test(value)) {
+    const a = document.createElement('a');
+    a.className = 'dt-val dt-link';
+    a.href = value; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.textContent = meta.link;
+    row.appendChild(a);
+    return row;
+  }
+
+  const v = document.createElement('span');
+  v.className = 'dt-val';
+
+  if (meta.chip) {
+    const chip = document.createElement('span');
+    // Booleans read as YES/NO. "TSUNAMI FLAG: FALSE" is a database value, not
+    // an answer to the question the reader is asking.
+    const raw = typeof value === 'boolean' ? (value ? 'yes' : 'no') : String(value);
+    const tone = typeof value === 'boolean'
+      ? (value ? 'bad' : 'dim')
+      : (CHIP_TONE[raw.toLowerCase()] || 'dim');
+    chip.className = `dt-chip is-${tone}`;
+    chip.textContent = raw.toUpperCase();
+    v.appendChild(chip);
+  } else if (meta.time) {
+    const { text, title } = relTime(value);
+    v.textContent = text;
+    if (title) v.title = title;
+    v.classList.add('is-num');
+  } else if (meta.fmt) {
+    v.textContent = meta.fmt(value);
+    v.classList.add('is-num');
+  } else if (meta.num || typeof value === 'number') {
+    const n = Number(value);
+    v.textContent = Number.isFinite(n)
+      ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) + (meta.unit ? ` ${meta.unit}` : '')
+      : String(value);
+    v.classList.add('is-num');
+  } else {
+    v.textContent = String(value);
+  }
+  row.appendChild(v);
+  return row;
+}
+
+/* Fields that exist only to feed a derived row. `ts` is the epoch behind
+   `last_seen`; printing both means printing 1785739069.89 next to "just now". */
+const DETAIL_SKIP = new Set(['ts']);
+
+function renderDetail(kind, props) {
+  const body = document.getElementById('panel-body');
+  body.textContent = '';
+
+  // The head block above already carries these two strings. Repeating them in
+  // the grid is how the quake panel ended up saying "M0.31" twice and printing
+  // its own subtitle back at itself.
+  const said = new Set([
+    document.getElementById('panel-title').textContent.trim(),
+    document.getElementById('panel-subtitle').textContent.trim(),
+    document.getElementById('panel-kind').textContent.trim().toLowerCase(),
+  ].filter(Boolean));
+
+  const headlineFn = KIND_HEADLINE[kind];
+  let head = headlineFn ? headlineFn(props) : null;
+  if (head && said.has(String(head.value).trim())) head = null;
+  if (head) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dt-headline';
+    const big = document.createElement('span');
+    big.className = 'dt-big';
+    big.textContent = typeof head.value === 'number'
+      ? head.value.toLocaleString('en-US', { maximumFractionDigits: 2 })
+      : head.value;
+    wrap.appendChild(big);
+    if (head.unit) {
+      const u = document.createElement('span');
+      u.className = 'dt-unit';
+      u.textContent = head.unit;
+      wrap.appendChild(u);
+    }
+    if (head.note) {
+      const n = document.createElement('span');
+      n.className = 'dt-note';
+      n.textContent = head.note;
+      wrap.appendChild(n);
+    }
+    body.appendChild(wrap);
+  }
+
+  // Known fields in schema order first, then anything the feed added that we
+  // have no metadata for — never dropped, just demoted.
+  const known = Object.keys(FIELD_META).filter((k) => k in props);
+  const rest = Object.keys(props).filter((k) => !(k in FIELD_META));
+  const grid = document.createElement('div');
+  grid.className = 'dt-grid';
+  let shown = 0;
+  for (const key of [...known, ...rest]) {
+    const value = props[key];
+    if (DETAIL_SKIP.has(key)) continue;
+    if (value == null || value === '' ||
+        (Array.isArray(value) && value.length === 0)) continue;
+    if (typeof value === 'object' && !Array.isArray(value)) continue;
+    if (said.has(String(value).trim())) continue;
+    grid.appendChild(detailRow(key, value));
+    shown++;
+  }
+  if (shown) body.appendChild(grid);
+
+  // Progressive disclosure: the debug view survives, one click down.
+  const det = document.createElement('details');
+  det.className = 'dt-raw';
+  const sum = document.createElement('summary');
+  sum.textContent = 'Raw feed record';
+  const pre = document.createElement('pre');
+  pre.textContent = JSON.stringify(props, null, 2);
+  det.appendChild(sum);
+  det.appendChild(pre);
+  body.appendChild(det);
 }
 
 function hidePanel() { document.getElementById('panel').classList.add('hidden'); }

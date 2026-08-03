@@ -438,7 +438,10 @@
       <div id="panel-title">—</div>
       <div id="panel-subtitle">—</div>
     </div>
-    <pre id="panel-body"></pre>
+    <!-- Was a <pre> holding JSON.stringify output. Now a structured detail
+         view built by renderDetail(); the raw record lives in a collapsed
+         <details> at the bottom of it. -->
+    <div id="panel-body"></div>
   </div>
 
   <!-- ─────────  BOTTOM-LEFT EVENT TICKER (LIVE FEED)  ───────── -->

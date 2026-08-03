@@ -454,7 +454,11 @@ html, body {
 /* ──────────  RIGHT DETAIL PANEL  ────────── */
 #panel {
   position: absolute;
-  top: 60px;
+  /* Clears #toolstrip, which lives at top:66px + 35px tall on the same right
+     edge with a higher z-index and was covering this panel's title. The
+     compass already steps aside via :has(); the toolstrip is permanent chrome
+     and does not. */
+  top: 112px;
   right: 16px;
   bottom: 90px;
   width: 380px;
@@ -505,13 +509,117 @@ html, body {
 #panel-title    { font-size: var(--fs-xl); font-weight: 600; letter-spacing: var(--tr-tight); margin-bottom: 4px; }
 #panel-subtitle { font-size: var(--fs-sm); color: var(--text-dim); letter-spacing: var(--tr-wide); text-transform: uppercase; }
 #panel-body {
-  font-family: var(--mono);
   font-size: var(--fs-sm);
   color: var(--text-dim);
+  margin: 0;
+  overflow-y: auto;
+  /* The panel is a fixed-height column; only the body should scroll, so the
+     head stays put while you read a long alert description. */
+  max-height: calc(100% - 96px);
+  scrollbar-width: thin;
+}
+
+/* ---- Detail view --------------------------------------------------------
+   Label/value grid. Values are monospace with tabular figures and right
+   aligned so digits line up by place value down the column — the single
+   highest-return thing you can do to a table of numbers. */
+.dt-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.dt-big {
+  font-family: var(--mono);
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.dt-unit { font-size: var(--fs-base); color: var(--text-dim); }
+.dt-note {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-wide);
+}
+
+.dt-grid { display: flex; flex-direction: column; }
+.dt-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--panel-rule);
+}
+.dt-row:last-child { border-bottom: 0; }
+.dt-key {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-wide);
+  color: var(--text-mute);
+}
+.dt-val {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+}
+.dt-val.is-num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+/* Long prose (alert descriptions) can't share a row with its label. */
+.dt-row.is-wide { grid-template-columns: 1fr; gap: 4px; }
+.dt-row.is-wide .dt-val {
+  text-align: left;
+  color: var(--text-dim);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.dt-link { color: var(--accent); text-decoration: none; }
+.dt-link:hover { text-decoration: underline; }
+
+/* A value from a fixed set is a chip, and the colour comes from the data. */
+.dt-chip {
+  display: inline-block;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--tr-wide);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid currentColor;
+}
+.dt-chip.is-bad  { color: var(--bad); }
+.dt-chip.is-warn { color: var(--warn); }
+.dt-chip.is-ok   { color: var(--ok); }
+.dt-chip.is-dim  { color: var(--text-mute); }
+
+/* The old JSON dump, demoted to where a debug view belongs. */
+.dt-raw { margin-top: 14px; }
+.dt-raw > summary {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-wide);
+  color: var(--text-mute);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.dt-raw > summary:hover { color: var(--text-dim); }
+.dt-raw > pre {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
   white-space: pre-wrap;
   word-break: break-word;
-  margin: 0;
-  line-height: 1.6;
+  margin: 6px 0 0;
+  line-height: 1.5;
+  max-height: 240px;
+  overflow: auto;
 }
 
 /* ──────────  BOTTOM-LEFT EVENT TICKER  ────────── */
