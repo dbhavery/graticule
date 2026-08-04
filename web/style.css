@@ -3235,3 +3235,232 @@ body.is-presenting { --top-h: 0px; }
   flex: 0 0 auto;
   font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-mute);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PASS: COMPOSITION — 2026-08-04
+   Three things the first Weatherfront pass left wrong, each measured off a
+   screenshot rather than guessed:
+     1. GRATICULE was printed three times on one screen.
+     2. Seven of the nine divisions used the top fifth of a full-height rail.
+     3. Nothing anywhere answered "which layers are drawing right now".
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ---- Topbar: search where the tagline was ---- */
+.tb-search {
+  display: flex; align-items: center; gap: 7px;
+  appearance: none; cursor: pointer;
+  margin-left: 6px; padding: 4px 8px 4px 7px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  color: var(--text-mute);
+  font-family: var(--sans); font-size: var(--fs-xs);
+  letter-spacing: var(--tr-wide);
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+.tb-search:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.tbs-i { font-size: var(--fs-sm); line-height: 1; opacity: 0.8; }
+.tbs-k {
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  padding: 1px 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-mute);
+}
+
+/* ---- Rail footer ---- */
+#rail-status {
+  flex: 0 0 auto;
+  margin-top: auto;                       /* pinned to the bottom of the rail */
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--rail-edge);
+  background: rgba(0, 0, 0, 0.28);
+}
+body.is-presenting #rail-status { display: none; }
+
+.rs-line { display: flex; align-items: center; gap: 8px; }
+.rs-cap {
+  font-size: var(--fs-micro); letter-spacing: var(--tr-xwide);
+  color: var(--text-mute);
+}
+.rs-n {
+  font-size: var(--fs-micro); color: var(--text-dim);
+  padding: 0 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.rs-clear {
+  margin-left: auto;
+  appearance: none; background: none; border: 0; cursor: pointer;
+  font-family: var(--sans); font-size: var(--fs-micro);
+  letter-spacing: var(--tr-wide); color: var(--text-mute);
+  padding: 2px 4px; border-radius: 2px;
+  transition: color 140ms ease, background 140ms ease;
+}
+.rs-clear:hover:not(:disabled) { color: var(--bad); background: rgba(204, 51, 34, 0.12); }
+.rs-clear:disabled { opacity: 0.3; cursor: default; }
+
+.rs-chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin: 7px 0 8px;
+  max-height: 132px; overflow-y: auto;    /* 39 layers can all be on at once */
+}
+.rs-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  appearance: none; cursor: pointer;
+  padding: 2px 5px 2px 7px;
+  background: rgba(77, 210, 255, 0.10);
+  border: 1px solid rgba(77, 210, 255, 0.26);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--sans); font-size: var(--fs-micro);
+  letter-spacing: 0.02em;
+  max-width: 100%;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.rs-chip:hover { background: rgba(204, 51, 34, 0.16); border-color: rgba(204, 51, 34, 0.5); }
+.rs-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-chip-x { color: var(--text-mute); font-size: var(--fs-xs); line-height: 1; }
+.rs-chip:hover .rs-chip-x { color: var(--text); }
+.rs-none {
+  font-size: var(--fs-micro); color: var(--text-mute);
+  line-height: 1.5; padding: 2px 0;
+}
+
+.rs-feeds { gap: 6px; }
+.rs-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--text-mute);
+}
+.rs-dot[data-state="ok"]   { background: var(--ok);   box-shadow: 0 0 6px var(--ok); }
+.rs-dot[data-state="warn"] { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+.rs-dot[data-state="bad"]  { background: var(--bad);  box-shadow: 0 0 6px var(--bad); }
+.rs-feed-t { font-size: var(--fs-micro); color: var(--text-dim); letter-spacing: 0.03em; }
+.rs-age { margin-left: auto; font-size: var(--fs-micro); color: var(--text-mute); }
+
+/* ---- Command palette ---- */
+#palette {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 13vh;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  animation: pal-in 120ms ease-out both;
+}
+#palette.hidden { display: none; }
+@keyframes pal-in { from { opacity: 0; } to { opacity: 1; } }
+
+#pal-box {
+  width: min(620px, calc(100vw - 48px));
+  background: var(--panel-bg-strong);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: var(--r-md);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  animation: pal-rise 140ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+@keyframes pal-rise { from { transform: translateY(-8px); } to { transform: none; } }
+
+#pal-top {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--panel-rule);
+}
+#pal-i { color: var(--accent); font-size: var(--fs-lg); line-height: 1; }
+#pal-q {
+  flex: 1 1 auto; min-width: 0;
+  appearance: none; background: none; border: 0; outline: none;
+  color: var(--text);
+  font-family: var(--sans); font-size: var(--fs-lg);
+}
+#pal-q::placeholder { color: var(--text-mute); }
+.pal-esc {
+  font-size: var(--fs-micro); color: var(--text-mute);
+  padding: 2px 5px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#pal-list {
+  list-style: none; margin: 0; padding: 5px;
+  max-height: 46vh; overflow-y: auto;
+}
+.pal-row {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 7px 9px; border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.pal-row.is-sel { background: rgba(77, 210, 255, 0.13); }
+.pal-kind {
+  flex: 0 0 66px;
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  color: var(--text-mute); text-transform: uppercase;
+}
+.pal-row.is-sel .pal-kind { color: var(--accent); }
+.pal-label {
+  flex: 1 1 auto; min-width: 0;
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pal-hint {
+  flex: 0 0 auto;
+  font-size: var(--fs-micro); color: var(--text-mute);
+  letter-spacing: 0.03em;
+}
+.pal-empty {
+  padding: 14px 10px; text-align: center;
+  font-size: var(--fs-sm); color: var(--text-mute);
+}
+
+#pal-foot {
+  display: flex; align-items: center; gap: 16px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--panel-rule);
+  font-size: var(--fs-micro); color: var(--text-mute);
+  letter-spacing: 0.03em;
+}
+#pal-foot b {
+  font-weight: 400; color: var(--text-dim);
+  padding: 1px 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  margin-right: 4px;
+}
+#pal-n { margin-left: auto; }
+
+/* ---- Colour scale, second cut ----
+   The title used to sit stacked above the bar, rotated, in its own third of
+   the panel: 232px of gradient under 100px of vertical wordmark, so a scale
+   320px tall spent a third of itself saying "REFLECTIVITY". Title and unit now
+   run up the side as one line and the gradient takes the whole height, which
+   is also how a broadcast scale is drawn. */
+#legend {
+  flex-direction: row;
+  align-items: stretch;
+  gap: 9px;
+  padding: 12px 11px;
+}
+.lg-head {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  display: flex; flex-direction: row;
+  align-items: center; justify-content: center;
+  gap: 10px; margin: 0;
+}
+#lg-title {
+  writing-mode: inherit; text-orientation: inherit;
+  transform: none; max-height: none;
+  color: var(--text-dim);
+}
+#lg-unit { writing-mode: inherit; color: var(--text-mute); }
+#lg-bar { width: 11px; height: 300px; }
+
+/* Caveats read as footnotes, not as body copy: they explain why a control is
+   missing, and they should not out-weigh the controls that are there. */
+.pane-note {
+  font-size: var(--fs-micro);
+  padding-left: 8px;
+  border-left: 1px solid var(--panel-rule);
+  margin: 10px 4px 0;
+}

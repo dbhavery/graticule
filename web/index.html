@@ -32,10 +32,15 @@
 
   <!-- ─────────  TOP TELEMETRY BAR  ───────── -->
   <header id="topbar">
+    <!-- The tagline used to sit here, in the rail head and in the broadcast
+         readout at the same time. One wordmark; the readout names the product
+         that is actually on the globe, which is the more useful line anyway. -->
     <div class="brand">
       <span class="brand-mark"></span>
       <span class="brand-name">GRATICULE</span>
-      <span class="brand-sub">SITUATIONAL AWARENESS</span>
+      <button id="topbar-search" class="tb-search" title="Search everything (Ctrl+K)">
+        <span class="tbs-i">&#9906;</span><span class="tbs-t">Search</span><span class="tbs-k mono">Ctrl K</span>
+      </button>
     </div>
     <div class="telemetry">
       <div class="tm">
@@ -97,9 +102,15 @@
        whichever division is selected. -->
   <aside id="hud">
 
+    <!-- The head used to repeat the wordmark that is already in the top-left
+         corner of the screen. It now names where you are: the division you are
+         driving, or the tab if the tab has no divisions. One wordmark, and the
+         rail gained a title. -->
     <header id="rail-head">
       <span class="rb-mark"></span>
-      <span class="rb-name">GRATICULE</span>
+      <span class="rb-name" id="rail-title">RADAR</span>
+      <button id="palette-btn" class="rail-icon" aria-label="Command palette"
+              title="Command palette (Ctrl+K)">&#9906;</button>
       <button id="settings-btn" class="rail-icon" aria-label="Settings" title="Settings">&#9881;</button>
       <button id="rail-collapse" class="rail-icon" aria-label="Collapse the panel"
               title="Collapse the panel (\)">&times;</button>
@@ -166,7 +177,12 @@
            dropdown. Its TILT row is deliberately absent here — see the note at
            the bottom of the division. -->
       <div class="mode-body is-active" data-mode-body="radar">
-        <label class="sw"><input type="checkbox" data-layer="radar"><span class="sw-t"></span><span class="sw-l">National Radar</span></label>
+        <!-- On at boot. A weather app that opens with no weather on it makes
+             the operator switch something on before it says anything; the
+             national mosaic is the one layer that is always the right answer
+             to "what is happening". applyInitialLayerState() dispatches the
+             change event, so checked here is genuinely attached. -->
+        <label class="sw"><input type="checkbox" data-layer="radar" checked><span class="sw-t"></span><span class="sw-l">National Radar</span></label>
         <label class="sw"><input type="checkbox" data-layer="radar_site"><span class="sw-t"></span><span class="sw-l">Local Hi-Res Site</span></label>
         <div class="wf-row" data-requires="radar_site">
           <span class="wf-row-l">Site</span>
@@ -345,10 +361,14 @@
             <button class="theme-btn" data-theme="night"     aria-pressed="false" title="Night lights">NIGHT</button>
           </div>
         </div>
+        <label class="sw" title="Drops the base map's brightness and saturation whenever a field is drawn over it, so the data reads instead of the terrain."><input type="checkbox" id="dim-base" checked><span class="sw-t"></span><span class="sw-l">Mute the base under data</span></label>
 
+        <!-- Countries and states default ON: reflectivity over an unlabelled
+             globe tells you a storm exists but not where it is, and every
+             radar app on the market draws boundaries under the returns. -->
         <div class="wf-sec">REFERENCE LINES</div>
-        <label class="sw"><input type="checkbox" data-layer="countries"><span class="sw-t"></span><span class="sw-l">Countries</span><span class="count" id="count-countries">—</span></label>
-        <label class="sw"><input type="checkbox" data-layer="states"><span class="sw-t"></span><span class="sw-l">States &amp; Provinces</span><span class="count" id="count-states">—</span></label>
+        <label class="sw"><input type="checkbox" data-layer="countries" data-defer checked><span class="sw-t"></span><span class="sw-l">Countries</span><span class="count" id="count-countries">—</span></label>
+        <label class="sw"><input type="checkbox" data-layer="states" data-defer checked><span class="sw-t"></span><span class="sw-l">States &amp; Provinces</span><span class="count" id="count-states">—</span></label>
         <label class="sw"><input type="checkbox" data-layer="cities"><span class="sw-t"></span><span class="sw-l">Cities &amp; Towns</span><span class="count" id="count-cities">—</span></label>
         <label class="sw" title="Nationwide parcel boundaries. Draws below ~12 km altitude."><input type="checkbox" data-layer="parcels_us"><span class="sw-t"></span><span class="sw-l">Parcels (US, near zoom)</span><span class="count" id="count-parcels_us">—</span></label>
         <label class="sw"><input type="checkbox" data-layer="parcels_wa"><span class="sw-t"></span><span class="sw-l">Parcels (WA detail)</span><span class="count" id="count-parcels_wa">0</span></label>
@@ -557,6 +577,27 @@
     </section>
 
     </div>
+
+    <!-- ─────────  RAIL FOOTER  ─────────
+         Nine divisions and thirty-nine layers, and until now nothing anywhere
+         answered "what is on right now" -- a layer switched on in Sky stayed
+         invisible from Radar, so operators lost track of what was drawing and
+         paid for it in frame rate. Pinned to the bottom of the rail, which is
+         also the dead space most divisions leave: every active layer as a
+         chip, click to drop it, and the health of the feeds behind them. -->
+    <footer id="rail-status">
+      <div class="rs-line">
+        <span class="rs-cap">ON NOW</span>
+        <span class="rs-n mono" id="rs-count">0</span>
+        <button id="rs-clear" class="rs-clear" title="Switch every layer off">Clear</button>
+      </div>
+      <div id="rs-chips" class="rs-chips"></div>
+      <div class="rs-line rs-feeds">
+        <span class="rs-dot" id="rs-dot"></span>
+        <span class="rs-feed-t" id="rs-feed-t">feeds idle</span>
+        <span class="rs-age mono" id="rs-age"></span>
+      </div>
+    </footer>
   </aside>
 
   <!-- The frame timestamp chip that used to live here is now the Data Readout
@@ -750,6 +791,31 @@
        three columns of five beside a rotating REST OF COUNTRIES, and a UTC
        footer. It is full-screen rather than in the 264px HUD because that is
        the shape the source is; it will not compress into the side panel. -->
+  <!-- ─────────  COMMAND PALETTE  ─────────
+       Nine divisions, three tabs, six dashboards, thirty-nine layers and a
+       hundred and fifty radar sites, all of them two to four clicks deep. One
+       keystroke reaches any of them by name. Everything it offers is read out
+       of the live DOM at open time, so it can never advertise a control that
+       is not there. -->
+  <div id="palette" class="hidden" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div id="pal-box">
+      <div id="pal-top">
+        <span id="pal-i">&#9906;</span>
+        <input id="pal-q" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Jump to a division, layer, site or dashboard…"
+               aria-label="Search commands" aria-controls="pal-list" role="combobox"
+               aria-expanded="true">
+        <span class="pal-esc mono">ESC</span>
+      </div>
+      <ul id="pal-list" role="listbox" aria-label="Results"></ul>
+      <div id="pal-foot">
+        <span><b class="mono">&uarr;&darr;</b> move</span>
+        <span><b class="mono">&crarr;</b> run</span>
+        <span id="pal-n" class="mono"></span>
+      </div>
+    </div>
+  </div>
+
   <div id="worlddash" class="hidden" role="dialog" aria-modal="true"
        aria-label="World population dashboard">
     <button id="wd-close" aria-label="Close dashboard">×</button>

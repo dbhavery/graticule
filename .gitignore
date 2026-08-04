@@ -36,3 +36,8 @@ ne_*.zip
 web/data/airspace.json
 graphify-out/
 .code-review-graph/
+
+# Pre-decimation boundary geojson, kept beside the shipped files so
+# scripts/slim_boundaries.py can be re-run at a different tolerance without a
+# round trip through the zips. Reproducible: scripts/build_boundaries.py.
+web/data/ne_*.full.geojson

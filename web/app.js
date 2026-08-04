@@ -256,6 +256,7 @@ const settings = Object.assign({
   hoverDelayMs: 500,
   timeFormat: 'utc',                // 'utc' | 'local' | 'both'
   imageryBase: 'satellite',         // 'satellite' | 'streets' | 'topo' | 'night'
+  dimBaseUnderData: true,           // mute the base while a field is drawn over it
   showGraticule: false,
   // ---- Realistic Earth (Wave 1) --------------------------------------------
   // Defaults ON: Don's brief is "I want the Earth completely realistic — real
@@ -321,6 +322,20 @@ function saveSettings() {
 // 14 Mm frames the planet at roughly 60% of viewport height. The old
 // 22 Mm left it a small ball adrift in dead black.
 const NA_HOME = { lon: -98.0, lat: 39.5, alt: 14_000_000 };
+
+// The opening frame. A fixed altitude cannot compose: the rail takes 300px out
+// of the width, so the same 14 Mm that framed the globe on a bare viewport left
+// black margins on either side of it once the panel docked, and nothing on the
+// screen was weather. A Rectangle destination makes Cesium solve for the
+// altitude that fits the box in whatever viewport it is actually given, so the
+// framing survives the rail, presentation mode and any window size.
+// Box: the lower 48 plus enough Gulf, Atlantic and southern Canada to show a
+// system approaching from any side.
+const NA_FRAME = { west: -131, south: 20.5, east: -62, north: 53.5 };
+function naFrameDestination() {
+  return Cesium.Rectangle.fromDegrees(
+    NA_FRAME.west, NA_FRAME.south, NA_FRAME.east, NA_FRAME.north);
+}
 
 let viewer;
 const dataSources = {};
@@ -403,10 +418,20 @@ const TICKER_MAX = 6;
 // so an unchecked layer would still render at boot. Walk every data-layer
 // checkbox and force the matching dataSource / overlay to its declared state.
 function applyInitialLayerState() {
+  // Anything marked data-defer is attached after the first frames rather than
+  // during them. The reference lines are 320k coordinates that Cesium compiles
+  // into ground-clamped primitives; measured on SwiftShader that is a single
+  // ~3.8 s stall, and taking it while the map is already up and drawing radar
+  // is a different experience from taking it against a blank screen.
+  const deferred = [];
   document.querySelectorAll('input[data-layer]').forEach((cb) => {
     if (cb.disabled) return;
+    if (cb.dataset.defer !== undefined && cb.checked) { deferred.push(cb); return; }
     cb.dispatchEvent(new Event('change'));
   });
+  if (deferred.length) {
+    setTimeout(() => deferred.forEach((cb) => cb.dispatchEvent(new Event('change'))), 1200);
+  }
   // Also align the terminator (its DS exists from initTerminator)
   const term = document.querySelector('input[data-layer="terminator"]');
   if (term && terminatorDS) terminatorDS.show = !!term.checked;
@@ -482,9 +507,7 @@ async function initViewer() {
   await maybeAttachOsmBuildings(cfg);
   await maybeAttachGoogle3DTiles(cfg);
 
-  viewer.camera.setView({
-    destination: Cesium.Cartesian3.fromDegrees(NA_HOME.lon, NA_HOME.lat, NA_HOME.alt),
-  });
+  viewer.camera.setView({ destination: naFrameDestination() });
   // Allow the camera to descend into the surface band where 3D buildings live
   viewer.scene.screenSpaceCameraController.minimumZoomDistance = 50;
 
@@ -2592,6 +2615,16 @@ async function buildCountries() {
       // Only render labels for top-tier countries (labelrank ≤ 7) so the globe
       // doesn't drown in micro-territory text. Higher rank = less prominent.
       if (labelrank > 7) continue;
+      // Rank also decides how far out a name is allowed to draw. One flat
+      // condition for all of them put BERMUDA, CURACAO, ST. VINCENT AND THE
+      // GRENADINES and a dozen more into an unreadable pile over the Caribbean
+      // at the default CONUS frame -- one of them was clipped in half by the
+      // colour scale. Big countries stay visible from orbit; small ones have
+      // to be worth the space you are looking at.
+      const farM = labelrank <= 2 ? 1.8e7
+                 : labelrank <= 4 ? 7.0e6
+                 : labelrank <= 6 ? 3.0e6
+                 : 1.6e6;
       countriesDS.entities.add({
         position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
         label: {
@@ -2603,10 +2636,10 @@ async function buildCountries() {
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          // Hide when very close (< 200 km) and very far (> 18 Mm)
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(2e5, 1.8e7),
-          // Soft fade-in over 500 km → 1.2 Mm
-          translucencyByDistance: new Cesium.NearFarScalar(5e5, 0.0, 1.2e6, 1.0),
+          // Near 200 km; far by rank, see above.
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(2e5, farM),
+          // Fade out over the last fifth of the range rather than popping.
+          translucencyByDistance: new Cesium.NearFarScalar(farM * 0.8, 1.0, farM, 0.0),
           // Slightly shrink at far zoom so labels don't crowd
           scaleByDistance: new Cesium.NearFarScalar(1e6, 1.0, 1.5e7, 0.7),
           // Depth-test ON so labels on the far side of the globe are occluded.
@@ -4181,12 +4214,44 @@ async function applyImageryBase(kind) {
 // swap, since a new provider means a new ImageryLayer with default values.
 // Streets and topo basemaps are already styled artwork — grading them just
 // makes them garish, so only the photographic bases get it.
+/* True when anything is drawing on top of the base map. Read off the imagery
+   stack itself rather than off a list of layer names, so a new overlay is
+   counted the day it is added instead of the day someone remembers to add it
+   here. Entities (boundaries, quakes, planes) are deliberately not counted:
+   they are line work over the map, not a field competing with it. */
+function baseHasOverlay() {
+  if (!viewer || !baseImageryLayer) return false;
+  const L = viewer.imageryLayers;
+  for (let i = 0; i < L.length; i++) {
+    const l = L.get(i);
+    if (l !== baseImageryLayer && l.show && l.alpha > 0.02) return true;
+  }
+  return false;
+}
+
+/* Two grades, because the base map has two jobs and they pull opposite ways.
+   With nothing on it, it IS the picture and wants contrast and saturation --
+   that is the grade Don signed off for the realistic globe. With reflectivity
+   painted over it, it is context, and the same grade fights the data: ESRI's
+   imagery over CONUS is bright green and tan, and 20 dBZ blue sitting on it is
+   almost unreadable. Every broadcast radar app mutes its base for exactly this
+   reason. Switchable, and the switch says what it does. */
 function gradeBaseImagery() {
   if (!baseImageryLayer) return;
   const photographic = settings.imageryBase !== 'streets' && settings.imageryBase !== 'topo';
-  baseImageryLayer.contrast   = photographic ? 1.40 : 1.0;
-  baseImageryLayer.saturation = photographic ? 1.25 : 1.0;
-  baseImageryLayer.gamma      = photographic ? 0.95 : 1.0;
+  const muted = settings.dimBaseUnderData !== false && baseHasOverlay();
+  if (muted) {
+    baseImageryLayer.brightness = 0.58;
+    baseImageryLayer.contrast   = photographic ? 1.18 : 1.02;
+    baseImageryLayer.saturation = photographic ? 0.34 : 0.42;
+    baseImageryLayer.gamma      = 1.08;
+  } else {
+    baseImageryLayer.brightness = 1.0;
+    baseImageryLayer.contrast   = photographic ? 1.40 : 1.0;
+    baseImageryLayer.saturation = photographic ? 1.25 : 1.0;
+    baseImageryLayer.gamma      = photographic ? 0.95 : 1.0;
+  }
+  viewer?.scene.requestRender();
 }
 
 // ---------- Boundary / imagery opacity sliders -----------------------------
@@ -4888,6 +4953,23 @@ function refreshPlaneStatus() {
 
 // ---------- Tabs + mode chips ----------------------------------------------
 
+// Where the operator is, in two words. The rail head prints this instead of a
+// second copy of the wordmark, so the panel has a title.
+let RAIL_TAB = 'data';
+let RAIL_DIV = 'radar';
+const DIVISION_TITLE = {
+  radar: 'RADAR', model: 'MODEL', satellite: 'SATELLITE',
+  obs: 'OBSERVATIONS', outlooks: 'OUTLOOKS', mapping: 'MAPPING',
+  earth: 'EARTH', sky: 'SKY', world: 'WORLD',
+};
+function syncRailTitle() {
+  const el = document.getElementById('rail-title');
+  if (!el) return;
+  el.textContent = RAIL_TAB === 'alerts'    ? 'NWS ALERTS'
+                 : RAIL_TAB === 'broadcast' ? 'BROADCAST'
+                 : (DIVISION_TITLE[RAIL_DIV] || 'DATA');
+}
+
 function initTabs() {
   const tabs  = Array.from(document.querySelectorAll('.hud-tab'));
   const panes = Array.from(document.querySelectorAll('.hud-pane'));
@@ -4901,6 +4983,8 @@ function initTabs() {
       });
       panes.forEach((p) => p.classList.toggle('is-active', p.dataset.pane === name));
       try { localStorage.setItem('graticule.tab', name); } catch {}
+      RAIL_TAB = name;
+      syncRailTitle();
       // The timeline only makes sense against an animatable imagery layer.
       syncTimelineVisibility();
     });
@@ -4931,6 +5015,9 @@ function initTabs() {
     bodies.forEach((b) => b.classList.toggle('is-active', b.dataset.modeBody === name));
     applyLegendFor(name);
     try { localStorage.setItem('graticule.division', name); } catch {}
+    RAIL_DIV = name;
+    syncRailTitle();
+    railStatusRender();
     return true;
   };
   chips.forEach((chip) => {
@@ -6561,6 +6648,29 @@ function initMapTheme() {
       if (radio) radio.checked = true;
     });
   });
+
+  const dim = document.getElementById('dim-base');
+  if (dim) {
+    dim.checked = settings.dimBaseUnderData !== false;
+    dim.addEventListener('change', () => {
+      settings.dimBaseUnderData = dim.checked;
+      saveSettings();
+      gradeBaseImagery();
+    });
+  }
+
+  // Re-grade when the imagery stack itself changes, not when a switch is
+  // clicked. Measured: hooking the switch left the base ungraded at boot
+  // (brightness 1.0, saturation 1.25 with radar already drawing) because the
+  // radar overlay attaches after a fetch, several hundred ms behind the change
+  // event. layerAdded / layerRemoved fire at the moment the stack is true.
+  if (viewer) {
+    const regrade = (l) => { if (l !== baseImageryLayer) gradeBaseImagery(); };
+    viewer.imageryLayers.layerAdded.addEventListener(regrade);
+    viewer.imageryLayers.layerRemoved.addEventListener(regrade);
+    viewer.imageryLayers.layerShownOrHidden.addEventListener(regrade);
+    gradeBaseImagery();
+  }
 }
 
 /* ===========================================================================
@@ -10634,6 +10744,330 @@ const DASHBOARDS = {
   space:    DASH_SPACE,
 };
 
+// ---------- Rail footer: what is on, and whether it is arriving --------------
+//
+// Two questions the app could not answer from anywhere: which layers are
+// drawing right now (they are scattered across nine divisions, so a layer
+// switched on in Sky is invisible from Radar), and whether the feeds behind
+// them are still delivering. Both live in the strip pinned to the bottom of
+// the rail, which is also the space most divisions were leaving empty.
+
+/* Every enabled layer switch, with the label the operator actually read when
+   they turned it on. Reads the DOM rather than a parallel registry so it can
+   never drift from the switches themselves. */
+function railActiveLayers() {
+  return Array.from(document.querySelectorAll('input[data-layer]'))
+    .filter((cb) => cb.checked && !cb.disabled)
+    .map((cb) => ({
+      key: cb.dataset.layer,
+      label: (cb.closest('.sw')?.querySelector('.sw-l')?.textContent || cb.dataset.layer).trim(),
+      cb,
+    }));
+}
+
+/* Health from the same feedActivity clock the feed strip uses, so the two can
+   never disagree. "Idle" is the honest word before anything has reported --
+   green with nothing behind it would be a lie at boot. */
+function railFeedHealth() {
+  const chips = Array.from(document.querySelectorAll('#feedstrip-chips .chip'));
+  let ok = 0, stale = 0;
+  for (const el of chips) {
+    if (el.dataset.state === 'ok') ok++;
+    else if (el.dataset.state === 'warn' || el.dataset.state === 'bad') stale++;
+  }
+  const times = Object.values(feedActivity || {}).filter(Boolean);
+  const newest = times.length ? Math.max(...times) : 0;
+  return { ok, stale, reporting: ok + stale, newest };
+}
+
+function railStatusRender() {
+  const host = document.getElementById('rs-chips');
+  if (!host) return;
+  const active = railActiveLayers();
+
+  setText('rs-count', String(active.length));
+  const clear = document.getElementById('rs-clear');
+  if (clear) clear.disabled = active.length === 0;
+
+  host.innerHTML = active.length
+    ? active.map((l) =>
+        `<button class="rs-chip" data-key="${escapeHtml(l.key)}" ` +
+        `title="Switch off ${escapeHtml(l.label)}">` +
+        `<span class="rs-chip-t">${escapeHtml(l.label)}</span>` +
+        `<span class="rs-chip-x">&times;</span></button>`).join('')
+    : '<div class="rs-none">Nothing drawing. Switch a layer on above.</div>';
+
+  host.querySelectorAll('.rs-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cb = document.querySelector(`input[data-layer="${btn.dataset.key}"]`);
+      if (!cb) return;
+      cb.checked = false;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+
+  railStatusTick();
+}
+
+/* Split from the render so the age can count up once a second without
+   rebuilding the chip list under the operator's cursor. */
+function railStatusTick() {
+  const h = railFeedHealth();
+  const dot = document.getElementById('rs-dot');
+  const txt = document.getElementById('rs-feed-t');
+  const age = document.getElementById('rs-age');
+  if (!dot || !txt || !age) return;
+
+  if (!h.reporting) {
+    dot.dataset.state = 'idle';
+    txt.textContent = 'feeds idle';
+    age.textContent = '';
+    return;
+  }
+  dot.dataset.state = h.stale === 0 ? 'ok' : (h.stale > h.ok ? 'bad' : 'warn');
+  txt.textContent = h.stale === 0
+    ? `${h.ok} feeds live`
+    : `${h.ok} live · ${h.stale} stale`;
+  age.textContent = h.newest ? relAge(Date.now() - h.newest) : '';
+}
+
+/* Short relative age. Kept local rather than reusing the alert formatters,
+   which pad to a fixed width for a column this strip does not have. */
+function relAge(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.round(m / 60)}h`;
+}
+
+function initRailStatus() {
+  document.getElementById('rs-clear')?.addEventListener('click', () => {
+    for (const l of railActiveLayers()) {
+      l.cb.checked = false;
+      l.cb.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+  // One delegated listener rather than 39 -- layers are also toggled from the
+  // command palette, the alert cards and applyInitialLayerState(), and every
+  // one of those paths dispatches change on the input.
+  document.addEventListener('change', (e) => {
+    if (e.target instanceof HTMLInputElement && e.target.dataset.layer) railStatusRender();
+  });
+  setInterval(railStatusTick, 1000);
+  railStatusRender();
+}
+
+// ---------- Command palette --------------------------------------------------
+//
+// Everything in this app is two to four clicks deep: pick a tab, pick a
+// division, find the switch. That is fine when you know where a thing lives
+// and useless when you only know its name. Ctrl+K searches every reachable
+// control by name and runs it.
+//
+// The index is rebuilt from the live DOM on every open rather than kept as a
+// parallel list. A hard-coded index would drift the first time a layer moved
+// division, and the palette would then offer a control that is not there --
+// the exact failure the `#layers` selectors already cost us once.
+
+const PAL = { open: false, items: [], view: [], sel: 0 };
+
+function palBuild() {
+  const items = [];
+  const add = (kind, label, hint, run, extra = {}) =>
+    items.push({ kind, label, hint, run, ...extra });
+
+  // Tabs and divisions.
+  document.querySelectorAll('.hud-tab').forEach((t) => {
+    if (t.dataset.tab === 'data') return;          // reached via its divisions
+    add('Go to', t.textContent.trim(), 'tab', () => t.click());
+  });
+  document.querySelectorAll('#wx-modes .chip').forEach((c) => {
+    add('Go to', c.textContent.trim(), 'division', () => {
+      document.querySelector('.hud-tab[data-tab="data"]')?.click();
+      c.click();
+    });
+  });
+
+  // Dashboards. The world board predates the dashboard shell and opens through
+  // its own function, so it is listed explicitly rather than silently missing.
+  document.querySelectorAll('[data-dash]').forEach((b) => {
+    const name = b.textContent.replace(/^Open\s+/i, '').replace(/\s+dashboard$/i, '').trim();
+    if (items.some((i) => i.hint === 'dashboard' && i.label.toLowerCase() === name.toLowerCase())) return;
+    add('Open', name, 'dashboard', () => dashOpen(b.dataset.dash));
+  });
+  add('Open', 'world population', 'dashboard', () => openWorldDash());
+
+  // Layers. The verb reflects the current state, so the row reads as the thing
+  // it will do rather than as a name you have to reason about.
+  document.querySelectorAll('input[data-layer]').forEach((cb) => {
+    if (cb.disabled) return;
+    const label = (cb.closest('.sw')?.querySelector('.sw-l')?.textContent || cb.dataset.layer).trim();
+    add(cb.checked ? 'Switch off' : 'Switch on', label, 'layer', () => {
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+    }, { on: cb.checked });
+  });
+
+  // Radar products. These are buttons, not layers, so the layer sweep above
+  // misses them -- and "storm relative velocity" is exactly the sort of name
+  // someone reaches for by typing rather than by hunting.
+  document.querySelectorAll('.wf-item[data-product]').forEach((b) => {
+    add('Product', b.textContent.trim(), 'radar', () => {
+      document.querySelector('.hud-tab[data-tab="data"]')?.click();
+      document.querySelector('#wx-modes .chip[data-mode="radar"]')?.click();
+      b.click();
+    });
+  });
+
+  // Base maps.
+  document.querySelectorAll('.theme-btn[data-theme]').forEach((b) => {
+    add('Base map', b.title || b.dataset.theme, b.dataset.theme, () => b.click());
+  });
+
+  // Radar sites, read from the select the site layer already drives.
+  document.querySelectorAll('#radar-site option').forEach((o) => {
+    if (!o.value) return;
+    add('Radar site', o.textContent.trim(), o.value, () => {
+      const sel = document.getElementById('radar-site');
+      const site = document.querySelector('input[data-layer="radar_site"]');
+      if (site && !site.checked) {
+        site.checked = true;
+        site.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      if (sel) { sel.value = o.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+    });
+  });
+
+  // Saved camera presets.
+  for (const p of loadPresets()) {
+    add('Fly to', p.name, 'saved view', () => flyToPreset(p));
+  }
+
+  // Actions.
+  add('Do', 'presentation mode', 'hide the chrome',
+      () => document.getElementById('present-btn')?.click());
+  add('Do', 'collapse the panel', 'rail',
+      () => document.getElementById('rail-collapse')?.click());
+  add('Do', 'settings', 'modal',
+      () => document.getElementById('settings-btn')?.click());
+  document.querySelectorAll('#panebar .seg-b').forEach((b) => {
+    add('Do', `${b.dataset.panes} pane`, 'layout', () => b.click());
+  });
+  add('Do', 'clear every layer', 'switch it all off',
+      () => document.getElementById('rs-clear')?.click());
+  add('Fly to', 'North America', 'home view', () => {
+    _lastInteractionAt = performance.now();
+    viewer?.camera.flyTo({ destination: naFrameDestination(), duration: 1.6 });
+  });
+
+  return items;
+}
+
+/* Subsequence match, the same rule a file finder uses: "srv" reaches "Storm
+   Relative Velocity". Scored so a prefix beats a word start beats a scattered
+   hit, otherwise "on" would rank forty layers above the one you typed. */
+function palScore(item, q) {
+  if (!q) return 1;
+  const hay = `${item.label} ${item.hint}`.toLowerCase();
+  const lbl = item.label.toLowerCase();
+  if (lbl.startsWith(q)) return 1000 - lbl.length;
+  const at = hay.indexOf(q);
+  if (at >= 0) return 500 - at;
+  // Subsequence over the label's word initials, then over the label itself.
+  const initials = lbl.split(/[\s/(-]+/).map((w) => w[0] || '').join('');
+  if (initials.includes(q)) return 400;
+  let i = 0;
+  for (const ch of lbl) if (ch === q[i]) i++;
+  return i === q.length ? 100 : 0;
+}
+
+function palRender() {
+  const q = (document.getElementById('pal-q')?.value || '').trim().toLowerCase();
+  PAL.view = PAL.items
+    .map((it) => ({ it, s: palScore(it, q) }))
+    .filter((r) => r.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 40)
+    .map((r) => r.it);
+
+  if (PAL.sel >= PAL.view.length) PAL.sel = Math.max(0, PAL.view.length - 1);
+
+  const list = document.getElementById('pal-list');
+  if (!list) return;
+  list.innerHTML = PAL.view.length
+    ? PAL.view.map((it, i) =>
+        `<li class="pal-row${i === PAL.sel ? ' is-sel' : ''}" role="option" data-i="${i}"` +
+        `${i === PAL.sel ? ' aria-selected="true"' : ''}>` +
+        `<span class="pal-kind">${escapeHtml(it.kind)}</span>` +
+        `<span class="pal-label">${escapeHtml(it.label)}</span>` +
+        `<span class="pal-hint">${escapeHtml(it.hint || '')}</span></li>`).join('')
+    : '<li class="pal-empty">Nothing matches that.</li>';
+  setText('pal-n', PAL.view.length ? `${PAL.view.length}` : '');
+
+  list.querySelectorAll('.pal-row').forEach((row) => {
+    row.addEventListener('mousemove', () => {
+      const i = Number(row.dataset.i);
+      if (i !== PAL.sel) { PAL.sel = i; palRender(); }
+    });
+    row.addEventListener('click', () => palRun(Number(row.dataset.i)));
+  });
+  list.querySelector('.is-sel')?.scrollIntoView({ block: 'nearest' });
+}
+
+function palOpen() {
+  const el = document.getElementById('palette');
+  if (!el) return;
+  PAL.items = palBuild();
+  PAL.sel = 0;
+  PAL.open = true;
+  el.classList.remove('hidden');
+  const q = document.getElementById('pal-q');
+  if (q) { q.value = ''; q.focus(); }
+  palRender();
+}
+
+function palClose() {
+  PAL.open = false;
+  document.getElementById('palette')?.classList.add('hidden');
+}
+
+function palRun(i) {
+  const it = PAL.view[i];
+  if (!it) return;
+  palClose();
+  try { it.run(); } catch (err) { console.warn('palette action failed:', err); }
+}
+
+function initCommandPalette() {
+  const el = document.getElementById('palette');
+  if (!el) return;
+
+  document.getElementById('palette-btn')?.addEventListener('click', palOpen);
+  document.getElementById('topbar-search')?.addEventListener('click', palOpen);
+  el.addEventListener('mousedown', (e) => { if (e.target === el) palClose(); });
+
+  document.getElementById('pal-q')?.addEventListener('input', () => { PAL.sel = 0; palRender(); });
+
+  document.addEventListener('keydown', (e) => {
+    // Open. Ctrl+K is the near-universal binding; Cmd+K for anyone on a Mac.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      PAL.open ? palClose() : palOpen();
+      return;
+    }
+    if (!PAL.open) return;
+    // Capture + stopPropagation, because Escape is already spoken for by the
+    // dashboard and by presentation mode. Without it, closing the palette over
+    // an open dashboard would close the dashboard too.
+    const eat = () => { e.preventDefault(); e.stopPropagation(); };
+    if (e.key === 'Escape')         { eat(); palClose(); }
+    else if (e.key === 'ArrowDown') { eat(); PAL.sel = Math.min(PAL.sel + 1, PAL.view.length - 1); palRender(); }
+    else if (e.key === 'ArrowUp')   { eat(); PAL.sel = Math.max(PAL.sel - 1, 0); palRender(); }
+    else if (e.key === 'Enter')     { eat(); palRun(PAL.sel); }
+  }, true);
+}
+
 // ---------- boot -------------------------------------------------------------
 
 function initWeatherfrontShell() {
@@ -10642,4 +11076,7 @@ function initWeatherfrontShell() {
   initMappingMirrors();
   initAlertsTab();
   initDashboards();
+  initRailStatus();
+  initCommandPalette();
+  syncRailTitle();
 }
