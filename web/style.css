@@ -386,7 +386,7 @@ html, body {
 .cat .cat-count:empty::before { content: '0'; opacity: 0.35; }
 
 /* Per-layer rows */
-#layers label {
+.layer-list label {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -397,22 +397,22 @@ html, body {
   border-radius: var(--r-sm);
   transition: background-color 140ms ease, color 140ms ease;
 }
-#layers label:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
-#layers label:has(input:checked) { color: var(--text); }
-#layers label:has(input:checked) .lbl { color: var(--text); }
-#layers label .lbl { flex: 1; transition: color 140ms ease; }
-#layers input[type=checkbox] {
+.layer-list label:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+.layer-list label:has(input:checked) { color: var(--text); }
+.layer-list label:has(input:checked) .lbl { color: var(--text); }
+.layer-list label .lbl { flex: 1; transition: color 140ms ease; }
+.layer-list input[type=checkbox] {
   margin: 0;
   cursor: pointer;
   accent-color: var(--accent);
   width: 11px;
   height: 11px;
 }
-#layers input[type=checkbox]:disabled { cursor: not-allowed; opacity: 0.35; }
-#layers input[type=checkbox]:disabled + .dot { opacity: 0.3; }
-#layers label:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
+.layer-list input[type=checkbox]:disabled { cursor: not-allowed; opacity: 0.35; }
+.layer-list input[type=checkbox]:disabled + .dot { opacity: 0.3; }
+.layer-list label:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
 
-#layers .dot {
+.layer-list .dot {
   display: inline-block;
   width: 7px; height: 7px;
   border-radius: 50%;
@@ -450,7 +450,7 @@ html, body {
 .dot[data-color=mon_alerts] { background: var(--c-mon_alerts); box-shadow: 0 0 5px var(--c-mon_alerts); }
 .dot[data-color=mon_feed]   { background: var(--c-mon_feed);   box-shadow: 0 0 5px var(--c-mon_feed); }
 
-#layers .count {
+.layer-list .count {
   color: var(--text-mute);
   font-family: var(--mono);
   font-size: var(--fs-xs);
@@ -2152,8 +2152,19 @@ body.is-pointing #present-exit { opacity: 1; }
    The live Cesium canvas is shrunk into the first cell and the grid overlays
    the rest. Cell 0 has no canvas of its own: the globe shows through it, so
    the interactive pane is the real scene rather than a picture of it. */
-body.panes-dual #cesiumContainer { inset: 0 50% 0 0; }
-body.panes-quad #cesiumContainer { inset: 0 50% 50% 0; }
+/* The `inset` shorthand used to be spelled here, which reset left to 0 and
+   undid the rail dock -- in dual mode the live canvas went full-window while
+   the pane grid stayed inset, so the canvas was 800px wide inside a 650px
+   cell. Sides are set individually now, and the midpoint is the midpoint of
+   the MAP, not of the window. */
+body.panes-dual #cesiumContainer {
+  top: 0; bottom: 0;
+  left: var(--rail-w); right: calc(50% - var(--rail-w) / 2);
+}
+body.panes-quad #cesiumContainer {
+  top: 0; bottom: 50%;
+  left: var(--rail-w); right: calc(50% - var(--rail-w) / 2);
+}
 
 #panegrid {
   position: absolute; inset: 0; z-index: 6;
@@ -2524,3 +2535,703 @@ body.is-selecting-counties #scenebar { display: none; }
 
 #scene-note { margin: 2px 0 6px; }
 #scene-note.is-bad { color: var(--bad); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WEATHERFRONT SHELL
+   Reworked 2026-08-04 against the reference app's own frames rather than a
+   description of them. What changed, and why each one matters:
+
+     · the rail DOCKS. It ran as a translucent card floating over the globe;
+       the reference app runs a full-height opaque panel that the map starts
+       to the right of. Everything that draws over the map -- the pane grid,
+       the broadcast graphics, the still-slide layer -- is inset with the
+       canvas, so the broadcast frame is now exactly the map area.
+     · identity, tabs and tools stack in the rail head instead of being
+       scattered across the top bar and a floating strip on the globe.
+     · divisions are a 3-across pill grid, not a wrapped chip row.
+     · controls are label-left / value-right rows separated by hairlines, and
+       product choices are plain lists under small-caps group headings.
+     · the colour scale is a vertical bar on the right edge of the map.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --rail-w: 300px;
+  --rail-bg: #0b0e13;
+  --rail-edge: rgba(255, 255, 255, 0.09);
+  --rail-hover: rgba(255, 255, 255, 0.05);
+  --rail-sel: rgba(255, 255, 255, 0.08);
+}
+
+/* The map area. Every layer that draws over the globe shares this inset so
+   nothing is composed against a frame the viewer cannot see. */
+#cesiumContainer,
+#panegrid,
+#scene-still,
+#gfx { left: var(--rail-w); }
+
+body.rail-collapsed { --rail-w: 0px; }
+body.is-presenting  { --rail-w: 0px; }
+
+/* ---- The dock ---- */
+#hud {
+  position: absolute;
+  top: 56px; left: 0; bottom: 0;
+  width: var(--rail-w);
+  border: 0;
+  border-right: 1px solid var(--rail-edge);
+  border-radius: 0;
+  background: var(--rail-bg);
+  backdrop-filter: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: width 180ms ease;
+}
+body.rail-collapsed #hud { border-right-width: 0; }
+
+/* Reopening a collapsed rail needs a handle that is not inside the rail. */
+#rail-open {
+  position: absolute; top: 66px; left: 10px; z-index: 11;
+  display: none;
+  appearance: none; cursor: pointer;
+  background: var(--rail-bg);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-family: var(--sans); font-size: var(--fs-base);
+  line-height: 1; padding: 7px 9px;
+}
+#rail-open:hover { color: var(--text); }
+body.rail-collapsed #rail-open { display: block; }
+body.is-presenting #rail-open { display: none; }
+
+/* ---- Rail head ---- */
+#rail-head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 10px 10px 12px;
+  border-bottom: 1px solid var(--rail-edge);
+}
+.rb-mark {
+  width: 13px; height: 13px; flex: 0 0 auto;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.rb-name {
+  flex: 1 1 auto; min-width: 0;
+  font-family: var(--sans); font-size: var(--fs-sm); font-weight: 700;
+  letter-spacing: var(--tr-wide); color: var(--text);
+  white-space: nowrap; overflow: hidden;
+}
+.rail-icon {
+  flex: 0 0 auto;
+  appearance: none; background: none; border: 0; cursor: pointer;
+  color: var(--text-mute); font-size: var(--fs-base); line-height: 1;
+  padding: 4px 5px; border-radius: var(--r-sm);
+  transition: color 140ms ease, background 140ms ease;
+}
+.rail-icon:hover { color: var(--text); background: var(--rail-hover); }
+
+/* ---- Mode tabs ---- */
+#hud-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  background: none;
+  border-bottom: 1px solid var(--rail-edge);
+  padding: 0 6px;
+}
+.hud-tab {
+  flex: 1;
+  appearance: none; background: none; border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-mute);
+  font-family: var(--sans); font-size: var(--fs-base); font-weight: 500;
+  letter-spacing: var(--tr-tight);
+  padding: 10px 2px 8px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.hud-tab:hover { color: var(--text-dim); background: none; }
+.hud-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: none;
+  font-weight: 600;
+}
+
+/* ---- Tool icons ---- */
+#rail-tools {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 3px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--rail-edge);
+}
+#rail-tools #drawbar,
+#rail-tools #panebar {
+  display: flex; align-items: center; gap: 3px;
+  background: none; border: 0; border-radius: 0; padding: 0;
+  backdrop-filter: none;
+}
+#rail-tools #drawbar.is-drawing { box-shadow: none; }
+#rail-tools #drawbar.is-drawing .tool-btn[aria-pressed="true"] {
+  color: var(--accent); background: rgba(77, 210, 255, 0.14);
+}
+.rt-sep { width: 1px; height: 16px; background: var(--rail-edge); margin: 0 4px; }
+
+/* ---- Division grid ---- */
+.div-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  margin-bottom: 14px;
+}
+.div-grid .chip {
+  appearance: none; cursor: pointer;
+  background: rgba(255, 255, 255, 0.055);
+  border: 0; border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-family: var(--sans); font-size: var(--fs-xs); font-weight: 600;
+  letter-spacing: var(--tr-tight);
+  padding: 7px 3px;
+  text-align: center;
+  transition: background 140ms ease, color 140ms ease;
+}
+.div-grid .chip:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.div-grid .chip.is-active {
+  background: var(--accent); color: #04141c; border: 0;
+}
+
+/* ---- Control rows: label left, value right, hairline between ---- */
+.wf-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--panel-rule);
+}
+.wf-row-l {
+  flex: 0 0 auto;
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 600;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+}
+.wf-row-v {
+  flex: 1 1 auto; min-width: 0; text-align: right;
+  appearance: none; background: none; border: 0;
+  color: var(--text); font-family: var(--sans); font-size: var(--fs-base);
+  cursor: pointer;
+  padding: 0 16px 0 0;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: right 5px center, right 1px center;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.wf-row-v:focus { outline: none; color: var(--accent); }
+.wf-row-v option { background: var(--rail-bg); color: var(--text); }
+.wf-row-btn .sm-btn { margin-left: auto; }
+
+/* ---- Section captions ---- */
+.wf-sec {
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+  margin: 14px 0 5px;
+}
+.wf-sec:first-child { margin-top: 0; }
+
+/* ---- Accordions ---- */
+.wf-acc { border-bottom: 1px solid var(--panel-rule); }
+.wf-acc > summary {
+  display: flex; align-items: center; gap: 8px;
+  list-style: none; cursor: pointer;
+  padding: 11px 2px;
+  font-family: var(--sans); font-size: var(--fs-base); font-weight: 500;
+  color: var(--text-dim);
+}
+.wf-acc > summary::-webkit-details-marker { display: none; }
+.wf-acc > summary::before {
+  content: '\203A';
+  display: inline-block; width: 10px;
+  color: var(--text-mute); font-size: var(--fs-base);
+  transition: transform 140ms ease;
+}
+.wf-acc[open] > summary::before { transform: rotate(90deg); }
+.wf-acc > summary:hover { color: var(--text); }
+.wf-acc-t { flex: 1 1 auto; }
+.wf-acc-n {
+  flex: 0 0 auto;
+  font-family: var(--mono); font-size: var(--fs-micro);
+  color: var(--text-mute);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: var(--r-md); padding: 1px 6px;
+}
+
+/* ---- Product lists ---- */
+.wf-grp {
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+  margin: 10px 0 3px 10px;
+}
+.wf-item {
+  display: block; width: 100%; text-align: left;
+  appearance: none; background: none; border: 0; cursor: pointer;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-family: var(--sans); font-size: var(--fs-base);
+  padding: 6px 8px 6px 10px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.wf-item:hover { background: var(--rail-hover); color: var(--text); }
+.wf-item.is-active {
+  background: var(--rail-sel); color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* ---- Segmented row (radar tilt) ---- */
+.wf-seg { display: flex; gap: 3px; flex-wrap: wrap; }
+.wf-seg-b {
+  appearance: none; cursor: pointer;
+  background: rgba(255, 255, 255, 0.055); border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-family: var(--mono); font-size: var(--fs-xs);
+  padding: 5px 7px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.wf-seg-b:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.wf-seg-b.is-active { background: var(--accent); color: #04141c; }
+.wf-seg-b:disabled { opacity: 0.3; cursor: default; }
+
+/* ---- Pane padding ---- */
+.hud-pane { padding: 14px 12px 20px; }
+
+/* ---- "Open dashboard" buttons ---- */
+.dash-open {
+  display: block; width: 100%;
+  appearance: none; cursor: pointer;
+  margin-top: 10px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-family: var(--sans); font-size: var(--fs-xs); font-weight: 600;
+  letter-spacing: var(--tr-tight);
+  padding: 9px 8px;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.dash-open:hover {
+  background: rgba(77, 210, 255, 0.1);
+  border-color: rgba(77, 210, 255, 0.35);
+  color: var(--text);
+}
+
+/* ---- NWS Alerts tab: type census ---- */
+.al-types { padding-bottom: 6px; }
+.al-type {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  appearance: none; background: none; border: 0; cursor: pointer;
+  border-radius: var(--r-sm);
+  padding: 5px 8px 5px 4px;
+  text-align: left;
+  transition: background 120ms ease;
+}
+.al-type:hover { background: var(--rail-hover); }
+.al-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--ad, #64748b); }
+.al-name {
+  flex: 1 1 auto; min-width: 0;
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-dim);
+  line-height: 1.35;
+}
+.al-type:hover .al-name { color: var(--text); }
+.al-n { flex: 0 0 auto; font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-mute); }
+.al-empty { font-size: var(--fs-xs); color: var(--text-mute); padding: 8px 4px; }
+
+/* ---- Colour scale: vertical, right edge of the map ---- */
+#legend {
+  right: 14px; left: auto;
+  top: 50%; bottom: auto;
+  transform: translateY(-50%);
+  width: auto;
+  padding: 10px 10px 10px 9px;
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+}
+#legend.hidden { display: none; }
+.lg-head { flex-direction: column; align-items: center; gap: 2px; margin: 0; }
+#lg-title {
+  writing-mode: vertical-rl; text-orientation: mixed;
+  transform: rotate(180deg);
+  max-height: 128px; overflow: hidden;
+}
+#lg-unit { font-family: var(--mono); }
+.lg-scale { display: flex; align-items: stretch; gap: 6px; }
+#lg-bar { width: 10px; height: 232px; border-radius: var(--r-sm); }
+#lg-ticks {
+  display: flex; flex-direction: column; justify-content: space-between;
+  margin: 0; font-size: var(--fs-micro); color: var(--text-mute);
+  text-align: left;
+}
+
+/* ---- Transport: three round buttons over a dotted scrub track ---- */
+#timeline {
+  left: calc(var(--rail-w) + 20px); right: 20px;
+  width: auto; transform: none;
+  bottom: 18px;
+  background: none; border: 0; backdrop-filter: none;
+  padding: 0;
+  gap: 10px;
+}
+#timeline .tl-btn {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 50%;
+  backdrop-filter: blur(8px);
+  padding: 0;
+}
+#timeline .tl-btn:hover { background: rgba(28, 34, 44, 0.96); color: var(--text); }
+#timeline .tl-play { color: var(--accent); }
+#tl-track::before {
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.28) 0 2px,
+    transparent 2px 7px);
+  border-radius: 0;
+}
+#tl-fill { height: 2px; border-radius: 0; }
+#tl-label {
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  padding: 5px 8px;
+  backdrop-filter: blur(8px);
+  font-family: var(--mono); font-size: var(--fs-xs);
+}
+.tl-speed { backdrop-filter: blur(8px); }
+
+/* The feed strip shared the bottom-right corner with the transport. The
+   transport now spans the map, so the strip moves above it. */
+#feedstrip { bottom: 60px; }
+
+/* Bottom-centre lanes clear the docked rail. */
+#scenebar, #countybar { left: calc(50% + var(--rail-w) / 2); }
+#present-exit { left: 22px; }
+
+/* Chrome that used to be positioned against a floating rail. */
+#alerts-panel { left: calc(var(--rail-w) + 14px); }
+#ticker       { left: calc(var(--rail-w) + 14px); }
+#history-strip{ left: calc(var(--rail-w) + 14px); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DIVISION DASHBOARDS
+   One shell, five boards. Full frame rather than a modal card, because these
+   answer "show me everything this division knows" and that will not compress
+   into a 300px rail — the same reason the world-population board is full
+   frame. Every board reads its feed on open and every 30 s after.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+#dashboard {
+  position: absolute; inset: 0; z-index: 40;
+  background: linear-gradient(180deg, #070a0f 0%, #05070b 100%);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#dashboard.hidden { display: none; }
+
+.db-head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 14px;
+  padding: 18px 24px 16px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.db-mark {
+  width: 20px; height: 20px; flex: 0 0 auto;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.db-id { flex: 1 1 auto; min-width: 0; }
+.db-id h1 {
+  margin: 0;
+  font-family: var(--sans); font-size: var(--fs-2xl); font-weight: 700;
+  letter-spacing: var(--tr-xwide); color: var(--text);
+}
+.db-id p {
+  margin: 3px 0 0;
+  font-family: var(--sans); font-size: var(--fs-xs); color: var(--text-mute);
+  letter-spacing: var(--tr-tight);
+}
+.db-live {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); color: var(--ok);
+}
+.db-live i {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+  animation: db-pulse 2.4s ease-in-out infinite;
+}
+@keyframes db-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+#db-clock { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--text-dim); }
+#db-close {
+  flex: 0 0 auto;
+  appearance: none; background: none; border: 0; cursor: pointer;
+  color: var(--text-mute); font-size: var(--fs-xl); line-height: 1;
+  padding: 2px 8px; border-radius: var(--r-sm);
+}
+#db-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+
+.db-body { flex: 1 1 auto; overflow-y: auto; padding: 20px 24px 32px; }
+.db-loading { font-size: var(--fs-base); color: var(--text-mute); padding: 24px 2px; }
+
+.db-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.db-w2 { grid-column: span 2; }
+.db-w3 { grid-column: 1 / -1; }
+@media (max-width: 1180px) {
+  .db-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .db-w2, .db-w3 { grid-column: 1 / -1; }
+}
+
+.db-card {
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  padding: 14px 16px 16px;
+  min-width: 0;
+}
+.db-card-h {
+  margin: 0 0 12px;
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+/* ---- Big numbers ---- */
+.db-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 14px;
+}
+.db-stat { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.db-stat-v {
+  font-size: var(--fs-2xl); font-weight: 600; color: var(--text);
+  line-height: 1.1; letter-spacing: var(--tr-tight);
+}
+.db-stat-k {
+  font-family: var(--sans); font-size: var(--fs-xs); color: var(--text-mute);
+  letter-spacing: var(--tr-tight);
+}
+
+/* ---- Ranked bars ---- */
+.db-bars { display: flex; flex-direction: column; gap: 6px; }
+.db-bar-row { display: flex; align-items: center; gap: 9px; }
+.db-bar-k {
+  flex: 0 0 128px; min-width: 0;
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.db-bar-t {
+  flex: 1 1 auto; height: 7px; border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.055); overflow: hidden;
+}
+.db-bar-t i { display: block; height: 100%; border-radius: var(--r-sm); }
+.db-bar-n { flex: 0 0 44px; text-align: right; font-size: var(--fs-xs); color: var(--text); }
+
+/* ---- Tables ---- */
+.db-table { width: 100%; border-collapse: collapse; }
+.db-table th {
+  text-align: left; padding: 0 10px 7px 0;
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+  border-bottom: 1px solid var(--panel-rule);
+  white-space: nowrap;
+}
+.db-table td {
+  padding: 8px 10px 8px 0;
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-dim);
+  border-bottom: 1px solid var(--panel-rule);
+  vertical-align: top;
+}
+.db-table tr.is-clickable { cursor: pointer; }
+.db-table tr.is-clickable:hover td { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+.db-table .mono { font-family: var(--mono); font-size: var(--fs-xs); }
+
+.db-empty {
+  margin: 0; padding: 14px 2px;
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-mute);
+  line-height: 1.55;
+}
+.db-note {
+  margin: 0;
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-dim);
+  line-height: 1.6; max-width: 78ch;
+}
+
+/* ---- Storm cards ---- */
+.db-storms { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.db-storm {
+  cursor: pointer;
+  border-left: 3px solid var(--sc, var(--accent));
+  background: rgba(255, 255, 255, 0.035);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  padding: 11px 13px;
+  transition: background 140ms ease;
+}
+.db-storm:hover { background: rgba(255, 255, 255, 0.075); }
+.db-storm-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.db-storm-n {
+  font-family: var(--sans); font-size: var(--fs-lg); font-weight: 700;
+  letter-spacing: var(--tr-tight); color: var(--text);
+}
+.db-storm-c {
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); text-transform: uppercase; color: var(--sc);
+}
+.db-storm-g {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px;
+  font-family: var(--sans); font-size: var(--fs-xs); color: var(--text-mute);
+}
+.db-storm-g b { color: var(--text); font-weight: 600; margin-right: 2px; }
+.db-storm-s { margin-top: 6px; font-size: var(--fs-xs); color: var(--text-dim); }
+
+/* ---- Scales ---- */
+.db-scale { display: flex; flex-direction: column; gap: 2px; }
+.db-scale-r {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 6px; border-radius: var(--r-sm);
+  font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-dim);
+}
+.db-scale-r i { width: 12px; height: 12px; border-radius: 2px; flex: 0 0 auto; }
+.db-scale-r span:nth-of-type(1) { flex: 1 1 auto; }
+.db-scale-r span:nth-of-type(2) { color: var(--text-mute); font-size: var(--fs-xs); }
+.db-scale-r.is-now { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+
+/* ---- The broadcast frame starts under the telemetry bar ----
+   #gfx is inset with the canvas now, but the canvas runs full-bleed behind the
+   top bar on purpose (the globe reads better without a hard edge there). A
+   graphic anchored top-left was landing on the clock. */
+:root { --top-h: 56px; }
+body.is-presenting { --top-h: 0px; }
+#gfx { top: var(--top-h); }
+
+/* ---- Colour scale as a standing bar ----
+   Anchored to the middle of an edge it stands up, the way the reference app
+   draws it; anywhere else it keeps the horizontal layout. */
+.gfx-scale.is-vertical {
+  min-width: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding-bottom: 4px;
+}
+.gfx-scale.is-vertical .gfx-scale-head {
+  flex-direction: column-reverse; align-items: center; gap: 2px;
+  padding: 7px 9px 5px;
+}
+.gfx-scale.is-vertical .gfx-scale-head span:first-child {
+  writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
+  max-height: 122px; overflow: hidden;
+}
+.gfx-scale.is-vertical .gfx-scale-bar {
+  width: 9px; height: 216px; margin: 0;
+}
+.gfx-scale.is-vertical .gfx-scale-ticks {
+  flex-direction: column; justify-content: space-between;
+  padding: 0; text-align: left;
+}
+
+/* Bar and ticks share a box: stacked when the ramp lies down, side by side
+   when it stands up. */
+.gfx-scale-body { display: flex; flex-direction: column; }
+.gfx-scale.is-vertical .gfx-scale-body {
+  flex-direction: row; align-items: stretch; gap: 6px;
+  padding: 0 10px 6px;
+}
+
+/* ---- Rail tool icons ---- */
+#rail-tools .tool-btn { padding: 4px 6px; font-size: var(--fs-base); }
+#rail-tools .tool-swatch { width: 13px; height: 13px; }
+#rail-tools .seg-b { min-width: 22px; padding: 3px 5px; font-size: var(--fs-xs); }
+
+/* ---- Base map picker inside the Mapping division ---- */
+#basemapbar {
+  display: block; padding: 0; margin: 0;
+  background: none; border: 0; backdrop-filter: none;
+}
+#basemapbar #theme-picker {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+}
+#basemapbar .theme-btn { width: auto; }
+
+/* Division pills sit on a near-black rail, so --text-dim at 10px was reading
+   as disabled next to the accent-filled active pill. */
+.div-grid .chip { color: #b3bdca; }
+
+/* ---- Every control row gets the reference app's shape ----
+   .ctl predates .wf-row and does the same job in the divisions that were not
+   rewritten by hand. Restyling the class rather than editing thirty markup
+   sites keeps one definition of what a control row looks like. */
+.ctl {
+  gap: 8px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--panel-rule);
+}
+.ctl-l {
+  flex: 0 0 auto;
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 600;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+}
+.ctl-sel {
+  flex: 1 1 auto; min-width: 0; text-align: right;
+  appearance: none; background: none; border: 0;
+  color: var(--text); font-family: var(--sans); font-size: var(--fs-base);
+  cursor: pointer;
+  padding: 0 16px 0 0;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: right 5px center, right 1px center;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.ctl-sel:focus { outline: none; color: var(--accent); }
+.ctl-sel option, .ctl-sel optgroup { background: var(--rail-bg); color: var(--text); }
+
+/* ---- Layer groups in the Earth and Sky divisions ----
+   These rows were unstyled: the rules were written against #layers and the
+   containers have been #layers-earth / #layers-sky since the tabs were split,
+   so every selector missed and the rows rendered as raw browser checkboxes
+   running together on one line. Now scoped by class, and dressed to match the
+   rest of the rail. */
+.layer-list .cat { border-top: 0; border-bottom: 1px solid var(--panel-rule); padding: 0; }
+.layer-list .cat > summary {
+  padding: 10px 2px;
+  font-family: var(--sans); font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); color: var(--text-mute);
+}
+.layer-list .cat > summary::before { content: ''; width: 0; margin: 0; }
+.layer-list .cat[open] > summary::before { content: ''; }
+.layer-list label {
+  padding: 6px 8px 6px 2px;
+  font-size: var(--fs-base);
+  color: var(--text-dim);
+}
+.layer-list label .count {
+  flex: 0 0 auto;
+  font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-mute);
+}
+.layer-list .cat { padding-bottom: 6px; }
+
+/* ---- Switch rows ---- */
+.sw { padding: 7px 4px; font-size: var(--fs-base); }
+.sw .count {
+  flex: 0 0 auto;
+  font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-mute);
+}

@@ -389,6 +389,7 @@ const TICKER_MAX = 6;
   initGraphics();
   initScenes();
   initDynamicLod();
+  initWeatherfrontShell();
   applyInitialLayerState();
   refreshLegend();
   syncControlAvailability();
@@ -1470,9 +1471,13 @@ function formatAltitude(meters) {
   return formatKm(meters);
 }
 
+/* Scoped to the feed strip. It used to walk EVERY .chip in the document and
+   stamp data-state on it -- and the division pills in the rail carry the same
+   class, so each one picked up data-state="off" and with it the 0.45 opacity
+   meant for a dead feed. That is why the selected division read as disabled. */
 function refreshFeedChips() {
   const now = Date.now();
-  document.querySelectorAll('.chip').forEach((el) => {
+  document.querySelectorAll('#feedstrip-chips .chip').forEach((el) => {
     const f = el.dataset.feed;
     const last = feedActivity[f];
     const meta = FEED_BY_ID[f] || {};
@@ -1492,7 +1497,7 @@ function noteFeed(layer) {
   feedActivity[layer] = Date.now();
   refreshFeedChips();
   // Brief flicker on the matching chip to signal fresh data
-  const chip = document.querySelector(`.chip[data-feed="${layer}"]`);
+  const chip = document.querySelector(`#feedstrip-chips .chip[data-feed="${layer}"]`);
   if (chip) {
     chip.classList.remove('flicker');
     void chip.offsetWidth;       // restart the keyframe
@@ -2209,6 +2214,7 @@ function toggleAurora(on) {
 
 function applySpaceWeather(blob) {
   if (!blob) return;
+  SPACE_WX = blob;                 // the space-weather dashboard reads this
   const kpEl = document.getElementById('tm-kp');
   const xEl  = document.getElementById('tm-xray');
 
@@ -4900,24 +4906,41 @@ function initTabs() {
     });
   });
 
-  // Restore last tab.
+  // Restore last tab. The rail used to have five tabs (WEATHER / EARTH / SKY /
+  // WORLD / GFX); four of those are divisions inside Data now, so a stored
+  // name from before the change is translated rather than ignored -- otherwise
+  // anyone whose last session ended on EARTH gets a rail that looks reset.
+  const TAB_ALIAS = {
+    weather: 'data', earth: 'data', sky: 'data', world: 'data', graphics: 'broadcast',
+  };
+  const DIVISION_FROM_TAB = { earth: 'earth', sky: 'sky', world: 'world' };
   let saved = null;
   try { saved = localStorage.getItem('graticule.tab'); } catch {}
   if (saved) {
-    const t = tabs.find((x) => x.dataset.tab === saved);
+    const t = tabs.find((x) => x.dataset.tab === (TAB_ALIAS[saved] || saved));
     if (t) t.click();
   }
 
-  // Mode chips inside the weather tab.
+  // Divisions inside the Data tab.
   const chips  = Array.from(document.querySelectorAll('#wx-modes .chip'));
   const bodies = Array.from(document.querySelectorAll('[data-mode-body]'));
+  const selectDivision = (name) => {
+    const chip = chips.find((c) => c.dataset.mode === name);
+    if (!chip) return false;
+    chips.forEach((c) => c.classList.toggle('is-active', c === chip));
+    bodies.forEach((b) => b.classList.toggle('is-active', b.dataset.modeBody === name));
+    applyLegendFor(name);
+    try { localStorage.setItem('graticule.division', name); } catch {}
+    return true;
+  };
   chips.forEach((chip) => {
-    chip.addEventListener('click', () => {
-      chips.forEach((c) => c.classList.toggle('is-active', c === chip));
-      bodies.forEach((b) => b.classList.toggle('is-active', b.dataset.modeBody === chip.dataset.mode));
-      applyLegendFor(chip.dataset.mode);
-    });
+    chip.addEventListener('click', () => selectDivision(chip.dataset.mode));
   });
+
+  // Restore the division too, preferring the one implied by an old tab name.
+  let div = null;
+  try { div = localStorage.getItem('graticule.division'); } catch {}
+  selectDivision(DIVISION_FROM_TAB[saved] || div || 'radar');
 }
 
 // ---------- Radar / satellite timeline --------------------------------------
@@ -5173,10 +5196,13 @@ function applyLegendFor(mode) {
   el.classList.remove('hidden');
   document.getElementById('lg-title').textContent = scale.title;
   document.getElementById('lg-unit').textContent  = scale.unit;
+  // Vertical, pinned to the right edge of the map, the way every broadcast
+  // radar app draws a colour scale. 0deg runs bottom-to-top, so the stops keep
+  // their low-to-high order and the tick column is reversed to match.
   document.getElementById('lg-bar').style.background =
-    `linear-gradient(90deg, ${scale.stops.join(', ')})`;
+    `linear-gradient(0deg, ${scale.stops.join(', ')})`;
   document.getElementById('lg-ticks').innerHTML =
-    scale.ticks.map((t) => `<span>${t}</span>`).join('');
+    scale.ticks.slice().reverse().map((t) => `<span>${t}</span>`).join('');
 }
 
 // ---------- WORLD pane -------------------------------------------------------
@@ -5260,9 +5286,13 @@ function renderWorldStatic() {
 }
 
 function updateWorldPane() {
-  // Only compute while the pane is on screen; this ticks every second.
-  const pane = document.querySelector('.hud-pane[data-pane="world"]');
+  // Only compute while the division is on screen; this ticks every second.
+  // World stopped being a top-level tab when the rail moved to Weatherfront's
+  // shape -- it is a division inside Data now, so the gate is the mode body.
+  const pane = document.querySelector('[data-mode-body="world"]');
   if (!pane || !pane.classList.contains('is-active')) return;
+  const tab = document.querySelector('.hud-pane[data-pane="data"]');
+  if (!tab || !tab.classList.contains('is-active')) return;
 
   const now = Date.now() / 1000;
   const d   = new Date();
@@ -5414,8 +5444,21 @@ function nearestRadarSite() {
   } catch { return 'KTLX'; }
 }
 
-// Iowa State Mesonet serves per-site NEXRAD as public XYZ tiles — no key, and
-// separate layers for reflectivity (N0Q) and velocity (N0U).
+// IEM RIDGE product codes, every one of them verified 200 at KDMX, KMPX and
+// KFWS before it was listed. The ones NOT here were checked too and answer
+// 503: N0R, DVL, DAA, NTP and the whole dual-pol set (N0X/N0C/N0K/N0H), plus
+// every higher tilt (N1Q, N2Q, N3Q and their velocity twins) — which is why
+// the division carries no tilt selector.
+const RIDGE_PRODUCT = {
+  reflectivity:        'N0B',   // super-res base reflectivity, 0.5°
+  reflectivity_legacy: 'N0Q',   // legacy base reflectivity, 0.5°
+  velocity:            'N0U',   // base velocity
+  srv:                 'N0S',   // storm relative velocity
+  longrange:           'N0Z',   // long-range reflectivity
+  echotops:            'NET',   // echo tops
+};
+
+// Iowa State Mesonet serves per-site NEXRAD as public XYZ tiles — no key.
 function toggleRadarSite(on) {
   if (!on) {
     if (radarSiteLayer) {
@@ -5436,7 +5479,7 @@ function rebuildRadarSiteLayer() {
   const sel  = document.getElementById('radar-site');
   const prod = document.getElementById('radar-product');
   const site = (sel && sel.value) || nearestRadarSite();
-  const kind = (prod && prod.value) === 'velocity' ? 'N0U' : 'N0Q';
+  const kind = RIDGE_PRODUCT[(prod && prod.value)] || 'N0B';
 
   // A single-site product only exists inside that radar's ~460 km range.
   // Without a bounding rectangle Cesium requests tiles for the whole globe and
@@ -5944,9 +5987,9 @@ function applyLegendForField(def) {
   document.getElementById('lg-title').textContent = def.legend;
   document.getElementById('lg-unit').textContent  = def.unit;
   document.getElementById('lg-bar').style.background =
-    `linear-gradient(90deg, ${def.stops.map((s) => s[1]).join(', ')})`;
+    `linear-gradient(0deg, ${def.stops.map((s) => s[1]).join(', ')})`;
   document.getElementById('lg-ticks').innerHTML =
-    def.ticks.map((t) => `<span>${t}</span>`).join('');
+    def.ticks.slice().reverse().map((t) => `<span>${t}</span>`).join('');
 }
 
 // ---------- Air quality ------------------------------------------------------
@@ -8598,7 +8641,10 @@ const GFX_POS = ['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br'];
 
    The bottom inset clears the transport in both, because the timeline is one
    of the few pieces of chrome that deliberately survives presenting. */
-const GFX_INSET = { top: 58, left: 296, right: 20, bottom: 66 };
+// #gfx is inset by the rail along with the canvas now, so its own left inset
+// is a margin inside the map area rather than a hardcoded clearance for a
+// panel floating on top of it.
+const GFX_INSET = { top: 22, left: 22, right: 20, bottom: 66 };
 const GFX_INSET_PRESENT = { top: 22, left: 22, right: 22, bottom: 66 };
 
 const GFX_STYLE_NAMES = { 1: 'Rule', 2: 'Solid', 3: 'Bar' };
@@ -8636,7 +8682,7 @@ function gfxDefaultConfig() {
     // On by default. The HUD legend is hidden on air, so leaving this off
     // would mean presenting a radar loop with no key to its colours; and it
     // draws nothing at all unless a live ramp is actually on the globe.
-    scale:   { on: true,  style: 1, pos: 'bl', scale: 100, dx: 0, dy: 0 },
+    scale:   { on: true,  style: 1, pos: 'mr', scale: 100, dx: 0, dy: 0 },
     bug:     { on: false, style: 1, pos: 'br', scale: 100, dx: 0, dy: 0, text: 'GRATICULE' },
   };
 }
@@ -8968,13 +9014,29 @@ function gfxRenderScale(cfg) {
   const head = document.createElement('div');
   head.className = 'gfx-scale-head';
   head.innerHTML = `<span>${d.title}</span><span class="mono">${d.unit}</span>`;
+  // Orientation follows the anchor. Parked in the middle of an edge -- where
+  // the reference app puts its colour bar -- it stands up; anywhere else it
+  // lies down, which is what a graphic in a corner has room to do. Deriving it
+  // means an operator who already moved this graphic keeps the layout they
+  // chose instead of finding it rotated after an update.
+  const vertical = cfg.pos === 'ml' || cfg.pos === 'mr';
+  el.classList.toggle('is-vertical', vertical);
   const bar = document.createElement('div');
   bar.className = 'gfx-scale-bar';
-  bar.style.background = `linear-gradient(90deg, ${d.stops.join(', ')})`;
+  bar.style.background = vertical
+    ? `linear-gradient(0deg, ${d.stops.join(', ')})`
+    : `linear-gradient(90deg, ${d.stops.join(', ')})`;
   const ticks = document.createElement('div');
   ticks.className = 'gfx-scale-ticks mono';
-  ticks.innerHTML = d.ticks.map((t) => `<span>${t}</span>`).join('');
-  el.append(head, bar, ticks);
+  const order = vertical ? d.ticks.slice().reverse() : d.ticks;
+  ticks.innerHTML = order.map((t) => `<span>${t}</span>`).join('');
+  // Bar and ticks share a box so the labels can sit beside the ramp when it is
+  // standing and under it when it is lying down. Absolutely positioning them
+  // against the graphic would have measured against the caption too.
+  const body = document.createElement('div');
+  body.className = 'gfx-scale-body';
+  body.append(bar, ticks);
+  el.append(head, body);
 }
 
 function gfxRenderBug(cfg) {
@@ -9734,4 +9796,850 @@ function initScenes() {
   });
 
   sceneApplyIndex();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  WEATHERFRONT SHELL
+//
+//  The rail behaviours that came with docking it, the product list that
+//  replaced a two-item dropdown, the NWS Alerts tab, and the division
+//  dashboards.
+//
+//  One rule runs through all of it, and it is the same rule that fixed the
+//  alerts panel: a view reads the FEED, not the scene. Every dashboard here
+//  fetches or reads the raw records, so opening the tropical board does not
+//  require the hurricane layer to be switched on first, and a board is honest
+//  about an empty feed instead of rendering a blank card.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ---------- Rail: collapse ---------------------------------------------------
+
+function railSetCollapsed(on) {
+  document.body.classList.toggle('rail-collapsed', !!on);
+  try { localStorage.setItem('graticule.rail', on ? 'closed' : 'open'); } catch {}
+  // The canvas is sized by its container, and the container just changed width
+  // without the window resizing -- Cesium only re-reads that on its own resize
+  // event, so without this the globe keeps rendering at the old width and the
+  // picking maths goes with it.
+  const settle = () => { if (viewer) { viewer.resize(); viewer.scene.requestRender(); } };
+  settle();
+  setTimeout(settle, 200);   // again after the width transition finishes
+}
+
+function initRailShell() {
+  document.getElementById('rail-collapse')?.addEventListener('click', () => railSetCollapsed(true));
+  document.getElementById('rail-open')?.addEventListener('click', () => railSetCollapsed(false));
+
+  let saved = null;
+  try { saved = localStorage.getItem('graticule.rail'); } catch {}
+  if (saved === 'closed') railSetCollapsed(true);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '\\' || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    e.preventDefault();
+    railSetCollapsed(!document.body.classList.contains('rail-collapsed'));
+  });
+
+  // Presentation mode collapses the rail to zero width via CSS. The canvas
+  // needs the same nudge it gets from a manual collapse.
+  const btn = document.getElementById('present-btn');
+  if (btn) btn.addEventListener('click', () => {
+    setTimeout(() => { if (viewer) { viewer.resize(); viewer.scene.requestRender(); } }, 220);
+  });
+}
+
+// ---------- Radar: product list ---------------------------------------------
+//
+// The reference app lists radar products as plain rows under group headings
+// instead of hiding them in a select. The select survives as the state holder
+// so rebuildRadarSiteLayer() still has exactly one input to read.
+
+function initRadarProductList() {
+  const sel = document.getElementById('radar-product');
+  const items = Array.from(document.querySelectorAll('.wf-item[data-product]'));
+  if (!sel || !items.length) return;
+  items.forEach((it) => {
+    it.addEventListener('click', () => {
+      items.forEach((x) => x.classList.toggle('is-active', x === it));
+      sel.value = it.dataset.product;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+  // Reflect whatever the select already holds, so the two never disagree.
+  const active = items.find((x) => x.dataset.product === sel.value) || items[0];
+  items.forEach((x) => x.classList.toggle('is-active', x === active));
+  sel.value = active.dataset.product;
+}
+
+// ---------- Mapping division: mirrors of two Settings controls ---------------
+//
+// Area darkening is scoped mid-broadcast, so its switch belongs in the rail.
+// The Settings copies stay -- these two write through to them rather than
+// keeping a second copy of the state.
+
+function initMappingMirrors() {
+  const src = document.getElementById('ad-enabled');
+  const mirror = document.getElementById('ad-enabled-2');
+  if (src && mirror) {
+    mirror.checked = src.checked;
+    mirror.addEventListener('change', () => {
+      if (src.checked === mirror.checked) return;
+      src.checked = mirror.checked;
+      src.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    src.addEventListener('change', () => { mirror.checked = src.checked; });
+  }
+  document.getElementById('ad-select-2')?.addEventListener('click', () => {
+    document.getElementById('ad-select')?.click();
+  });
+}
+
+// ---------- NWS Alerts tab ---------------------------------------------------
+//
+// Weatherfront's second rail tab: a census of what is in effect by type, then
+// the products themselves. Both halves read warnFeatures, which is kept fresh
+// whether or not the polygon layer is drawing.
+
+function alScope() {
+  const el = document.getElementById('al-scope');
+  return (el && el.value) || 'all';
+}
+
+/* Alerts that pass the current scope. "In view" uses the camera rectangle so
+   the census answers "what is in effect where I am looking", which is the
+   question a presenter is actually asking. */
+function alFiltered() {
+  const list = warnFeatures || [];
+  const scope = alScope();
+  if (scope === 'warnings') {
+    return list.filter((f) => /warning/i.test(f.properties?.event || ''));
+  }
+  if (scope === 'view') {
+    const rect = viewer && viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
+    if (!rect) return list;
+    const w = Cesium.Math.toDegrees(rect.west),  e = Cesium.Math.toDegrees(rect.east);
+    const s = Cesium.Math.toDegrees(rect.south), n = Cesium.Math.toDegrees(rect.north);
+    return list.filter((f) => {
+      const g = f.geometry;
+      if (!g) return false;                      // zone-only alert: no position to test
+      const polys = g.type === 'Polygon' ? [g.coordinates]
+                  : g.type === 'MultiPolygon' ? g.coordinates : [];
+      for (const poly of polys) {
+        for (const [x, y] of (poly[0] || [])) {
+          if (y >= s && y <= n && x >= Math.min(w, e) && x <= Math.max(w, e)) return true;
+        }
+      }
+      return false;
+    });
+  }
+  return list;
+}
+
+function renderAlertTypes() {
+  const host = document.getElementById('al-types');
+  if (!host) return;
+  const list = alFiltered();
+
+  const counts = new Map();
+  for (const f of list) {
+    const ev = f.properties?.event || 'Unknown';
+    counts.set(ev, (counts.get(ev) || 0) + 1);
+  }
+  const rows = [...counts.entries()].sort((a, b) => {
+    const pa = warnStyle(a[0]).p, pb = warnStyle(b[0]).p;
+    return pb - pa || b[1] - a[1];
+  });
+
+  setText('al-type-n', String(rows.length));
+  setText('al-prod-n', String(list.length));
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="al-empty">Nothing in effect for this scope.</div>';
+    return;
+  }
+  host.innerHTML = rows.map(([ev, n]) =>
+    `<button class="al-type" data-event="${escapeHtml(ev)}" style="--ad:${warnStyle(ev).c}">` +
+    `<span class="al-dot"></span><span class="al-name">${escapeHtml(ev)}</span>` +
+    `<span class="al-n">${n}</span></button>`).join('');
+
+  // Clicking a type flies to the first alert of that type that has a shape.
+  host.querySelectorAll('.al-type').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const f = list.find((x) => (x.properties?.event || '') === btn.dataset.event && x.geometry);
+      if (f) flyToGeometry(f.geometry);
+    });
+  });
+}
+
+function initAlertsTab() {
+  document.getElementById('al-scope')?.addEventListener('change', () => {
+    renderAlertTypes();
+    renderWarningCards();
+  });
+
+  // Keep the tab current with the warning LAYER off. The GFX banner already
+  // polled for its own copy but only while the banner was switched on, so the
+  // tab would have inherited a list that goes stale the moment a presenter
+  // turns the banner off.
+  const poll = async () => {
+    if (warnDS && warnDS.show) return;           // refreshWarnings() owns it
+    if (await fetchWarnFeatures()) {
+      renderWarningCards();
+      renderAlertTypes();
+    }
+  };
+  poll();
+  setInterval(poll, 60_000);
+}
+
+// ---------- Dashboards -------------------------------------------------------
+//
+// Full-frame boards, one per division, opened from the rail. Every one of them
+// re-reads its source on open and every 30 s while it is up, and every one
+// says so when a feed is genuinely empty rather than drawing an empty card.
+
+const DASH = { id: null, timer: null };
+
+// The space-weather blob arrives on the websocket and used to be written
+// straight into the header chips and dropped. The space board needs the same
+// numbers, so applySpaceWeather() keeps a reference here.
+let SPACE_WX = null;
+
+function dashEl() {
+  let el = document.getElementById('dashboard');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'dashboard';
+  el.className = 'hidden';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  el.innerHTML =
+    '<header class="db-head">' +
+      '<span class="db-mark"></span>' +
+      '<div class="db-id"><h1 id="db-title">—</h1><p id="db-sub">—</p></div>' +
+      '<span class="db-live"><i></i>LIVE</span>' +
+      '<span id="db-clock" class="mono">—</span>' +
+      '<button id="db-close" aria-label="Close dashboard">&times;</button>' +
+    '</header>' +
+    '<div id="db-body" class="db-body"></div>';
+  document.body.appendChild(el);
+  el.querySelector('#db-close').addEventListener('click', dashClose);
+  return el;
+}
+
+function dashClose() {
+  DASH.id = null;
+  clearInterval(DASH.timer);
+  DASH.timer = null;
+  dashEl().classList.add('hidden');
+}
+
+async function dashOpen(id) {
+  const def = DASHBOARDS[id];
+  if (!def) return;
+  const el = dashEl();
+  DASH.id = id;
+  el.classList.remove('hidden');
+  setText('db-title', def.title);
+  setText('db-sub', def.sub);
+  document.getElementById('db-body').innerHTML =
+    '<p class="db-loading">Reading the feed…</p>';
+  await dashRefresh();
+  clearInterval(DASH.timer);
+  DASH.timer = setInterval(dashRefresh, 30_000);
+}
+
+async function dashRefresh() {
+  const def = DASHBOARDS[DASH.id];
+  const body = document.getElementById('db-body');
+  if (!def || !body) return;
+  const clock = document.getElementById('db-clock');
+  if (clock) clock.textContent = new Date().toUTCString().slice(17, 25) + ' UTC';
+  try {
+    const data = await def.load();
+    if (DASH.id !== def.id) return;              // closed or switched mid-fetch
+    body.innerHTML = def.render(data);
+    body.querySelectorAll('[data-fly]').forEach((n) => {
+      n.addEventListener('click', () => {
+        const [lon, lat] = n.dataset.fly.split(',').map(Number);
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+        dashClose();
+        _lastInteractionAt = performance.now();
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(lon, lat, 600_000),
+          duration: 1.8,
+        });
+      });
+    });
+  } catch (err) {
+    body.innerHTML = `<p class="db-loading">Feed unavailable: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function initDashboards() {
+  document.querySelectorAll('[data-dash]').forEach((b) =>
+    b.addEventListener('click', () => dashOpen(b.dataset.dash)));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && DASH.id) dashClose();
+  });
+}
+
+// ---- Dashboard building blocks ----
+
+const dbNum = (v, dp = 0) =>
+  (v == null || !Number.isFinite(Number(v))) ? '—'
+    : Number(v).toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+
+function dbCard(title, inner, cls = '') {
+  return `<section class="db-card ${cls}"><h2 class="db-card-h">${escapeHtml(title)}</h2>${inner}</section>`;
+}
+
+function dbStats(items) {
+  return '<div class="db-stats">' + items.map((s) =>
+    `<div class="db-stat"><span class="db-stat-v mono" style="${s.color ? `color:${s.color}` : ''}">${s.value}</span>` +
+    `<span class="db-stat-k">${escapeHtml(s.label)}</span></div>`).join('') + '</div>';
+}
+
+/* A ranked bar chart, scaled to the largest row. Rows with a zero count are
+   kept: "no tornado warnings" is a reading, not an absence of one. */
+function dbBars(rows) {
+  if (!rows.length) return '<p class="db-empty">Nothing to rank.</p>';
+  const max = Math.max(...rows.map((r) => r.n), 1);
+  return '<div class="db-bars">' + rows.map((r) =>
+    `<div class="db-bar-row"${r.fly ? ` data-fly="${r.fly}"` : ''}>` +
+      `<span class="db-bar-k">${escapeHtml(r.label)}</span>` +
+      `<span class="db-bar-t"><i style="width:${(100 * r.n / max).toFixed(1)}%;background:${r.color || 'var(--accent)'}"></i></span>` +
+      `<span class="db-bar-n mono">${dbNum(r.n)}</span>` +
+    '</div>').join('') + '</div>';
+}
+
+function dbTable(head, rows) {
+  if (!rows.length) return '<p class="db-empty">No rows.</p>';
+  return '<table class="db-table"><thead><tr>' +
+    head.map((h) => `<th>${escapeHtml(h)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map((r) => `<tr${r.fly ? ` data-fly="${r.fly}" class="is-clickable"` : ''}>` +
+      r.cells.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('') +
+    '</tbody></table>';
+}
+
+const dbEmpty = (why) => `<p class="db-empty">${escapeHtml(why)}</p>`;
+
+// A small fetch cache so four cards on one board do not pull the same feed
+// four times, and a 30 s refresh does not re-pull a 4 MB river payload it
+// already has.
+const _dbCache = new Map();
+async function dbFetch(url, ttlMs = 25_000) {
+  const hit = _dbCache.get(url);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
+  const data = await r.json();
+  _dbCache.set(url, { at: Date.now(), data });
+  return data;
+}
+
+// ---- 1. Severe weather ------------------------------------------------------
+
+const STATE_OF = (areaDesc) => {
+  // NWS areaDesc is "County, ST; County, ST". The state is the last two
+  // characters of a segment, and only when they really are a state code.
+  const out = new Set();
+  for (const seg of String(areaDesc || '').split(';')) {
+    const m = seg.trim().match(/,\s*([A-Z]{2})$/);
+    if (m) out.add(m[1]);
+  }
+  return [...out];
+};
+
+const DASH_STORM = {
+  id: 'storm',
+  title: 'SEVERE WEATHER',
+  sub: 'Active NWS products · SPC convective outlook · local storm reports',
+  async load() {
+    const [alerts, lsr, spc] = await Promise.all([
+      dbFetch('/api/nws/alerts'),
+      dbFetch('/api/lsr?hours=12').catch(() => ({ features: [] })),
+      dbFetch('/api/spc/outlook?day=1', 300_000).catch(() => ({ features: [] })),
+    ]);
+    return { alerts: alerts.features || [], lsr: lsr.features || [], spc: spc.features || [] };
+  },
+  render({ alerts, lsr, spc }) {
+    const count = (re) => alerts.filter((f) => re.test(f.properties?.event || '')).length;
+
+    const hero = dbStats([
+      { label: 'Active products', value: dbNum(alerts.length) },
+      { label: 'Tornado warnings', value: dbNum(count(/^Tornado Warning/i)), color: '#f43f5e' },
+      { label: 'Severe t-storm', value: dbNum(count(/^Severe Thunderstorm Warning/i)), color: '#f59e0b' },
+      { label: 'Flash flood', value: dbNum(count(/^Flash Flood Warning/i)), color: '#4ade80' },
+      { label: 'Warnings', value: dbNum(count(/warning/i)) },
+      { label: 'Watches', value: dbNum(count(/watch/i)) },
+    ]);
+
+    const byType = new Map();
+    for (const f of alerts) {
+      const ev = f.properties?.event || 'Unknown';
+      byType.set(ev, (byType.get(ev) || 0) + 1);
+    }
+    const typeRows = [...byType.entries()]
+      .sort((a, b) => b[1] - a[1]).slice(0, 14)
+      .map(([label, n]) => ({ label, n, color: warnStyle(label).c }));
+
+    const byState = new Map();
+    for (const f of alerts) {
+      for (const st of STATE_OF(f.properties?.areaDesc)) {
+        byState.set(st, (byState.get(st) || 0) + 1);
+      }
+    }
+    const stateRows = [...byState.entries()]
+      .sort((a, b) => b[1] - a[1]).slice(0, 12)
+      .map(([label, n]) => ({ label, n }));
+
+    // Impact-bearing products first: the hazard parameters NWS attaches are
+    // what separates a routine advisory from something worth a slide.
+    const impact = alerts
+      .filter((f) => /tornado|severe thunderstorm|flash flood|hurricane|tsunami/i.test(f.properties?.event || ''))
+      .sort((a, b) => warnStyle(b.properties.event).p - warnStyle(a.properties.event).p)
+      .slice(0, 12)
+      .map((f) => {
+        const p = f.properties || {}, par = p.parameters || {};
+        const first = (k) => (Array.isArray(par[k]) ? par[k][0] : par[k]) || '';
+        const bits = [first('hailSize') && `${first('hailSize')}" hail`,
+                      first('maxWindGust'),
+                      first('tornadoDetection') && `tornado ${first('tornadoDetection')}`,
+                      first('thunderstormDamageThreat') || first('flashFloodDamageThreat')]
+                     .filter(Boolean);
+        let fly = '';
+        const g = f.geometry;
+        if (g) {
+          const ring = (g.type === 'Polygon' ? g.coordinates[0] : (g.coordinates[0] || [])[0]) || [];
+          if (ring.length) {
+            const lon = ring.reduce((a, c) => a + c[0], 0) / ring.length;
+            const lat = ring.reduce((a, c) => a + c[1], 0) / ring.length;
+            fly = `${lon.toFixed(3)},${lat.toFixed(3)}`;
+          }
+        }
+        return { fly, cells: [
+          `<span style="color:${warnStyle(p.event).c};font-weight:600">${escapeHtml(p.event || '—')}</span>`,
+          escapeHtml(String(p.areaDesc || '').split(';').slice(0, 2).join(';') || '—'),
+          `<span class="mono">${escapeHtml(fmtExpiry(p.expires) || '—')}</span>`,
+          escapeHtml(bits.join(' · ') || '—'),
+        ] };
+      });
+
+    // typetext, not type: `type` is IEM's single-character code, so ranking on
+    // it produced a chart labelled N / M / R / G / D.
+    const lsrTypes = new Map();
+    for (const f of lsr) {
+      const t = f.properties?.typetext || f.properties?.type || 'Report';
+      lsrTypes.set(t, (lsrTypes.get(t) || 0) + 1);
+    }
+    const lsrRows = [...lsrTypes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+      .map(([label, n]) => ({ label, n, color: '#fbbf24' }));
+
+    // SPC ships one polygon per risk category, ordered from general
+    // thunderstorms upward, so the highest category present is the headline.
+    const SPC_ORDER = ['TSTM', 'MRGL', 'SLGT', 'ENH', 'MDT', 'HIGH'];
+    const spcRows = spc
+      .map((f) => f.properties || {})
+      .sort((a, b) => SPC_ORDER.indexOf(b.LABEL) - SPC_ORDER.indexOf(a.LABEL))
+      .map((p) => `<div class="db-scale-r"><i style="background:${p.stroke || '#64748b'}"></i>` +
+        `<span>${escapeHtml(p.LABEL2 || p.LABEL || '—')}</span>` +
+        `<span class="mono">${escapeHtml(p.LABEL || '')}</span></div>`).join('');
+    const spcIssue = spc.length ? (spc[0].properties || {}) : null;
+    const spcCard = spc.length
+      ? `<div class="db-scale">${spcRows}</div>` +
+        `<p class="db-note" style="margin-top:10px">Day 1, issued ` +
+        `${escapeHtml(String(spcIssue.ISSUE_ISO || '').slice(0, 16).replace('T', ' '))} UTC` +
+        `${spcIssue.FORECASTER ? ' by ' + escapeHtml(spcIssue.FORECASTER) : ''}.</p>`
+      : dbEmpty('The Storm Prediction Center has no Day 1 convective areas drawn.');
+
+    return '<div class="db-grid">' +
+      dbCard('In effect right now', hero, 'db-w3') +
+      dbCard('By product type', typeRows.length ? dbBars(typeRows) : dbEmpty('No active NWS products.')) +
+      dbCard('By state', stateRows.length ? dbBars(stateRows) : dbEmpty('No product carries a state code.')) +
+      dbCard('SPC Day 1 convective outlook', spcCard) +
+      dbCard('Impact products',
+        impact.length
+          ? dbTable(['Product', 'Area', 'Expires', 'Hazard'], impact)
+          : dbEmpty('No tornado, severe thunderstorm, flash flood, hurricane or tsunami product is in effect.'),
+        'db-w3') +
+      dbCard('Storm reports, past 12 h',
+        lsrRows.length ? dbBars(lsrRows) : dbEmpty('No local storm reports in the past 12 hours.')) +
+      '</div>';
+  },
+};
+
+// ---- 2. Tropical ------------------------------------------------------------
+
+const SAFFIR = [
+  { min: 137, name: 'Category 5', color: '#f43f5e' },
+  { min: 113, name: 'Category 4', color: '#fb7185' },
+  { min:  96, name: 'Category 3', color: '#fb923c' },
+  { min:  83, name: 'Category 2', color: '#fbbf24' },
+  { min:  64, name: 'Category 1', color: '#facc15' },
+  { min:  34, name: 'Tropical Storm', color: '#4ade80' },
+  { min:   0, name: 'Tropical Depression', color: '#38bdf8' },
+];
+const saffir = (kt) => SAFFIR.find((s) => (kt || 0) >= s.min) || SAFFIR[SAFFIR.length - 1];
+
+// NWS marine and coastal product names, so the tropical board has something
+// to say in the ~10 months a year with no named system on the map.
+const MARINE_EVENT =
+  /small craft|gale|storm warning|hurricane force wind|hazardous seas|marine|high surf|rip current|coastal flood|beach hazards|surge/i;
+
+const DASH_TROPICAL = {
+  id: 'tropical',
+  title: 'TROPICAL',
+  sub: 'Active systems from the National Hurricane Center · tropical products in effect',
+  async load() {
+    const alerts = await dbFetch('/api/nws/alerts').catch(() => ({ features: [] }));
+    // Storms come off the websocket snapshot, so they are read from the feed
+    // cache rather than re-fetched -- the layer does not have to be on.
+    const all = alerts.features || [];
+    return {
+      storms: Object.entries(layerData.hurricanes || {}).map(([id, p]) => ({ id, ...p })),
+      alerts: all.filter((f) => /tropical|hurricane|storm surge/i.test(f.properties?.event || '')),
+      marine: all.filter((f) => MARINE_EVENT.test(f.properties?.event || '')),
+    };
+  },
+  render({ storms, alerts, marine }) {
+    const active = storms.filter((s) => s && s.lat != null);
+    const cards = active
+      .sort((a, b) => (b.intensity || 0) - (a.intensity || 0))
+      .map((s) => {
+        const kt = Number(s.intensity) || 0;
+        const cat = saffir(kt);
+        return `<div class="db-storm" data-fly="${Number(s.lon).toFixed(3)},${Number(s.lat).toFixed(3)}" style="--sc:${cat.color}">` +
+          `<div class="db-storm-h"><span class="db-storm-n">${escapeHtml(s.name || 'Unnamed')}</span>` +
+          `<span class="db-storm-c">${escapeHtml(cat.name)}</span></div>` +
+          '<div class="db-storm-g">' +
+            `<span><b class="mono">${dbNum(kt)}</b>kt</span>` +
+            `<span><b class="mono">${dbNum(Math.round(kt * 1.15078))}</b>mph</span>` +
+            `<span><b class="mono">${s.pressure ? dbNum(s.pressure) : '—'}</b>mb</span>` +
+            `<span><b class="mono">${Number(s.lat).toFixed(1)}°, ${Number(s.lon).toFixed(1)}°</b></span>` +
+          '</div>' +
+          `<div class="db-storm-s">${escapeHtml(s.classification || '')}${s.movement ? ' · moving ' + escapeHtml(s.movement) : ''}</div>` +
+        '</div>';
+      }).join('');
+
+    const scale = '<div class="db-scale">' + SAFFIR.map((s) =>
+      `<div class="db-scale-r"><i style="background:${s.color}"></i>` +
+      `<span>${escapeHtml(s.name)}</span><span class="mono">${s.min ? s.min + '+ kt' : '&lt; 34 kt'}</span></div>`).join('') + '</div>';
+
+    const prod = alerts.slice(0, 14).map((f) => {
+      const p = f.properties || {};
+      return { cells: [
+        `<span style="color:${warnStyle(p.event).c};font-weight:600">${escapeHtml(p.event || '—')}</span>`,
+        escapeHtml(String(p.areaDesc || '').split(';').slice(0, 2).join(';') || '—'),
+        `<span class="mono">${escapeHtml(fmtExpiry(p.expires) || '—')}</span>`,
+      ] };
+    });
+
+    // Marine products, which are in effect somewhere on the US coast almost
+    // every day. Without them this board is blank for most of the year, and a
+    // blank board reads as broken rather than as quiet.
+    const marineCounts = new Map();
+    for (const f of marine) {
+      const ev = f.properties?.event || 'Unknown';
+      marineCounts.set(ev, (marineCounts.get(ev) || 0) + 1);
+    }
+    const marineRows = [...marineCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)
+      .map(([label, n]) => ({ label, n, color: warnStyle(label).c }));
+
+    return '<div class="db-grid">' +
+      dbCard('Active systems',
+        active.length
+          ? `<div class="db-storms">${cards}</div>`
+          : dbEmpty('The National Hurricane Center has no active systems on the board. ' +
+                    'This is the normal state outside an active basin period, not a feed failure.'),
+        'db-w2') +
+      dbCard('Saffir-Simpson', scale) +
+      dbCard('Marine and coastal products',
+        marineRows.length ? dbBars(marineRows)
+                          : dbEmpty('No marine or coastal product is in effect.'),
+        'db-w2') +
+      dbCard('Tropical products in effect',
+        prod.length ? dbTable(['Product', 'Area', 'Expires'], prod)
+                    : dbEmpty('No tropical, hurricane or storm surge product is in effect.')) +
+      '</div>';
+  },
+};
+
+// ---- 3. Water ---------------------------------------------------------------
+
+const FLOOD_CAT = [
+  ['major',    'Major flood',    '#f43f5e'],
+  ['moderate', 'Moderate flood', '#fb923c'],
+  ['minor',    'Minor flood',    '#facc15'],
+  ['action',   'Action stage',   '#a3e635'],
+];
+
+const DASH_WATER = {
+  id: 'water',
+  title: 'WATER',
+  sub: 'River gauges · tide stations · marine buoys, all NOAA, all keyless',
+  async load() {
+    const [rivers, buoys, tides] = await Promise.all([
+      dbFetch('/api/rivers', 120_000).catch(() => ({ features: [] })),
+      dbFetch('/api/buoys').catch(() => ({ features: [] })),
+      dbFetch('/api/tides', 300_000).catch(() => ({ features: [] })),
+    ]);
+    return {
+      rivers: rivers.features || [],
+      flooding: rivers.flooding,
+      buoys:  buoys.features  || [],
+      tides:  tides.features  || [],
+    };
+  },
+  render({ rivers, flooding, buoys, tides }) {
+    const catOf = (f) => String(f.properties?.flood_category || 'no_flooding');
+    // flood_rank, not "anything that is not no_flooding". The category field
+    // also carries out_of_service / obs_not_current / low_threshold, and
+    // counting those as flooding put 268 in the headline over a bar chart
+    // that summed to 37.
+    const inFlood = rivers.filter((f) => (f.properties?.flood_rank || 0) > 0);
+    const dark = rivers.filter((f) =>
+      ['out_of_service', 'obs_not_current', 'not_defined'].includes(catOf(f)));
+
+    const hero = dbStats([
+      { label: 'Gauges in the network', value: dbNum(rivers.length) },
+      { label: 'At or above action stage',
+        value: dbNum(flooding != null ? flooding : inFlood.length), color: '#facc15' },
+      { label: 'No current stage', value: dbNum(dark.length) },
+      { label: 'Buoys reporting', value: dbNum(buoys.length) },
+      { label: 'Tide stations', value: dbNum(tides.length) },
+    ]);
+
+    const catRows = FLOOD_CAT.map(([key, label, color]) => ({
+      label, color,
+      n: rivers.filter((f) => catOf(f) === key).length,
+    }));
+
+    const worst = rivers
+      .slice()
+      .sort((a, b) => (b.properties?.flood_rank || 0) - (a.properties?.flood_rank || 0))
+      .filter((f) => (f.properties?.flood_rank || 0) > 0)
+      .slice(0, 14)
+      .map((f) => {
+        const p = f.properties, obs = p.observed || {};
+        const cat = FLOOD_CAT.find((c) => c[0] === catOf(f));
+        return { fly: f.geometry ? f.geometry.coordinates.map((n) => n.toFixed(3)).join(',') : '',
+          cells: [
+            escapeHtml(p.name || p.id || '—'),
+            escapeHtml(p.state || '—'),
+            `<span style="color:${cat ? cat[2] : 'var(--text-dim)'};font-weight:600">${escapeHtml(cat ? cat[1] : catOf(f))}</span>`,
+            `<span class="mono">${obs.value != null ? dbNum(obs.value, 1) + ' ' + escapeHtml(obs.unit || '') : '—'}</span>`,
+          ] };
+      });
+
+    const waves = buoys
+      .filter((f) => f.properties?.wave_height != null)
+      .sort((a, b) => b.properties.wave_height - a.properties.wave_height)
+      .slice(0, 12)
+      .map((f) => {
+        const p = f.properties;
+        return { fly: f.geometry ? f.geometry.coordinates.map((n) => n.toFixed(3)).join(',') : '',
+          cells: [
+            escapeHtml(p.id || '—'),
+            `<span class="mono">${dbNum(p.wave_height, 1)} m</span>`,
+            `<span class="mono">${p.dom_period != null ? dbNum(p.dom_period, 1) + ' s' : '—'}</span>`,
+            `<span class="mono">${p.wind_speed != null ? dbNum(p.wind_speed, 1) + ' m/s' : '—'}</span>`,
+          ] };
+      });
+
+    return '<div class="db-grid">' +
+      dbCard('Water, right now', hero, 'db-w3') +
+      dbCard('Gauges by flood category', dbBars(catRows)) +
+      dbCard('Buoy sea state',
+        waves.length
+          ? dbTable(['Buoy', 'Sig. wave', 'Period', 'Wind'], waves)
+          : dbEmpty(`None of the ${dbNum(buoys.length)} reporting buoys is sending a wave height right now.`),
+        'db-w2') +
+      dbCard('Gauges at or above action stage',
+        worst.length
+          ? dbTable(['Gauge', 'State', 'Category', 'Observed'], worst)
+          : dbEmpty('Every reporting gauge is below action stage.'),
+        'db-w3') +
+      '</div>';
+  },
+};
+
+// ---- 4. Geophysical ---------------------------------------------------------
+
+const DASH_EARTH = {
+  id: 'earth',
+  title: 'GEOPHYSICAL',
+  sub: 'Earthquakes (USGS) · volcanoes (GVP) · wildfires (FIRMS) · natural events (EONET)',
+  async load() {
+    return {
+      quakes:    Object.entries(layerData.quakes    || {}).map(([id, p]) => ({ id, ...p })),
+      volcanoes: Object.entries(layerData.volcanoes || {}).map(([id, p]) => ({ id, ...p })),
+      fires:     Object.entries(layerData.fires     || {}).map(([id, p]) => ({ id, ...p })),
+      news:      Object.entries(layerData.news      || {}).map(([id, p]) => ({ id, ...p })),
+    };
+  },
+  render({ quakes, volcanoes, fires, news }) {
+    const now = Date.now();
+    const day = quakes.filter((q) => q.time && now - q.time < 864e5);
+    const biggest = day.reduce((a, q) => (a && a.mag > (q.mag || 0) ? a : q), null);
+
+    const hero = dbStats([
+      { label: 'Quakes, past 24 h', value: dbNum(day.length) },
+      { label: 'Largest, past 24 h', value: biggest ? 'M' + Number(biggest.mag).toFixed(1) : '—',
+        color: biggest && biggest.mag >= 6 ? '#f43f5e' : undefined },
+      { label: 'M4+ past 24 h', value: dbNum(day.filter((q) => (q.mag || 0) >= 4).length) },
+      { label: 'Volcanoes active', value: dbNum(volcanoes.filter((v) => v.active === true).length) },
+      { label: 'Fire detections', value: dbNum(fires.length) },
+      { label: 'EONET events', value: dbNum(news.length) },
+    ]);
+
+    // The bottom band is open-ended downward so the rows sum to the headline
+    // count. Stopping at M2 left 151 of 230 quakes off a chart that looked
+    // like a complete census.
+    const bands = [[7, '#f43f5e'], [6, '#fb7185'], [5, '#fb923c'], [4, '#facc15'], [3, '#a3e635'], [2, '#38bdf8']];
+    const bandRows = bands.map(([m, color], i) => ({
+      label: i === 0 ? `M${m}+` : `M${m}–${bands[i - 1][0]}`,
+      color,
+      n: day.filter((q) => (q.mag || 0) >= m && (i === 0 || (q.mag || 0) < bands[i - 1][0])).length,
+    }));
+    bandRows.push({
+      label: 'Below M2', color: '#475569',
+      n: day.filter((q) => (q.mag || 0) < 2).length,
+    });
+
+    const top = day.slice().sort((a, b) => (b.mag || 0) - (a.mag || 0)).slice(0, 14).map((q) => ({
+      fly: `${Number(q.lon).toFixed(3)},${Number(q.lat).toFixed(3)}`,
+      cells: [
+        `<span class="mono" style="font-weight:600">M${Number(q.mag || 0).toFixed(1)}</span>`,
+        escapeHtml(q.place || '—'),
+        `<span class="mono">${dbNum(q.depth_km, 1)} km</span>`,
+        `<span class="mono">${escapeHtml(formatAge((now - q.time) / 3.6e6))} ago</span>`,
+      ],
+    }));
+
+    const hotFires = fires.slice().sort((a, b) => (b.frp || 0) - (a.frp || 0)).slice(0, 10).map((f) => ({
+      fly: `${Number(f.lon).toFixed(3)},${Number(f.lat).toFixed(3)}`,
+      cells: [
+        `<span class="mono">${dbNum(f.frp, 1)} MW</span>`,
+        `<span class="mono">${Number(f.lat).toFixed(2)}°, ${Number(f.lon).toFixed(2)}°</span>`,
+        escapeHtml(f.confidence != null ? String(f.confidence) : '—'),
+      ],
+    }));
+
+    return '<div class="db-grid">' +
+      dbCard('The planet, past 24 hours', hero, 'db-w3') +
+      dbCard('Quakes by magnitude band', dbBars(bandRows)) +
+      dbCard('Hottest fire detections',
+        hotFires.length
+          ? dbTable(['Radiative power', 'Position', 'Confidence'], hotFires)
+          : dbEmpty((window.__graticule_cfg || {}).fires_enabled === false
+              ? 'FIRMS needs a NASA map key, and this install has none, so the fire feed is off. ' +
+                'Everything else on this board is keyless and live.'
+              : 'The FIRMS feed is reporting no detections. Switch Wildfires on in the Earth division to pull it.'),
+        'db-w2') +
+      dbCard('Largest earthquakes, past 24 hours',
+        top.length ? dbTable(['Magnitude', 'Place', 'Depth', 'When'], top)
+                   : dbEmpty('No earthquakes in the past 24 hours in the loaded catalogue.'),
+        'db-w3') +
+      '</div>';
+  },
+};
+
+// ---- 5. Space weather -------------------------------------------------------
+
+const DASH_SPACE = {
+  id: 'space',
+  title: 'SPACE WEATHER',
+  sub: 'NOAA SWPC geomagnetic and X-ray conditions · orbital population · launch window',
+  async load() {
+    return {
+      sw: SPACE_WX || {},
+      launches: Object.entries(layerData.launches || {}).map(([id, p]) => ({ id, ...p })),
+      sats: Object.keys(layerData.satellites || {}).length,
+    };
+  },
+  render({ sw, launches, sats }) {
+    const kp = sw.kp && sw.kp.value != null ? Number(sw.kp.value) : null;
+    const kpColor = kp == null ? undefined : kp >= 6 ? '#f43f5e' : kp >= 4 ? '#fbbf24' : '#4ade80';
+    const cls = sw.xray && sw.xray.class ? String(sw.xray.class) : null;
+    const clsColor = !cls ? undefined
+      : cls[0] === 'X' ? '#f43f5e' : cls[0] === 'M' ? '#fbbf24' : cls[0] === 'C' ? '#4ade80' : undefined;
+
+    // NOAA's G-scale, which is what a Kp number actually means to a viewer.
+    const G = kp == null ? '—'
+      : kp >= 9 ? 'G5 Extreme' : kp >= 8 ? 'G4 Severe' : kp >= 7 ? 'G3 Strong'
+      : kp >= 6 ? 'G2 Moderate' : kp >= 5 ? 'G1 Minor' : 'Below storm level';
+
+    const hero = dbStats([
+      { label: 'Planetary Kp', value: kp == null ? '—' : kp.toFixed(1), color: kpColor },
+      { label: 'Geomagnetic storm', value: escapeHtml(G), color: kpColor },
+      { label: 'X-ray flux class', value: cls ? escapeHtml(cls) : '—', color: clsColor },
+      { label: 'Satellites tracked', value: dbNum(sats) },
+    ]);
+
+    const now = Date.now();
+    const up = launches
+      .filter((l) => l.net && Date.parse(l.net) > now - 3.6e6)
+      .sort((a, b) => Date.parse(a.net) - Date.parse(b.net))
+      .slice(0, 12)
+      .map((l) => {
+        const dt = (Date.parse(l.net) - now) / 3.6e6;
+        return { fly: l.lat != null ? `${Number(l.lon).toFixed(3)},${Number(l.lat).toFixed(3)}` : '',
+          cells: [
+            escapeHtml(l.name || '—'),
+            `<span class="mono">T${dt >= 0 ? '−' : '+'}${escapeHtml(formatAge(Math.abs(dt)))}</span>`,
+            escapeHtml(l.status || l.pad || '—'),
+          ] };
+      });
+
+    // Half-open bands, so exactly one row lights up. The first version tested
+    // `kp >= k && kp < k + 1`, which left the bottom row (threshold 0) dark
+    // for every quiet reading -- the case it exists to describe.
+    const kpScale = [
+      ['G5', 9, Infinity, '#f43f5e', 'Extreme'],
+      ['G4', 8, 9,        '#fb7185', 'Severe'],
+      ['G3', 7, 8,        '#fb923c', 'Strong'],
+      ['G2', 6, 7,        '#fbbf24', 'Moderate'],
+      ['G1', 5, 6,        '#facc15', 'Minor'],
+      ['—',  0, 5,        '#4ade80', 'Quiet to unsettled'],
+    ];
+    const scale = '<div class="db-scale">' + kpScale.map(([g, lo, hi, c, name]) =>
+      `<div class="db-scale-r${kp != null && kp >= lo && kp < hi ? ' is-now' : ''}">` +
+      `<i style="background:${c}"></i><span>${escapeHtml(g)} ${escapeHtml(name)}</span>` +
+      `<span class="mono">Kp ${lo ? lo + '+' : '&lt; 5'}</span></div>`).join('') + '</div>';
+
+    return '<div class="db-grid">' +
+      dbCard('Conditions now', hero, 'db-w3') +
+      dbCard('NOAA G-scale', scale) +
+      dbCard('Launch window, T−1 h onward',
+        up.length ? dbTable(['Vehicle / payload', 'Countdown', 'Status'], up)
+                  : dbEmpty('No launch inside the window the feed carries.'),
+        'db-w2') +
+      dbCard('Source',
+        '<p class="db-note">Kp and X-ray flux come from NOAA SWPC and refresh on the ' +
+        'websocket, so this board is current with every layer switched off. ' +
+        'The aurora oval itself is an imagery layer — switch Aurora Forecast on ' +
+        'in the Outlooks division to see it on the globe.</p>', 'db-w3') +
+      '</div>';
+  },
+};
+
+const DASHBOARDS = {
+  storm:    DASH_STORM,
+  tropical: DASH_TROPICAL,
+  water:    DASH_WATER,
+  earth:    DASH_EARTH,
+  space:    DASH_SPACE,
+};
+
+// ---------- boot -------------------------------------------------------------
+
+function initWeatherfrontShell() {
+  initRailShell();
+  initRadarProductList();
+  initMappingMirrors();
+  initAlertsTab();
+  initDashboards();
 }
