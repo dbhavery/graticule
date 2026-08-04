@@ -5097,6 +5097,42 @@ function positionNowMarker() {
   const lastPast = TL.frames.map((f) => f.kind).lastIndexOf('past');
   const pct = TL.frames.length > 1 ? (lastPast / (TL.frames.length - 1)) * 100 : 100;
   el.style.left = `${pct}%`;
+  // The marker sits on the newest OBSERVED frame, which is the boundary
+  // between what happened and what is predicted. With a nowcast behind it that
+  // boundary is effectively now and "NOW" is the broadcast convention. With
+  // no nowcast -- and RainViewer's is often empty, measured at 12 frames all
+  // past, the newest 7 minutes old -- the same marker sat at 100% of the track
+  // calling a seven-minute-old frame "now".
+  const hasForecast = lastPast >= 0 && lastPast < TL.frames.length - 1;
+  el.dataset.label = hasForecast ? 'NOW' : 'LATEST';
+  el.title = hasForecast ? 'now: observed to the left, nowcast to the right'
+                         : 'the newest observed frame; no nowcast is published right now';
+  labelTimelineEnds();
+}
+
+/* How far back the loop reaches and how far the nowcast runs, written on the
+   ends of the track. RainViewer's window is not fixed -- the past series is
+   whatever it has cached and the nowcast is whatever it has produced -- so
+   these are read off the frames rather than stated as a constant. */
+function labelTimelineEnds() {
+  const from = document.getElementById('tl-from');
+  const to   = document.getElementById('tl-to');
+  if (!from || !to || !TL.frames.length) return;
+  const now = Date.now();
+  const mins = (f) => Math.round((f.time * 1000 - now) / 60000);
+  const span = (m) => {
+    const a = Math.abs(m);
+    if (a < 60) return `${a}m`;
+    return `${Math.floor(a / 60)}h ${String(a % 60).padStart(2, '0')}m`;
+  };
+  const first = mins(TL.frames[0]);
+  const last  = mins(TL.frames[TL.frames.length - 1]);
+  from.textContent = first < 0 ? `-${span(first)}` : span(first);
+  to.textContent   = last > 0 ? `+${span(last)}` : (last === 0 ? 'now' : `-${span(last)}`);
+  // With no nowcast the end of the track IS the LATEST marker, and a second
+  // label there lands under the marker and the frame chip both. The right end
+  // only earns a label when there is forecast beyond the marker to measure.
+  to.hidden = !TL.frames.some((f) => f.kind === 'forecast');
 }
 
 function syncTimelineVisibility() {

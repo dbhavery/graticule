@@ -636,11 +636,17 @@
     <button id="tl-next"  class="tl-btn" aria-label="Next frame">▶|</button>
     <div id="tl-track">
       <div id="tl-fill"></div>
-      <div id="tl-now" title="now"></div>
+      <div id="tl-now" data-label="NOW" title="now"></div>
       <input type="range" id="tl-range" min="0" max="0" step="1" value="0">
+      <!-- The ends of the loop. The track carried a NOW marker and nothing
+           else, so the one thing it never said was how far back the loop
+           reaches or how far the nowcast runs -- the span you are scrubbing. -->
+      <span id="tl-from" class="tl-end mono"></span>
+      <span id="tl-to" class="tl-end tl-end-r mono"></span>
     </div>
     <span id="tl-label" class="mono">—</span>
-    <select id="tl-speed" class="tl-speed">
+    <select id="tl-speed" class="tl-speed" aria-label="Playback speed"
+            title="Playback speed">
       <option value="600">1x</option>
       <option value="300">2x</option>
       <option value="150">4x</option>

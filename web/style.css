@@ -1464,7 +1464,7 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   background: var(--c-launches); opacity: 0.85; pointer-events: none;
 }
 #tl-now::after {
-  content: 'NOW'; position: absolute; top: -11px; left: 50%;
+  content: attr(data-label); position: absolute; top: -11px; left: 50%;
   transform: translateX(-50%); font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
   color: var(--c-launches); font-family: var(--sans);
 }
@@ -3539,3 +3539,19 @@ body.is-presenting #rail-status { display: none; }
   padding: 6px 2px 2px;
 }
 #model-hour { flex: 1 1 auto; min-width: 0; }
+
+/* ---- Transport: the ends of the loop ----
+   The track showed a NOW marker and nothing else, so it never said how far
+   back the loop reaches or how far the nowcast runs. Both are read off the
+   frames, because RainViewer's window is not a fixed length. */
+.tl-end {
+  position: absolute; top: 14px;
+  font-size: var(--fs-micro); color: var(--text-mute);
+  letter-spacing: 0.04em; pointer-events: none; white-space: nowrap;
+}
+.tl-end { left: 0; }
+.tl-end-r { left: auto; right: 0; }
+body.is-presenting .tl-end { display: none; }
+
+/* A select that looks like a label is a control nobody finds. */
+.tl-speed { cursor: pointer; }
