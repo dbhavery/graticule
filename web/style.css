@@ -3555,3 +3555,14 @@ body.is-presenting .tl-end { display: none; }
 
 /* A select that looks like a label is a control nobody finds. */
 .tl-speed { cursor: pointer; }
+
+/* `#timeline` sets display:flex at id specificity, so the plain `.hidden`
+   rule never beat it and syncTimelineVisibility() had no effect on screen:
+   the radar transport stayed up over a globe with no radar on it. */
+#timeline.hidden { display: none; }
+
+/* `.gfx-scale.is-vertical` sets display:flex at two classes and lands after
+   `.gfx.hidden`, so the standing colour scale ignored being hidden: clearing
+   every layer left a REFLECTIVITY ramp on air describing nothing. Scoped to
+   #gfx so it outranks any graphic's own display rule, present or future. */
+#gfx .hidden { display: none; }

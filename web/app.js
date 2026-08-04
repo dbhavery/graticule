@@ -2370,6 +2370,13 @@ function toggleNightLights(on) {
       credit: 'NASA Earthdata · VIIRS City Lights',
     }),
     { maximumTerrainLevel: 8 });
+  // Scenery, not data. City lights are part of the realistic Earth: they paint
+  // only the dark hemisphere and they are what the base map looks like at
+  // night. baseHasOverlay() has to skip them or the globe is permanently in
+  // "there is a field over me" mode -- which is exactly what happened, and it
+  // held the base at brightness 0.58 and the lens flare suspended even with
+  // every data layer switched off.
+  nightLightsLayer.__scenery = true;
   viewer.imageryLayers.add(nightLightsLayer);
   // Show only on the night side using Cesium's day/night alpha — Cesium 1.98+
   // supports per-imagery dayAlpha/nightAlpha when the globe has lighting.
@@ -3844,7 +3851,7 @@ function initSettings() {
   checkbox('show-moon',       'showMoon',       applyMoon);
   checkbox('show-stars',      'showStars',      applyStars);
   checkbox('hdr',             'hdr',            applyHdr);
-  checkbox('lens-flare',      'lensFlare',      applyLensFlare);
+  checkbox('lens-flare',      'lensFlare',      syncLensFlare);
   checkbox('lock-na',         'lockNorthAmerica', applyNorthAmericaLock);
   checkbox('diagnostics',     'diagnostics',    applyDiagnostics);
   checkbox('ambient-sound',   'ambientSound',   applyAmbientSound);
@@ -3960,7 +3967,7 @@ function initRealisticEarth() {
   scene.moon.show      = !!settings.showMoon;
   scene.skyBox.show    = !!settings.showStars;
 
-  applyLensFlare(settings.lensFlare);
+  syncLensFlare();
 
   // 2. Night lights ride on the same lighting model.
   toggleNightLights(!!settings.nightLights);
@@ -3972,6 +3979,27 @@ function initRealisticEarth() {
 }
 
 let _lensFlareStage = null;
+
+/* The flare is for the Earth, not for the data.
+   Cesium's lens-flare stage takes the brightest pixels in frame and paints
+   mirrored copies of them back through the screen centre -- which is what a
+   real lens does, and is fine over a globe from space. Once the base map is
+   graded down under a field, the brightest things in frame become the white
+   boundary labels and the radar returns, and the stage started drawing
+   upside-down ghosts of UNITED STATES OF AMERICA across Texas along with
+   coloured smears of the reflectivity. Confirmed by A/B: identical scene, the
+   ghosts present with the stage attached and gone with it removed, and absent
+   from the pre-grade build because the bright terrain used to swamp them.
+
+   So it follows the same condition as the grade: suspended while anything is
+   drawn over the base, restored when the globe is the picture again. The
+   Settings switch still decides whether it is wanted at all. */
+function lensFlareWanted() {
+  return settings.lensFlare !== false && !baseHasOverlay();
+}
+
+function syncLensFlare() { applyLensFlare(lensFlareWanted()); }
+
 function applyLensFlare(on) {
   if (!viewer) return;
   const stages = viewer.scene.postProcessStages;
@@ -4215,17 +4243,25 @@ async function applyImageryBase(kind) {
 // swap, since a new provider means a new ImageryLayer with default values.
 // Streets and topo basemaps are already styled artwork — grading them just
 // makes them garish, so only the photographic bases get it.
-/* True when anything is drawing on top of the base map. Read off the imagery
-   stack itself rather than off a list of layer names, so a new overlay is
-   counted the day it is added instead of the day someone remembers to add it
-   here. Entities (boundaries, quakes, planes) are deliberately not counted:
-   they are line work over the map, not a field competing with it. */
+/* True when a DATA FIELD is drawing on top of the base map. Read off the
+   imagery stack itself rather than off a list of layer names, so a new overlay
+   is counted the day it is added instead of the day someone remembers to add
+   it here.
+
+   Two exclusions, both deliberate:
+   * Entities -- boundaries, quakes, planes. Line work over the map, not a
+     field competing with it.
+   * Anything flagged `__scenery`. City lights are an imagery layer over the
+     base, but they ARE the base at night. Counting them meant this returned
+     true from boot with nothing switched on, which held the map at the muted
+     grade permanently and kept the lens flare suspended for good. */
 function baseHasOverlay() {
   if (!viewer || !baseImageryLayer) return false;
   const L = viewer.imageryLayers;
   for (let i = 0; i < L.length; i++) {
     const l = L.get(i);
-    if (l !== baseImageryLayer && l.show && l.alpha > 0.02) return true;
+    if (l === baseImageryLayer || l.__scenery) continue;
+    if (l.show && l.alpha > 0.02) return true;
   }
   return false;
 }
@@ -4252,6 +4288,7 @@ function gradeBaseImagery() {
     baseImageryLayer.saturation = photographic ? 1.25 : 1.0;
     baseImageryLayer.gamma      = photographic ? 0.95 : 1.0;
   }
+  syncLensFlare();
   viewer?.scene.requestRender();
 }
 
@@ -11193,7 +11230,15 @@ function initRailStatus() {
   // command palette, the alert cards and applyInitialLayerState(), and every
   // one of those paths dispatches change on the input.
   document.addEventListener('change', (e) => {
-    if (e.target instanceof HTMLInputElement && e.target.dataset.layer) railStatusRender();
+    if (!(e.target instanceof HTMLInputElement) || !e.target.dataset.layer) return;
+    railStatusRender();
+    // Chrome that describes a product has to stop describing it when the
+    // product goes away. Both of these already knew how to hide themselves and
+    // neither was being asked: switching every layer off left a REFLECTIVITY
+    // colour scale and a radar transport on screen over a bare globe. The
+    // rail's clear-all is what made that easy to hit.
+    gfxRender();
+    syncTimelineVisibility();
   });
   setInterval(railStatusTick, 1000);
   railStatusRender();

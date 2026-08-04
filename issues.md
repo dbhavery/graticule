@@ -288,3 +288,59 @@ The window now shortens as the variable count rises
 covers the convective window deep-layer shear is read over. `meso_test` passes
 on all six fields, with the shear value independently recomputed from a
 separate API call: 21.51 mph both ways.
+
+---
+
+## 13. The lens flare was mirroring the map onto itself (**FIXED** 2026-08-04)
+
+**Found:** 2026-08-04, by looking at a screenshot rather than at a metric.
+
+Upside-down ghosts of "UNITED STATES OF AMERICA" across Texas and coloured
+smears of the reflectivity across the lower half of the frame. Cesium's
+lens-flare stage takes the brightest pixels in frame and paints mirrored
+copies of them back through the screen centre — which is what a real lens does
+and is fine over a globe from space. Once the base map is graded down under a
+field, the brightest things in frame become the white boundary labels and the
+radar returns.
+
+**Measured, identical scene:** ghosts present with the stage attached, gone
+with it removed, and absent from the pre-grade build because the bright
+terrain used to swamp them.
+
+**Fix:** the flare follows the same condition as the grade — suspended while a
+field is drawn over the base, restored when the globe is the picture again.
+The Settings switch still decides whether it is wanted at all.
+
+---
+
+## 14. `baseHasOverlay()` counted the city lights (**FIXED** 2026-08-04)
+
+Found while writing the test for #13, and it invalidated the reasoning behind
+the grade's own commit message. VIIRS night lights are an imagery layer over
+the base, so `baseHasOverlay()` returned true from boot with every data layer
+off. The map was held at the muted grade permanently and the lens flare was
+suspended for good — the "conditional" grade was never conditional.
+
+**Fix:** night lights carry `__scenery = true` and are skipped. They *are* the
+base map at night, not a field competing with it. Measured after: radar on →
+overlay true, brightness 0.58, flare off; radar off → overlay false,
+brightness 1.0, flare on.
+
+---
+
+## 15. Two `display` rules outranked `.hidden` (**FIXED** 2026-08-04)
+
+Both surfaced by the rail footer's new clear-all, which makes "switch
+everything off" one click instead of nineteen.
+
+`#timeline` sets `display: flex` at id specificity, so the plain `.hidden`
+rule never beat it and `syncTimelineVisibility()` had no effect on screen: the
+radar transport stayed up over a globe with no radar on it.
+
+`.gfx-scale.is-vertical` sets `display: flex` at two classes and lands after
+`.gfx.hidden`, so the standing colour scale ignored being hidden and left a
+REFLECTIVITY ramp on air describing nothing.
+
+Both had correct JavaScript. Neither had a visible effect. `chrome_test.py`
+checks both directions — the chrome must be up with radar on and gone with
+everything off — so a rule that simply hid it always would fail.
