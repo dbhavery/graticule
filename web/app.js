@@ -6014,17 +6014,40 @@ let _modelPending = false;
    than a refetch. That matters twice over: Open-Meteo rate-limits by request,
    and a scrubber that costs a round trip per step is not a scrubber.
 
-   Two days rather than five. 140 points x 48 hours x up to four variables for
-   a derived field is already ~40k values in one response, and the shear and
-   lifted-index fields are the ones that trip the minutely limit first. */
+   The window is an explicit start_hour/end_hour of now to now+24, not a day
+   count. `forecast_days=2` returns from 00:00 UTC today, so roughly half of
+   what came back was already in the past and paid for -- and Open-Meteo prices
+   a request by variables x locations x hours, which is why the shear and
+   lifted-index fields (four variables over 140 points) are the ones that trip
+   its minutely limit first. Verified against the API before relying on it:
+   start_hour=...T18:00 & end_hour=...T18:00 returns exactly 25 hours. */
 const MODEL_FCST = {
-  times: [],      // ISO strings, UTC
+  times: [],      // ISO strings, UTC, starting at the current hour
   series: [],     // one { lon, lat, vars: { name: number[] } } per point
   idx: 0,         // index into times
-  now: 0,         // index of the hour containing "now"
+  now: 0,         // index of the hour containing "now" -- always 0 now
   units: {},
 };
-const MODEL_FCST_DAYS = 2;
+/* Open-Meteo prices a request by variables x locations x hours, so a field
+   that needs four variables to derive one number costs four times a plain one
+   over the same window. Measured: with a flat 24-hour window, five of the six
+   mesoanalysis fields sampled 140 points cleanly and `bulk_shear` -- the only
+   four-variable field -- answered 429, while the field requested AFTER it
+   succeeded. That rules out a cumulative minute quota and points at the single
+   request's own weight. The window shortens as the variable count rises, which
+   holds the cost roughly flat; six hours still covers the convective window
+   that deep-layer shear is read over. */
+function modelFcstHours(def) {
+  const n = (def && def.vars ? def.vars.length : 1) || 1;
+  return Math.max(6, Math.round(24 / n));
+}
+
+/* "2026-08-04T18:00", which is the shape Open-Meteo's hour window takes. */
+function omHour(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`
+       + `T${p(d.getUTCHours())}:00`;
+}
 
 function toggleModelField(on) {
   if (!modelDS) {
@@ -6054,7 +6077,8 @@ async function refreshModelField() {
     const params = new URLSearchParams({
       latitude: lat, longitude: lon,
       hourly: wanted,
-      forecast_days: String(MODEL_FCST_DAYS),
+      start_hour: omHour(new Date()),
+      end_hour: omHour(new Date(Date.now() + modelFcstHours(def) * 3600_000)),
       timezone: 'UTC',
       models: OM_MODELS[modelKey] || 'gfs_seamless',
       temperature_unit: 'fahrenheit',
@@ -6079,9 +6103,9 @@ async function refreshModelField() {
         vars: Object.fromEntries(wantedVars.map((v) => [v, d.hourly[v] || []])),
       }));
 
-    // Open-Meteo's hourly series starts at 00:00 UTC today, so roughly the
-    // first half of it is already in the past. Anchor on the hour containing
-    // now and keep the selection where the operator left it.
+    // The window is requested from the current hour, so index 0 is t+0. Found
+    // rather than assumed, because a service that quietly widens the window
+    // would otherwise silently relabel every hour.
     const nowIso = new Date().toISOString().slice(0, 13);
     const found = MODEL_FCST.times.findIndex((t) => String(t).slice(0, 13) === nowIso);
     MODEL_FCST.now = found >= 0 ? found : 0;

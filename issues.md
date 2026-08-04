@@ -261,3 +261,30 @@ Any test of the marker's forecast branch has to inject synthetic forecast
 frames; `tl_test.py` does, and asserts the marker moves off 100% and relabels.
 A test that only ran against the live feed would pass while proving nothing
 about half the behaviour.
+
+---
+
+## 12. Open-Meteo prices a request by variables x locations x hours (**FIXED** 2026-08-04)
+
+**Found:** 2026-08-04, after the model division moved from `current=` to
+`hourly=` for the forecast scrubber.
+
+Two mistakes, both fixed:
+
+**The window included the past.** `forecast_days=2` returns from 00:00 UTC
+today, so roughly half of every response was hours that had already happened
+and could never be scrubbed to. Replaced with an explicit
+`start_hour` / `end_hour` from the current hour forward. Verified against the
+API before relying on it: a 24-hour window returns exactly 25 hours.
+
+**A four-variable field cost four times a plain one.** With a flat 24-hour
+window, five of the six mesoanalysis fields sampled 140 points cleanly and
+`bulk_shear` — the only field needing four variables to derive one number —
+answered 429. The field requested *after* it succeeded, which rules out a
+cumulative minute quota and points at that single request's weight.
+
+The window now shortens as the variable count rises
+(`max(6, round(24 / nvars))`), holding the cost roughly flat. Six hours still
+covers the convective window deep-layer shear is read over. `meso_test` passes
+on all six fields, with the shear value independently recomputed from a
+separate API call: 21.51 mph both ways.
