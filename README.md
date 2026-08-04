@@ -20,36 +20,70 @@ a true 15°/hour and matches real UTC:
   sunlight rotates around it. Re-centres only after 12 s idle, above 3 Mm, and
   past 12° of drift, so panning and zooming stay free.
 
-## Tabs
+## The rail
 
-The left rail is tabbed: **WEATHER / EARTH / SKY / WORLD**.
+A docked, full-height panel on the left that the map starts to the right of.
+Top to bottom: identity, three mode tabs, tool icons, then the division grid
+and the controls for whichever division is selected. It collapses with `\`.
 
-**WEATHER** — mode chips for Radar, Satellite, Model, Observations and Outlooks
+**DATA** — nine divisions in a 3-across grid
 
 - *Radar* — national mosaic as a scrubable, playable frame loop over past and
   nowcast frames with an explicit NOW marker; local hi-res single-site NEXRAD
-  (30 sites, reflectivity + velocity); dBZ legend and frame timestamp
+  (30 sites) with six products: super-res and legacy reflectivity, base and
+  storm-relative velocity, long-range reflectivity, echo tops. No tilt
+  selector — the keyless tile service publishes the lowest elevation cut only
+  and every higher tilt answers 503, so selecting 1.5° or 2.4° would need a
+  server-side Level II decoder.
+- *Model* — GFS / HRRR / NAM / ECMWF / ICON fields for 2 m temperature,
+  precipitation, 10 m wind, CAPE, MSLP and the mesoanalysis set, sampled over
+  the current view; single, compare-runs and compare-models
 - *Satellite* — GOES-East / GOES-West visible, infrared and water vapour, plus
   a global true-colour composite
-- *Model* — GFS / HRRR / NAM / ECMWF / ICON fields for 2 m temperature,
-  precipitation, 10 m wind, CAPE and MSLP, sampled over the current view
-- *Observations* — METAR station plots, US AQI, Local Storm Reports
-- *Outlooks* — NWS warning cards with polygons, SPC convective outlooks
-  (days 1-3), tropical, aurora
+- *Observations* — METAR station plots, US AQI, Local Storm Reports, live
+  public cameras, spotter reports
+- *Outlooks* — SPC convective outlooks (days 1-3), tropical, aurora
+- *Mapping* — base imagery, reference lines, parcels, subsea cables, and the
+  area-darkening scope that limits the frame to a set of counties
+- *Earth* — quakes (USGS), volcanoes (GVP), wildfires (FIRMS), ships
+  (AISStream), river gauges, tide stations, marine buoys
+- *Sky* — planes (OpenSky), airports, TFRs, airspace, satellites (Celestrak
+  TLE propagated client-side), launches, and the celestial realism switches
+- *World* — live world-population telemetry: running total, today's
+  births/deaths/growth, per-continent and top-15 country ranks, next-milestone
+  tracker. Projected from UN WPP 2024, and the pane says so.
 
-**EARTH** — quakes (USGS), volcanoes (GVP), wildfires (FIRMS), ships
-(AISStream), submarine cables, boundaries, cities, parcels, 3D buildings
+**NWS ALERTS** — everything in effect right now, counted by product type at
+the top and listed as cards underneath, scopeable to the current view or to
+warnings only. Reads the feed, so it is current with the polygon layer off.
 
-**SKY** — planes (OpenSky), airports, TFRs, airspace, satellites (Celestrak
-TLE propagated client-side), launches, and the celestial realism switches
+**BROADCAST** — the graphics that stay up in presentation mode (data readout,
+warning banner, colour scale, station bug) and the scene deck.
 
-**WORLD** — live world-population telemetry: running total, today's
-births/deaths/growth, per-continent and top-15 country ranks, next-milestone
-tracker. Projected from UN WPP 2024, and the pane says so.
+## Dashboards
+
+Full-frame boards, opened from their division, each re-reading its source on
+open and every 30 s. They read the feed rather than the scene, so a board is
+complete with every layer switched off.
+
+- **Severe weather** — what is in effect by type and by state, the impact
+  products with their hazard parameters and expiry, the SPC Day 1 outlook,
+  and storm reports from the past 12 hours
+- **Tropical** — active NHC systems with intensity, pressure and category,
+  the Saffir-Simpson scale, marine and coastal products, tropical products in
+  effect
+- **Water** — river gauges by flood category with the worst gauges named,
+  buoy sea state ranked by significant wave height, tide-station census
+- **Geophysical** — quake census by magnitude band, largest quakes with depth
+  and age, hottest fire detections, volcano and EONET counts
+- **Space weather** — planetary Kp against the NOAA G-scale, X-ray flux class,
+  orbital population, the launch window from T−1 h onward
+- **World population** — the full-frame board behind the World division
 
 Plus a telemetry bar (UTC, cursor, altitude, subsolar point, moon phase, Kp,
-X-ray, tracked total), warning cards, drawing tools, a map theme picker,
-alerts panel, live-feed ticker, compass, camera presets and a settings modal.
+X-ray, tracked total), a bottom transport, a standing colour scale on the
+right edge of the map, an alerts panel, live-feed ticker, compass, camera
+presets and a settings modal.
 
 ## Quick start
 
@@ -68,7 +102,7 @@ uv run python main.py
 - Windows / macOS / Linux — pywebview-driven; tested on Windows 11
 
 The window opens within ~30s. Layers default to off — toggle the ones you
-want from the left sidebar.
+want from the left rail.
 
 ## API keys (all optional, all free)
 

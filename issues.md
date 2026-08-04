@@ -123,3 +123,59 @@ or reword the preset hints to describe what actually changes.
 `api.cesium.com/v1/assets/2` returns 401 when `CESIUM_ION_TOKEN` is unset. The
 app falls back to ESRI World Imagery and works fine. Only worth setting a
 token if ion-hosted terrain or OSM Buildings are wanted.
+
+---
+
+## 5. `#layers` selectors missed for months (PRE-EXISTING, **FIXED** 2026-08-04)
+
+**Found:** 2026-08-04, while restyling the rail to the Weatherfront shape.
+
+Eleven CSS rules were written against `#layers`. The containers have been
+`#layers-earth` and `#layers-sky` since the rail was split into tabs, so every
+one of those selectors matched nothing and each layer row in the EARTH and SKY
+panes rendered as an unstyled browser checkbox with its label and count run
+together on one line. Confirmed pre-existing against `HEAD` before the fix.
+
+Fixed by scoping to a `.layer-list` class on both containers and converting the
+rows to the same `.sw` switch the rest of the rail uses.
+
+---
+
+## 6. Feed-health chips dimmed the division pills (PRE-EXISTING, **FIXED** 2026-08-04)
+
+**Found:** 2026-08-04, measuring why the selected division read as disabled.
+
+`refreshFeedChips()` ran `document.querySelectorAll('.chip')` and wrote
+`data-state` on every match. The rail's division pills carry the same class, so
+each one picked up `data-state="off"` and with it `.chip[data-state=off] {
+opacity: 0.45 }`. Measured: the selected pill rendered at rgb(41,103,125)
+instead of the accent rgb(77,210,255) — the accent at 0.435 alpha.
+
+Fixed by scoping both the census and the flicker to `#feedstrip-chips`.
+
+---
+
+## 7. NEXRAD tilt needs a Level II decoder (OPEN, by design for now)
+
+**Found:** 2026-08-04, adding the Weatherfront radar division.
+
+Weatherfront's radar division has a TILT row (0.5° / 0.9° / 1.3° / 1.8° /
+2.4° / 3.1°). Graticule's does not, and the division says why.
+
+IEM's RIDGE tile cache publishes the lowest elevation cut only. Measured
+against a working control, three times at three sites:
+
+| Product | KTLX | KDMX | KMPX | KFWS |
+|---------|------|------|------|------|
+| N0Q (0.5° reflectivity) | 200 | 200 | 200 | 200 |
+| N1Q / N2Q / N3Q (1.5° / 2.4° / 3.4°) | 503 | — | — | — |
+| N0U / N0S / N0Z / N0B / NET | 200 | 200 | 200 | 200 |
+| N0R, DVL, DAA, NTP, N0X, N0C, N0K, N0H, EET | 503 | — | — | — |
+
+The 503 body is IEM's own mapserver saying "Did not get image data back" for
+`prod=N1Q`, so the product does not exist in that cache rather than being
+throttled.
+
+Unidata THREDDS serves NEXRAD Level II keylessly (verified HTTP 200) but as
+binary radials, so a tilt selector needs a server-side decoder — materially
+larger than anything shipped so far. Not started; Don has not chosen it.
