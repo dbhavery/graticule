@@ -6244,25 +6244,150 @@ function metarPlotText(ob, field) {
 let warnDS = null;
 let warnFeatures = [];
 
-const WARN_STYLE = {
-  'Tornado Warning':            { c: '#ef4444', p: 100 },
-  'Severe Thunderstorm Warning':{ c: '#f59e0b', p: 90 },
-  'Flash Flood Warning':        { c: '#22c55e', p: 85 },
-  'Flood Warning':              { c: '#16a34a', p: 70 },
-  'Winter Storm Warning':       { c: '#60a5fa', p: 65 },
-  'Blizzard Warning':           { c: '#a78bfa', p: 66 },
-  'High Wind Warning':          { c: '#fbbf24', p: 60 },
-  'Special Marine Warning':     { c: '#f0abfc', p: 55 },
-  'Tornado Watch':              { c: '#dc2626', p: 50 },
-  'Severe Thunderstorm Watch':  { c: '#fb923c', p: 45 },
-};
+/* The National Weather Service's own watch/warning/advisory display list,
+   verbatim from weather.gov/help-map. Two things come out of it and both were
+   hand-rolled before: the colour, and the ORDER.
+
+   The colour, because it is the one every viewer and every meteorologist has
+   already learned. A hand-picked palette meant Graticule drew a Tornado
+   Warning in #ef4444 while NWS, RadarScope, Weatherfront and the local station
+   all drew it in pure #ff0000, and a Flood Warning green that was nobody's
+   green. Ten events were styled by name and everything else fell through four
+   regexes onto three colours -- measured on a live feed, ten alert types in
+   effect rendered in three colours, two of which were near-identical slate.
+
+   The order, because this list IS the NWS display priority: what overlaps what
+   on a map, and what leads a bulletin. Deriving priority from position means
+   the app cannot disagree with the service about which of two alerts matters
+   more. Index 0 is highest.
+
+   111 events. Anything the service adds later still resolves, through the
+   Warning/Watch/Advisory fallbacks at the bottom. */
+const NWS_EVENT_ORDER = [
+  ['Tsunami Warning', '#fd6347'],
+  ['Tornado Warning', '#ff0000'],
+  ['Extreme Wind Warning', '#ff8c00'],
+  ['Severe Thunderstorm Warning', '#ffa500'],
+  ['Flash Flood Warning', '#8b0000'],
+  ['Flash Flood Statement', '#8b0000'],
+  ['Severe Weather Statement', '#00ffff'],
+  ['Shelter In Place Warning', '#fa8072'],
+  ['Evacuation Immediate', '#7fff00'],
+  ['Civil Danger Warning', '#ffb6c1'],
+  ['Nuclear Power Plant Warning', '#4b0082'],
+  ['Radiological Hazard Warning', '#4b0082'],
+  ['Hazardous Materials Warning', '#4b0082'],
+  ['Fire Warning', '#a0522d'],
+  ['Civil Emergency Message', '#ffb6c1'],
+  ['Law Enforcement Warning', '#c0c0c0'],
+  ['Storm Surge Warning', '#b524f7'],
+  ['Hurricane Force Wind Warning', '#cd5c5c'],
+  ['Hurricane Warning', '#dc143c'],
+  ['Typhoon Warning', '#dc143c'],
+  ['Special Marine Warning', '#ffa500'],
+  ['Blizzard Warning', '#ff4500'],
+  ['Snow Squall Warning', '#c71585'],
+  ['Ice Storm Warning', '#8b008b'],
+  ['Heavy Freezing Spray Warning', '#00bfff'],
+  ['Winter Storm Warning', '#ff69b4'],
+  ['Lake Effect Snow Warning', '#008b8b'],
+  ['Dust Storm Warning', '#ffe4c4'],
+  ['Blowing Dust Warning', '#ffe4c4'],
+  ['High Wind Warning', '#daa520'],
+  ['Tropical Storm Warning', '#b22222'],
+  ['Storm Warning', '#9400d3'],
+  ['Tsunami Advisory', '#d2691e'],
+  ['Tsunami Watch', '#ff00ff'],
+  ['Avalanche Warning', '#1e90ff'],
+  ['Earthquake Warning', '#8b4513'],
+  ['Volcano Warning', '#2f4f4f'],
+  ['Ashfall Warning', '#a9a9a9'],
+  ['Flood Warning', '#00ff00'],
+  ['Coastal Flood Warning', '#228b22'],
+  ['Lakeshore Flood Warning', '#228b22'],
+  ['Ashfall Advisory', '#696969'],
+  ['High Surf Warning', '#228b22'],
+  ['Extreme Heat Warning', '#c71585'],
+  ['Tornado Watch', '#ffff00'],
+  ['Severe Thunderstorm Watch', '#db7093'],
+  ['Flash Flood Watch', '#2e8b57'],
+  ['Gale Warning', '#dda0dd'],
+  ['Flood Statement', '#00ff00'],
+  ['Extreme Cold Warning', '#0000ff'],
+  ['Freeze Warning', '#483d8b'],
+  ['Red Flag Warning', '#ff1493'],
+  ['Storm Surge Watch', '#db7ff7'],
+  ['Hurricane Watch', '#ff00ff'],
+  ['Hurricane Force Wind Watch', '#9932cc'],
+  ['Typhoon Watch', '#ff00ff'],
+  ['Tropical Storm Watch', '#f08080'],
+  ['Storm Watch', '#ffe4b5'],
+  ['Tropical Cyclone Local Statement', '#ffe4b5'],
+  ['Winter Weather Advisory', '#7b68ee'],
+  ['Avalanche Advisory', '#cd853f'],
+  ['Cold Weather Advisory', '#afeeee'],
+  ['Heat Advisory', '#ff7f50'],
+  ['Flood Advisory', '#00ff7f'],
+  ['Coastal Flood Advisory', '#7cfc00'],
+  ['Lakeshore Flood Advisory', '#7cfc00'],
+  ['High Surf Advisory', '#ba55d3'],
+  ['Dense Fog Advisory', '#708090'],
+  ['Dense Smoke Advisory', '#f0e68c'],
+  ['Small Craft Advisory', '#d8bfd8'],
+  ['Brisk Wind Advisory', '#d8bfd8'],
+  ['Hazardous Seas Warning', '#d8bfd8'],
+  ['Dust Advisory', '#bdb76b'],
+  ['Blowing Dust Advisory', '#bdb76b'],
+  ['Lake Wind Advisory', '#d2b48c'],
+  ['Wind Advisory', '#d2b48c'],
+  ['Frost Advisory', '#6495ed'],
+  ['Freezing Fog Advisory', '#008080'],
+  ['Freezing Spray Advisory', '#00bfff'],
+  ['Low Water Advisory', '#a52a2a'],
+  ['Local Area Emergency', '#c0c0c0'],
+  ['Winter Storm Watch', '#4682b4'],
+  ['Rip Current Statement', '#40e0d0'],
+  ['Beach Hazards Statement', '#40e0d0'],
+  ['Gale Watch', '#ffc0cb'],
+  ['Avalanche Watch', '#f4a460'],
+  ['Hazardous Seas Watch', '#483d8b'],
+  ['Heavy Freezing Spray Watch', '#bc8f8f'],
+  ['Flood Watch', '#2e8b57'],
+  ['Coastal Flood Watch', '#66cdaa'],
+  ['Lakeshore Flood Watch', '#66cdaa'],
+  ['High Wind Watch', '#b8860b'],
+  ['Extreme Heat Watch', '#800000'],
+  ['Extreme Cold Watch', '#5f9ea0'],
+  ['Freeze Watch', '#00ffff'],
+  ['Fire Weather Watch', '#ffdead'],
+  ['Extreme Fire Danger', '#e9967a'],
+  ['911 Telephone Outage', '#c0c0c0'],
+  ['Coastal Flood Statement', '#6b8e23'],
+  ['Lakeshore Flood Statement', '#6b8e23'],
+  ['Special Weather Statement', '#ffe4b5'],
+  ['Marine Weather Statement', '#ffdab9'],
+  ['Air Quality Alert', '#808080'],
+  ['Air Stagnation Advisory', '#808080'],
+  ['Hazardous Weather Outlook', '#eee8aa'],
+  ['Hydrologic Outlook', '#90ee90'],
+  ['Short Term Forecast', '#98fb98'],
+  ['Administrative Message', '#c0c0c0'],
+  ['Test', '#f0ffff'],
+  ['Child Abduction Emergency', '#ffffff'],
+  ['Blue Alert', '#ffffff'],
+];
+
+const WARN_STYLE = Object.fromEntries(NWS_EVENT_ORDER.map(
+  ([name, c], i) => [name, { c, p: NWS_EVENT_ORDER.length - i }]));
 
 function warnStyle(evt) {
   if (WARN_STYLE[evt]) return WARN_STYLE[evt];
-  if (/Warning/i.test(evt))  return { c: '#f87171', p: 40 };
-  if (/Watch/i.test(evt))    return { c: '#facc15', p: 30 };
-  if (/Advisory/i.test(evt)) return { c: '#94a3b8', p: 20 };
-  return { c: '#64748b', p: 10 };
+  // Not on the published list. Rank below everything that is, and take the
+  // class colour so an unrecognised product still reads as what it is.
+  if (/Warning/i.test(evt))   return { c: '#ff0000', p: 4 };
+  if (/Watch/i.test(evt))     return { c: '#ffff00', p: 3 };
+  if (/Advisory/i.test(evt))  return { c: '#d8bfd8', p: 2 };
+  return { c: '#c0c0c0', p: 1 };
 }
 
 function toggleWarnings(on) {
@@ -7055,8 +7180,35 @@ const WARN_PARAMS = [
   ['Flooding', (q) => q.flashFloodDetection?.[0]],
   ['Damage threat', (q) => q.flashFloodDamageThreat?.[0]],
   ['Waterspout', (q) => q.waterspoutDetection?.[0]],
-  ['Motion',   (q) => q.eventMotionDescription?.[0]],
+  ['Motion',   (q) => motionText(q.eventMotionDescription?.[0])],
 ];
+
+/* NWS ships storm motion as one packed string:
+
+     2026-08-04T15:19:00-00:00...storm...278DEG...8KT...29.75,-86.15
+
+   which the card printed verbatim, wrapped over two lines, next to the word
+   "Motion". Nobody reads a bearing out of that. Verified against the live feed
+   before parsing it -- both strings in effect at the time matched this shape.
+
+   Anything that does not match falls through unchanged rather than being
+   dropped: an unparsed string is ugly, a silently missing one is a lie. */
+function motionText(raw) {
+  if (!raw) return null;
+  const m = String(raw).match(/\.\.\.(\w+)\.\.\.(\d{1,3})DEG\.\.\.(\d{1,3})KT/i);
+  if (!m) return raw;
+  const [, kind, deg, kt] = m;
+  const bearing = Number(deg);
+  // NWS gives the direction the cell is moving TOWARD.
+  const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+  const card = dirs[Math.round((bearing % 360) / 22.5) % 16];
+  const mph = Math.round(Number(kt) * 1.15078);
+  const speed = settings.units === 'si'
+    ? `${Math.round(Number(kt) * 1.852)} km/h`
+    : `${mph} mph`;
+  return `${kind} toward ${card} (${bearing}°) at ${speed}`;
+}
 
 /* NWS areaDesc is "Cumberland, NC; Sampson, NC" — one "county, ST" per
    segment. Split it so the state can head the card the way RadarScope does
@@ -10064,6 +10216,11 @@ function renderAlertTypes() {
 
   setText('al-type-n', String(rows.length));
   setText('al-prod-n', String(list.length));
+  setText('al-prod-n2', String(list.length));
+  const scope = alScope();
+  setText('al-scope-l', scope === 'view' ? 'in this view'
+                      : scope === 'warnings' ? 'warnings only'
+                      : 'nationwide');
 
   if (!rows.length) {
     host.innerHTML = '<div class="al-empty">Nothing in effect for this scope.</div>';
@@ -10202,8 +10359,17 @@ const dbNum = (v, dp = 0) =>
   (v == null || !Number.isFinite(Number(v))) ? '—'
     : Number(v).toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
+/* A card claims extra columns for the content it holds, so an empty one gives
+   them back. The severe board asked for the full width for "Impact products"
+   whether it held a four-column table or the one sentence saying nothing is in
+   effect -- and on a quiet day that sentence sat alone across 1,550 px while
+   the storm-reports card below it started a fresh row a third of the way
+   across. Off-season is the normal state for half these boards, so the quiet
+   layout is the one that has to look composed. */
 function dbCard(title, inner, cls = '') {
-  return `<section class="db-card ${cls}"><h2 class="db-card-h">${escapeHtml(title)}</h2>${inner}</section>`;
+  const empty = /class="db-empty"/.test(inner);
+  const width = empty ? '' : cls;
+  return `<section class="db-card ${width}"><h2 class="db-card-h">${escapeHtml(title)}</h2>${inner}</section>`;
 }
 
 function dbStats(items) {
@@ -10969,10 +11135,14 @@ function palBuild() {
    hit, otherwise "on" would rank forty layers above the one you typed. */
 function palScore(item, q) {
   if (!q) return 1;
-  const hay = `${item.label} ${item.hint}`.toLowerCase();
   const lbl = item.label.toLowerCase();
   if (lbl.startsWith(q)) return 1000 - lbl.length;
-  const at = hay.indexOf(q);
+  // A hit in the name beats a hit in the category. Without the split, typing
+  // "re" ranked "presentation mode / hide the chrome" above "Base Reflectivity"
+  // because the match landed in the trailing hint text.
+  const inLabel = lbl.indexOf(q);
+  if (inLabel >= 0) return 700 - inLabel;
+  const at = String(item.hint || '').toLowerCase().indexOf(q);
   if (at >= 0) return 500 - at;
   // Subsequence over the label's word initials, then over the label itself.
   const initials = lbl.split(/[\s/(-]+/).map((w) => w[0] || '').join('');

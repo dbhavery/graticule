@@ -2695,9 +2695,19 @@ body.is-presenting #rail-open { display: none; }
   letter-spacing: var(--tr-tight);
   padding: 7px 3px;
   text-align: center;
+  /* Hover fades; SELECTION DOES NOT. A 140ms transition on the selected
+     colour makes "which division am I in" only as fast as the render loop:
+     measured on a busy frame, the transition was still mid-flight 1.2 s after
+     the click (2 running animations, background still reading the unselected
+     rgba(255,255,255,0.055) while .is-active was already on the element), and
+     8 of 9 divisions looked unselected the whole time. Feedback on a direct
+     action has to be instant or it reads as a dead button. */
+  transition: none;
+}
+.div-grid .chip:hover:not(.is-active) {
+  background: rgba(255, 255, 255, 0.1); color: var(--text);
   transition: background 140ms ease, color 140ms ease;
 }
-.div-grid .chip:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
 .div-grid .chip.is-active {
   background: var(--accent); color: #04141c; border: 0;
 }
@@ -3464,3 +3474,57 @@ body.is-presenting #rail-status { display: none; }
   border-left: 1px solid var(--panel-rule);
   margin: 10px 4px 0;
 }
+
+/* ---- Alerts: one headline number, then the breakdown ---- */
+.al-topline {
+  display: flex; align-items: center; gap: 11px;
+  padding: 12px 2px 14px;
+  border-bottom: 1px solid var(--rail-edge);
+  margin-bottom: 4px;
+}
+.al-big {
+  font-size: var(--fs-2xl); font-weight: 600;
+  color: var(--text); line-height: 1;
+}
+.al-big-l {
+  font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
+  color: var(--text-mute); line-height: 1.5;
+  text-transform: uppercase;
+}
+#al-scope-l { color: var(--text-dim); }
+
+/* The census dot carries the National Weather Service's published colour, so
+   the swatch beside "Tornado Warning" is the same red the polygon is drawn in
+   and the same red every other weather product uses. A ring rather than a
+   flat disc, because seven of the 111 official colours are pale enough to
+   vanish against the panel on their own. */
+.al-type .al-dot {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 5px -1px var(--ad);
+}
+
+/* ---- Selection never waits on the render loop ----
+   Same finding as the division pills, applied to every other selected state
+   in the rail. A transition on a hover colour is decoration and can afford to
+   be late. A transition on a SELECTED colour is the app's answer to "did that
+   click land", and on a busy frame the animation clock stops advancing: the
+   class was already on the element while getComputedStyle still returned the
+   unselected colour more than a second later. Hover keeps its fade; selection
+   paints on the same frame as the click. */
+.hud-tab      { transition: none; }
+.hud-tab:hover:not(.is-active) {
+  color: var(--text-dim);
+  transition: color 140ms ease;
+}
+
+.wf-item      { transition: none; }
+.wf-item:hover:not(.is-active) {
+  background: var(--rail-hover); color: var(--text);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+/* U+2332 (the glyph these three buttons used) has no coverage in JetBrains
+   Mono or Inter, so every one of them rendered as a fallback box. Inline SVG
+   always draws, and it inherits currentColor. */
+.ic-search { width: 1em; height: 1em; display: block; }
+#pal-i .ic-search, #pal-i { width: 15px; height: 15px; }
+.rail-icon .ic-search { width: 13px; height: 13px; }

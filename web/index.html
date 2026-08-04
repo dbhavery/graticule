@@ -39,7 +39,7 @@
       <span class="brand-mark"></span>
       <span class="brand-name">GRATICULE</span>
       <button id="topbar-search" class="tb-search" title="Search everything (Ctrl+K)">
-        <span class="tbs-i">&#9906;</span><span class="tbs-t">Search</span><span class="tbs-k mono">Ctrl K</span>
+        <span class="tbs-i"><svg class="ic-search" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="tbs-t">Search</span><span class="tbs-k mono">Ctrl K</span>
       </button>
     </div>
     <div class="telemetry">
@@ -110,7 +110,7 @@
       <span class="rb-mark"></span>
       <span class="rb-name" id="rail-title">RADAR</span>
       <button id="palette-btn" class="rail-icon" aria-label="Command palette"
-              title="Command palette (Ctrl+K)">&#9906;</button>
+              title="Command palette (Ctrl+K)"><svg class="ic-search" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       <button id="settings-btn" class="rail-icon" aria-label="Settings" title="Settings">&#9881;</button>
       <button id="rail-collapse" class="rail-icon" aria-label="Collapse the panel"
               title="Collapse the panel (\)">&times;</button>
@@ -389,13 +389,13 @@
         <div id="layers-earth" class="layer-list">
 
       <details open class="cat" data-cat="sea">
-        <summary><span class="cat-name">SEA</span><span class="cat-count" id="cat-count-sea">0</span></summary>
+        <summary><span class="cat-name">SEA</span><span class="cat-count" id="cat-count-sea"></span></summary>
         <label class="sw"><input type="checkbox" data-layer="ships"><span class="sw-t"></span><span class="dot" data-color="ships"></span><span class="sw-l">Ships</span><span class="count" id="count-ships">0</span></label>
         
       </details>
 
       <details open class="cat" data-cat="earth">
-        <summary><span class="cat-name">EARTH</span><span class="cat-count" id="cat-count-earth">0</span></summary>
+        <summary><span class="cat-name">EARTH</span><span class="cat-count" id="cat-count-earth"></span></summary>
         <label class="sw"><input type="checkbox" data-layer="quakes"><span class="sw-t"></span><span class="dot" data-color="quakes"></span><span class="sw-l">Earthquakes</span><span class="count" id="count-quakes">0</span></label>
         <label class="sw"><input type="checkbox" data-layer="volcanoes"><span class="sw-t"></span><span class="dot" data-color="volcanoes"></span><span class="sw-l">Volcanoes</span><span class="count" id="count-volcanoes">0</span></label>
         <label class="sw"><input type="checkbox" data-layer="fires"><span class="sw-t"></span><span class="dot" data-color="fires"></span><span class="sw-l">Wildfires</span><span class="count" id="count-fires">0</span></label>
@@ -407,7 +407,7 @@
            forecast centre assigned, which is what makes a stage in feet
            mean something. -->
       <details open class="cat" data-cat="water">
-        <summary><span class="cat-name">WATER</span><span class="cat-count" id="cat-count-water">0</span></summary>
+        <summary><span class="cat-name">WATER</span><span class="cat-count" id="cat-count-water"></span></summary>
         <label class="sw" title="NOAA National Water Prediction Service. Gauges at or above action stage stay visible from orbit; the rest appear as you zoom in."><input type="checkbox" data-layer="rivers"><span class="sw-t"></span><span class="dot" data-color="rivers"></span><span class="sw-l">River Gauges</span><span class="count" id="count-rivers">0</span></label>
         <label class="sw" title="NOAA CO-OPS water-level stations. Click one for the live level and today's highs and lows."><input type="checkbox" data-layer="tides"><span class="sw-t"></span><span class="dot" data-color="tides"></span><span class="sw-l">Tide Stations</span><span class="count" id="count-tides">0</span></label>
         <label class="sw" title="NOAA National Data Buoy Center. Dot size and colour follow significant wave height."><input type="checkbox" data-layer="buoys"><span class="sw-t"></span><span class="dot" data-color="buoys"></span><span class="sw-l">Marine Buoys</span><span class="count" id="count-buoys">0</span></label>
@@ -419,13 +419,13 @@
            every one of those layers two switches and one source of truth. -->
 
       <details open class="cat" data-cat="terrain">
-        <summary><span class="cat-name">3D</span><span class="cat-count" id="cat-count-terrain">0</span></summary>
+        <summary><span class="cat-name">3D</span><span class="cat-count" id="cat-count-terrain"></span></summary>
         <label class="sw"><input type="checkbox" data-layer="buildings" disabled><span class="sw-t"></span><span class="dot" data-color="buildings"></span><span class="sw-l">Buildings (OSM)</span><span class="count" id="count-buildings">—</span></label>
         <label class="sw"><input type="checkbox" data-layer="photoreal3d" disabled><span class="sw-t"></span><span class="dot" data-color="photoreal3d"></span><span class="sw-l">Photoreal 3D</span><span class="count" id="count-photoreal3d">—</span></label>
       </details>
 
       <details open class="cat" data-cat="alerts">
-        <summary><span class="cat-name">ALERTS</span><span class="cat-count" id="cat-count-alerts">0</span></summary>
+        <summary><span class="cat-name">ALERTS</span><span class="cat-count" id="cat-count-alerts"></span></summary>
         <label class="sw"><input type="checkbox" data-layer="tsunamis"><span class="sw-t"></span><span class="dot" data-color="tsunamis"></span><span class="sw-l">Tsunami</span><span class="count" id="count-tsunamis">0</span></label>
         <label class="sw"><input type="checkbox" data-layer="severe"><span class="sw-t"></span><span class="dot" data-color="severe"></span><span class="sw-l">Severe Wx</span><span class="count" id="count-severe">0</span></label>
         <label class="sw"><input type="checkbox" data-layer="news"><span class="sw-t"></span><span class="dot" data-color="news"></span><span class="sw-l">Events</span><span class="count" id="count-news">0</span></label>
@@ -442,7 +442,7 @@
         <div id="layers-sky" class="layer-list">
 
         <details open class="cat" data-cat="air">
-          <summary><span class="cat-name">AIR</span><span class="cat-count" id="cat-count-air">0</span></summary>
+          <summary><span class="cat-name">AIR</span><span class="cat-count" id="cat-count-air"></span></summary>
           <label class="sw"><input type="checkbox" data-layer="planes"><span class="sw-t"></span><span class="dot" data-color="planes"></span><span class="sw-l">Planes</span><span class="count" id="count-planes">0</span></label>
           <label class="sw"><input type="checkbox" data-layer="airports"><span class="sw-t"></span><span class="dot" data-color="airports"></span><span class="sw-l">Airports</span><span class="count" id="count-airports">0</span></label>
           <label class="sw"><input type="checkbox" data-layer="tfrs"><span class="sw-t"></span><span class="dot" data-color="tfrs"></span><span class="sw-l">TFRs</span><span class="count" id="count-tfrs">0</span></label>
@@ -450,7 +450,7 @@
         </details>
 
         <details open class="cat" data-cat="space">
-          <summary><span class="cat-name">SPACE</span><span class="cat-count" id="cat-count-space">0</span></summary>
+          <summary><span class="cat-name">SPACE</span><span class="cat-count" id="cat-count-space"></span></summary>
           <label class="sw"><input type="checkbox" data-layer="satellites"><span class="sw-t"></span><span class="dot" data-color="satellites"></span><span class="sw-l">Satellites</span><span class="count" id="count-satellites">0</span></label>
           <label class="sw"><input type="checkbox" data-layer="launches"><span class="sw-t"></span><span class="dot" data-color="launches"></span><span class="sw-l">Launches</span><span class="count" id="count-launches">0</span></label>
         </details>
@@ -519,13 +519,23 @@
         </select>
       </div>
 
+      <!-- The counts name what they count. This read "ACTIVE ALERTS 10" over
+           "PRODUCTS 112" -- 10 was the number of distinct event types, not a
+           number of alerts, and the two lines together said there were 10 of
+           something and 112 of something else with no way to tell which was
+           the answer to "how much is in effect right now". -->
+      <div class="al-topline">
+        <span class="al-big mono" id="al-prod-n">0</span>
+        <span class="al-big-l">in effect<br><span id="al-scope-l">nationwide</span></span>
+      </div>
+
       <details open class="wf-acc" id="al-acc-active">
-        <summary><span class="wf-acc-t">ACTIVE ALERTS</span><span class="wf-acc-n" id="al-type-n">0</span></summary>
+        <summary><span class="wf-acc-t">BY TYPE</span><span class="wf-acc-n" id="al-type-n">0</span></summary>
         <div id="al-types" class="al-types"></div>
       </details>
 
       <details open class="wf-acc" id="al-acc-products">
-        <summary><span class="wf-acc-t">PRODUCTS</span><span class="wf-acc-n" id="al-prod-n">0</span></summary>
+        <summary><span class="wf-acc-t">PRODUCTS</span><span class="wf-acc-n" id="al-prod-n2">0</span></summary>
         <ol id="warn-list" class="warn-list"></ol>
       </details>
 
@@ -800,7 +810,7 @@
   <div id="palette" class="hidden" role="dialog" aria-modal="true" aria-label="Command palette">
     <div id="pal-box">
       <div id="pal-top">
-        <span id="pal-i">&#9906;</span>
+        <span id="pal-i"><svg class="ic-search" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
         <input id="pal-q" type="text" autocomplete="off" spellcheck="false"
                placeholder="Jump to a division, layer, site or dashboard…"
                aria-label="Search commands" aria-controls="pal-list" role="combobox"
