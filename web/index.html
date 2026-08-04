@@ -283,6 +283,21 @@
           </select>
         </div>
         <label class="sw"><input type="checkbox" data-layer="model"><span class="sw-t"></span><span class="sw-l">Show model field</span></label>
+
+        <!-- Forecast hour. The field used to be sampled with Open-Meteo's
+             `current=` only, so a MODEL division could answer "what is it
+             now" and nothing else. The whole hourly series is fetched and
+             cached per point, so dragging this re-renders off memory: no
+             round trip per step, and no extra load on an API that already
+             rate-limits us. Hidden until a series exists. -->
+        <div id="model-hour-row" class="wf-row" hidden>
+          <span class="wf-row-l">Hour</span>
+          <input type="range" id="model-hour" min="0" max="0" step="1" value="0"
+                 aria-label="Forecast hour">
+          <button id="model-hour-now" class="sm-btn" title="Back to the current hour">Now</button>
+        </div>
+        <div id="model-hour-val" class="wf-hint mono">now</div>
+
         <!-- Weatherfront's Single | Compare Runs | Compare Models. Compare
              opens a multi-series chart at the clicked point rather than a
              second map pane: Graticule's model layer is a point grid on a

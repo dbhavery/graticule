@@ -398,6 +398,7 @@ const TICKER_MAX = 6;
   initWorldPane();
   initWorldDash();
   initModelCompare();
+  initModelHour();
   initAreaDarkening();
   initPresentation();
   initPanes();
@@ -5970,6 +5971,25 @@ let _modelBusy = false;
 // re-run is queued, because the user only ever wants the field they landed on.
 let _modelPending = false;
 
+/* The sampled field used to be `current=` only, so the model division could
+   answer "what is it now" and nothing else -- which is the one question a
+   model is not for. It fetches `hourly=` instead and keeps the whole series
+   per point, so scrubbing the forecast hour is a re-render off memory rather
+   than a refetch. That matters twice over: Open-Meteo rate-limits by request,
+   and a scrubber that costs a round trip per step is not a scrubber.
+
+   Two days rather than five. 140 points x 48 hours x up to four variables for
+   a derived field is already ~40k values in one response, and the shear and
+   lifted-index fields are the ones that trip the minutely limit first. */
+const MODEL_FCST = {
+  times: [],      // ISO strings, UTC
+  series: [],     // one { lon, lat, vars: { name: number[] } } per point
+  idx: 0,         // index into times
+  now: 0,         // index of the hour containing "now"
+  units: {},
+};
+const MODEL_FCST_DAYS = 2;
+
 function toggleModelField(on) {
   if (!modelDS) {
     modelDS = new Cesium.CustomDataSource('model');
@@ -5997,7 +6017,9 @@ async function refreshModelField() {
     const wanted = (def.vars || [fieldKey]).join(',');
     const params = new URLSearchParams({
       latitude: lat, longitude: lon,
-      current: wanted,
+      hourly: wanted,
+      forecast_days: String(MODEL_FCST_DAYS),
+      timezone: 'UTC',
       models: OM_MODELS[modelKey] || 'gfs_seamless',
       temperature_unit: 'fahrenheit',
       wind_speed_unit: 'mph',
@@ -6010,25 +6032,69 @@ async function refreshModelField() {
     let data = await r.json();
     if (!Array.isArray(data)) data = [data];
 
-    modelDS.entities.removeAll();
-    let shown = 0;
-    for (const d of data) {
-      const cur = d && d.current;
-      let v = null;
-      if (cur) {
-        v = def.derive ? def.derive(cur, d.current_units) : cur[fieldKey];
-        // A derive() over a missing variable yields NaN, and NaN paints as
-        // the bottom of the ramp rather than as absent.
-        if (!Number.isFinite(v)) v = null;
-      }
+    // Cache the series, then let the renderer draw whichever hour is selected.
+    const wantedVars = def.vars || [fieldKey];
+    MODEL_FCST.times = (data.find((d) => d && d.hourly && d.hourly.time) || {}).hourly?.time || [];
+    MODEL_FCST.units = (data[0] || {}).hourly_units || {};
+    MODEL_FCST.series = data
+      .filter((d) => Number.isFinite(d?.longitude) && Number.isFinite(d?.latitude) && d.hourly)
+      .map((d) => ({
+        lon: d.longitude, lat: d.latitude,
+        vars: Object.fromEntries(wantedVars.map((v) => [v, d.hourly[v] || []])),
+      }));
+
+    // Open-Meteo's hourly series starts at 00:00 UTC today, so roughly the
+    // first half of it is already in the past. Anchor on the hour containing
+    // now and keep the selection where the operator left it.
+    const nowIso = new Date().toISOString().slice(0, 13);
+    const found = MODEL_FCST.times.findIndex((t) => String(t).slice(0, 13) === nowIso);
+    MODEL_FCST.now = found >= 0 ? found : 0;
+    if (MODEL_FCST.idx < MODEL_FCST.now || MODEL_FCST.idx >= MODEL_FCST.times.length) {
+      MODEL_FCST.idx = MODEL_FCST.now;
+    }
+    syncModelHourControl();
+    renderModelField();
+  } catch (err) {
+    if (noteEl) noteEl.textContent = `Model field unavailable: ${err.message}`;
+  } finally {
+    _modelBusy = false;
+    if (_modelPending) {
+      _modelPending = false;
+      refreshModelField();
+    }
+  }
+}
+
+/* Draw the selected hour out of the cached series. Split from the fetch so
+   the scrubber is instant and so a view change and an hour change do not both
+   have to go to the network. */
+function renderModelField() {
+  if (!modelDS || !modelDS.show) return;
+  const noteEl = document.getElementById('model-note');
+  const modelKey = valueOf('model-name', 'gfs');
+  const fieldKey = valueOf('model-field', 'temperature_2m');
+  const def = FIELD_DEFS[fieldKey];
+  if (!def) return;
+  const i = MODEL_FCST.idx;
+
+  modelDS.entities.removeAll();
+  let shown = 0;
+  {
+    for (const d of MODEL_FCST.series) {
+      const at = Object.fromEntries(
+        Object.entries(d.vars).map(([k, arr]) => [k, arr[i]]));
+      let v = def.derive ? def.derive(at, MODEL_FCST.units) : at[fieldKey];
+      // A derive() over a missing variable yields NaN, and NaN paints as
+      // the bottom of the ramp rather than as absent.
+      if (!Number.isFinite(v)) v = null;
       if (v == null) continue;
       // Open-Meteo can return an error object without coordinates for a point
       // it rejects. fromDegrees(undefined, undefined) yields a NaN position,
       // which corrupts Cesium's frustum maths and kills the whole scene with
       // "Invalid array length" out of createPotentiallyVisibleSet.
-      if (!Number.isFinite(d.longitude) || !Number.isFinite(d.latitude)) continue;
+      if (!Number.isFinite(d.lon) || !Number.isFinite(d.lat)) continue;
       modelDS.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(d.longitude, d.latitude),
+        position: Cesium.Cartesian3.fromDegrees(d.lon, d.lat),
         point: {
           pixelSize: 16,
           color: rampColor(def.stops, v).withAlpha(0.55),
@@ -6051,20 +6117,61 @@ async function refreshModelField() {
     }
     applyLegendForField(def);
     if (noteEl) {
+      const when = modelHourLabel(MODEL_FCST.idx);
       noteEl.textContent = def.note
-        ? `${def.label} · ${modelKey.toUpperCase()} · ${shown} points · ${def.note}`
-        : `${def.label} · ${modelKey.toUpperCase()} · ${shown} points. Re-samples on view change.`;
+        ? `${def.label} · ${modelKey.toUpperCase()} · ${when} · ${shown} points · ${def.note}`
+        : `${def.label} · ${modelKey.toUpperCase()} · ${when} · ${shown} points. Re-samples on view change.`;
     }
+    // The broadcast readout takes its title and its clock from whatever is on
+    // the globe, so it has to be redrawn when the forecast hour moves.
+    gfxRender();
     viewer.scene.requestRender();
-  } catch (err) {
-    if (noteEl) noteEl.textContent = `Model field unavailable: ${err.message}`;
-  } finally {
-    _modelBusy = false;
-    if (_modelPending) {
-      _modelPending = false;
-      refreshModelField();
-    }
   }
+}
+
+/* "+18 h · Wed 09 UTC". The offset is what a forecaster asks for; the valid
+   time is what they have to put on air, so the row carries both. */
+function modelHourLabel(i) {
+  const t = MODEL_FCST.times[i];
+  if (!t) return 'now';
+  const off = i - MODEL_FCST.now;
+  const d = new Date(`${t}Z`);
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const stamp = `${day} ${hh} UTC`;
+  return off === 0 ? `now · ${stamp}` : `+${off} h · ${stamp}`;
+}
+
+/* The scrubber only exists once a series has been fetched: a slider with
+   nothing behind it invites a drag that does nothing. */
+function syncModelHourControl() {
+  const row = document.getElementById('model-hour-row');
+  const sl  = document.getElementById('model-hour');
+  const val = document.getElementById('model-hour-val');
+  if (!row || !sl || !val) return;
+  const have = MODEL_FCST.times.length > MODEL_FCST.now + 1;
+  row.hidden = !have;
+  if (!have) return;
+  sl.min = String(MODEL_FCST.now);
+  sl.max = String(MODEL_FCST.times.length - 1);
+  sl.value = String(MODEL_FCST.idx);
+  val.textContent = modelHourLabel(MODEL_FCST.idx);
+}
+
+function initModelHour() {
+  const sl = document.getElementById('model-hour');
+  if (!sl) return;
+  sl.addEventListener('input', () => {
+    MODEL_FCST.idx = Number(sl.value);
+    const val = document.getElementById('model-hour-val');
+    if (val) val.textContent = modelHourLabel(MODEL_FCST.idx);
+    renderModelField();
+  });
+  document.getElementById('model-hour-now')?.addEventListener('click', () => {
+    MODEL_FCST.idx = MODEL_FCST.now;
+    syncModelHourControl();
+    renderModelField();
+  });
 }
 
 function applyLegendForField(def) {
@@ -8995,9 +9102,15 @@ function gfxProduct() {
   if (gfxLayerOn('model')) {
     const def = FIELD_DEFS[valueOf('model-field', 'temperature_2m')];
     const model = valueOf('model-name', 'gfs').toUpperCase();
+    // The valid time, not the wall clock. A forecast graphic that stamps the
+    // current time is worse than one with no time on it: on air, +24 h read
+    // "16:50 UTC" while the map showed Wednesday.
+    const valid = MODEL_FCST.times[MODEL_FCST.idx];
+    const off = MODEL_FCST.times.length ? MODEL_FCST.idx - MODEL_FCST.now : 0;
     return {
       title: (def && (def.legend || def.label) || 'MODEL FIELD').toUpperCase(),
-      sub: `FORECAST · ${model}`,
+      sub: off > 0 ? `${model} · +${off} H FORECAST` : `${model} · ANALYSIS`,
+      when: valid ? new Date(`${valid}Z`) : undefined,
     };
   }
   if (gfxLayerOn('radar') && GFX.stamp) {
@@ -9015,7 +9128,9 @@ function gfxProduct() {
    zone is ambiguous, so the zone is always on the label. When a radar frame is
    loaded its valid time is what matters, not the current time. */
 function gfxTimeBlock(cfg) {
-  const p = GFX.stamp && gfxLayerOn('radar') ? GFX.stamp.when : new Date();
+  // Whatever product is driving the graphic decides the clock, so a scrubbed
+  // forecast hour and a replayed radar frame both stamp their own valid time.
+  const p = gfxProduct().when || new Date();
   const p2 = (n) => String(n).padStart(2, '0');
   if (settings.timeFormat === 'local') {
     const h = p.getHours(), ap = h >= 12 ? 'PM' : 'AM';

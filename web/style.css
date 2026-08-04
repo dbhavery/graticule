@@ -3528,3 +3528,14 @@ body.is-presenting #rail-status { display: none; }
 .ic-search { width: 1em; height: 1em; display: block; }
 #pal-i .ic-search, #pal-i { width: 15px; height: 15px; }
 .rail-icon .ic-search { width: 13px; height: 13px; }
+
+/* A value line under a control row: the row carries the input, this carries
+   what the input currently means. Used by the model forecast hour, where the
+   number is a time and does not fit in the row's value slot. */
+.wf-hint {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+  padding: 6px 2px 2px;
+}
+#model-hour { flex: 1 1 auto; min-width: 0; }
