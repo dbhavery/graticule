@@ -20,16 +20,33 @@ a true 15°/hour and matches real UTC:
   sunlight rotates around it. Re-centres only after 12 s idle, above 3 Mm, and
   past 12° of drift, so panning and zooming stay free.
 
+## The opening frame
+
+It opens on North America with the national radar mosaic running, boundaries
+drawn and the colour scale up. The frame is a `Rectangle` destination rather
+than a fixed altitude, so Cesium solves for the height that fits whatever
+viewport it is given and the composition survives the rail, presentation mode
+and any window size.
+
+While a field is drawn over it, the base map is graded down — brightness 0.58,
+saturation 0.34 — because ESRI imagery over CONUS is bright green and tan and
+20 dBZ blue on it is close to unreadable. Switchable in Mapping. With nothing
+over it the base keeps the contrast-forward grade the realistic globe wants.
+
 ## The rail
 
 A docked, full-height panel on the left that the map starts to the right of.
-Top to bottom: identity, three mode tabs, tool icons, then the division grid
-and the controls for whichever division is selected. It collapses with `\`.
+Top to bottom: the division you are driving, three mode tabs, tool icons, then
+the division grid, the controls for whichever division is selected, and a
+pinned footer listing every layer currently drawing with the health of the
+feeds behind them. It collapses with `\`.
 
 **DATA** — nine divisions in a 3-across grid
 
 - *Radar* — national mosaic as a scrubable, playable frame loop over past and
-  nowcast frames with an explicit NOW marker; local hi-res single-site NEXRAD
+  nowcast frames, with both ends of the window labelled and a marker on the
+  newest observed frame that reads NOW when a nowcast follows it and LATEST
+  when RainViewer is not publishing one; local hi-res single-site NEXRAD
   (30 sites) with six products: super-res and legacy reflectivity, base and
   storm-relative velocity, long-range reflectivity, echo tops. No tilt
   selector — the keyless tile service publishes the lowest elevation cut only
@@ -37,7 +54,9 @@ and the controls for whichever division is selected. It collapses with `\`.
   server-side Level II decoder.
 - *Model* — GFS / HRRR / NAM / ECMWF / ICON fields for 2 m temperature,
   precipitation, 10 m wind, CAPE, MSLP and the mesoanalysis set, sampled over
-  the current view; single, compare-runs and compare-models
+  the current view; a 48-hour forecast-hour scrubber that re-renders off a
+  cached series rather than refetching, so dragging it costs nothing; single,
+  compare-runs and compare-models
 - *Satellite* — GOES-East / GOES-West visible, infrared and water vapour, plus
   a global true-colour composite
 - *Observations* — METAR station plots, US AQI, Local Storm Reports, live
@@ -53,7 +72,10 @@ and the controls for whichever division is selected. It collapses with `\`.
   births/deaths/growth, per-continent and top-15 country ranks, next-milestone
   tracker. Projected from UN WPP 2024, and the pane says so.
 
-**NWS ALERTS** — everything in effect right now, counted by product type at
+**NWS ALERTS** — everything in effect right now, coloured with the National
+Weather Service's own published table (111 events, taken verbatim from
+weather.gov/help-map) and ranked by that table's order, which is the
+service's own display priority. Counted by product type at
 the top and listed as cards underneath, scopeable to the current view or to
 warnings only. Reads the feed, so it is current with the polygon layer off.
 
@@ -139,6 +161,11 @@ public-API catalog.
 
 ## Controls
 
+- **`Ctrl` + `K`** → command palette over everything reachable by name: tabs,
+  divisions, dashboards, every layer, radar products, radar sites, base maps,
+  saved views and the actions. Subsequence matching, so `srv` reaches Storm
+  Relative Velocity. The index is rebuilt from the live DOM on each open, so it
+  cannot offer a control that is not there.
 - **Hover** dot for ~500 ms → tooltip (delay configurable in Settings)
 - **Click** → right-side detail panel
 - **Right-click** anywhere → "Center camera here" / "Save as preset"

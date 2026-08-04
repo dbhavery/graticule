@@ -179,3 +179,85 @@ throttled.
 Unidata THREDDS serves NEXRAD Level II keylessly (verified HTTP 200) but as
 binary radials, so a tilt selector needs a server-side decoder — materially
 larger than anything shipped so far. Not started; Don has not chosen it.
+
+---
+
+## 8. Selection was animated, so it was only as fast as the render loop (**FIXED** 2026-08-04)
+
+**Found:** 2026-08-04. Written off as a test artifact the day before; it was
+not.
+
+Eight of nine division pills read as unselected more than a second after being
+clicked. `.is-active` was already on the element while `getComputedStyle`
+still returned the unselected `rgba(255,255,255,0.055)`, with two running
+animations on the node.
+
+**Measured**
+
+| Transitions | Result after a 1.2 s wait |
+|-------------|---------------------------|
+| default     | 8 of 9 pills `rgba(255,255,255,0.055)`, 2 running animations |
+| `transition: none` injected | 9 of 9 `rgb(77,210,255)`, 0 animations |
+
+On a busy frame the animation clock stops advancing, so a 140 ms transition on
+a *selected* colour makes selection feedback only as fast as the render loop.
+
+**Fix:** hover keeps its fade; selection does not transition, on the division
+pills, the mode tabs or the radar product list.
+
+---
+
+## 9. Reference lines could not be defaulted on (**FIXED** 2026-08-04)
+
+13.1 MB of state borders and 4.1 MB of country borders, 395,238 coordinates at
+float64 repr, for lines drawn one pixel wide. Radar over an unlabelled globe
+tells you a storm exists but not where it is, so this was blocking the boot
+composition.
+
+**Attribution** — in-page timing, because `page.evaluate` round-trips are not
+a usable instrument on this machine (issue #1):
+
+| Stage | ms |
+|-------|-----|
+| fetch (13.1 MB, gzipped to 4.6 MB) | 1,739 |
+| `JSON.parse` | 79 |
+| `Cartesian3.fromDegrees` x 320,146 | 79 |
+| entity build, clamped | 84 |
+
+The rest is Cesium's ground-polyline compile on later frames.
+
+**Measured, boundaries on vs off (SwiftShader):**
+
+| Build | Settled | Stalls |
+|-------|---------|--------|
+| before | 15 s | 5.6 s, 9.2 s |
+| after `slim_boundaries.py` | 9 s | 3.8 s |
+| control, boundaries off | 9 s | — |
+
+**Fix:** `scripts/slim_boundaries.py` — Douglas-Peucker at 0.002° (220 m,
+sub-pixel until the camera is under ~200 km) and 5-decimal coordinates (1.1 m,
+under the source data's own accuracy). 17.2 MB → 8.2 MB. Plus `data-defer` on
+the two switches, so the remaining compile lands 1.2 s behind first paint on a
+map that is already drawing.
+
+---
+
+## 10. Three search buttons rendered as fallback boxes (**FIXED** 2026-08-04)
+
+U+2332 has no coverage in JetBrains Mono or Inter, the only two faces the app
+loads, so the topbar search chip, the rail-head palette button and the palette
+input all drew a box. Replaced with inline SVG, which inherits `currentColor`.
+
+---
+
+## 11. RainViewer's nowcast is often empty (BY DESIGN, worth knowing)
+
+Measured repeatedly on 2026-08-04: 12 frames, all `past`, the newest 7-10
+minutes old, `nowcast: []`. The transport's marker sits on the newest observed
+frame, so with no nowcast it sits at 100% of the track — it used to call a
+ten-minute-old frame "NOW". It now reads LATEST in that state.
+
+Any test of the marker's forecast branch has to inject synthetic forecast
+frames; `tl_test.py` does, and asserts the marker moves off 100% and relabels.
+A test that only ran against the live feed would pass while proving nothing
+about half the behaviour.
