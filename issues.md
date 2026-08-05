@@ -344,3 +344,51 @@ REFLECTIVITY ramp on air describing nothing.
 Both had correct JavaScript. Neither had a visible effect. `chrome_test.py`
 checks both directions — the chrome must be up with radar on and gone with
 everything off — so a rule that simply hid it always would fail.
+
+---
+
+## 16. The whole UI was set below the readable floor (**FIXED** 2026-08-04)
+
+**Found:** 2026-08-04, after Don said the app was "not very intuitive to a
+human... extremely hard to understand what I want to click."
+
+`scripts/ui_audit.py` walks every visible text node across all nine divisions,
+three tabs, the dashboards, the settings modal and the palette, composites each
+element's ancestor backgrounds into a real colour (the app is layers of rgba
+over black, so a naive read returns "transparent") and computes WCAG contrast.
+
+| | before | after |
+|---|---|---|
+| distinct strings failing AA | 178 of 486 | **0 of 439** |
+| text elements below 12px | 1,116 of 1,480 | **0** |
+| distinct font sizes | 7 (9/10/11/12 carried 96%) | 6 (12/13/14/16/20/28) |
+| value-column x-edges per pane | 2 | 1 |
+| controls off their row centre | 3 | 0 |
+| pointer targets under 24px | 10 | 0 |
+
+`--text-mute: #5a6373` was one declaration and most of the damage: 3.19:1 on
+the rail, and the colour of nearly every label in the app.
+
+The 2026-08-02 pass fixed the *number* of type steps and got the sizes wrong.
+Seven steps is right; 9-10-11-12 is four weights of small.
+
+---
+
+## 17. Every fade-in could stall indefinitely (**FIXED** 2026-08-04)
+
+**Found:** 2026-08-04, writing a test for whether Escape closes Settings.
+
+Measured 1.2 s after clicking the gear, with no `hidden` class on the element
+and its own rule saying `opacity: 1`, `#settings-overlay` computed to
+**opacity 0**. Its 180ms fade had not advanced at all. `#palette` did the same:
+`elementFromPoint` found it on top of the screen while it was still invisible.
+
+Same root cause as issue #8 — on a busy frame the animation clock stops
+ticking, so anything whose visibility is gated by a transition or a keyframe
+can be arbitrarily late, or never arrive. It is the reason a click on the gear
+could look like it did nothing.
+
+**Fix:** nothing that gates visibility is animated. Transforms still animate —
+a modal that arrives 8px low and settles is a cosmetic miss; a modal that never
+becomes opaque is a broken button. `overlay_test.py` covers it, plus Escape on
+every overlay and the palette always being the topmost one.

@@ -3880,6 +3880,15 @@ function initSettings() {
   if (overlay) overlay.addEventListener('click', (e) => {
     if (e.target === overlay) overlay.classList.add('hidden');
   });
+  // Escape closed the dashboard, the palette and presentation mode, but not
+  // this. A modal with an X and a backdrop click and no Escape is the one that
+  // traps you, and it is the only overlay that can end up UNDER another one:
+  // pressing Ctrl+K over an open Settings put the palette behind it.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !overlay || overlay.classList.contains('hidden')) return;
+    e.preventDefault();
+    overlay.classList.add('hidden');
+  });
 
   // Apply persisted state on boot so first paint matches.
   applyUnits();
@@ -11498,6 +11507,9 @@ function palRender() {
 function palOpen() {
   const el = document.getElementById('palette');
   if (!el) return;
+  // The palette is the way OUT of anywhere, so it takes the screen. Opening it
+  // over Settings previously left it rendering behind the modal.
+  document.getElementById('settings-overlay')?.classList.add('hidden');
   PAL.items = palBuild();
   PAL.sel = 0;
   PAL.open = true;

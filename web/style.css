@@ -4365,3 +4365,29 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
 .sm-check, .sm-radio { flex-wrap: wrap; row-gap: 2px; }
 .sm-check > span:first-of-type, .sm-radio > span:first-of-type { flex: 1 1 auto; }
 .sm-hint { flex: 0 1 auto; text-align: right; max-width: 100%; }
+
+/* The palette is the escape hatch from anywhere, so it sits above every other
+   overlay. It was already numerically higher than Settings and still rendered
+   underneath it. */
+#palette { z-index: 120; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NOTHING THAT GATES VISIBILITY IS ANIMATED — 2026-08-04
+
+   Same root cause as the division pills, found again while testing whether
+   Escape closes Settings. Measured 1.2 s after clicking the gear, with no
+   `hidden` class on the element and its base rule saying opacity: 1, the
+   settings overlay computed to opacity 0. Its 180ms fade-in had not advanced
+   at all, because on a busy frame the animation clock stops ticking. The
+   palette, which fades in on a 120ms keyframe with fill-mode both, does the
+   same thing: elementFromPoint found it on top while it was still invisible.
+
+   A panel appearing IS the response to a click. It cannot be late, and it
+   certainly cannot be indefinitely late. Transforms may still animate -- a
+   modal that arrives 8px low and settles is a cosmetic miss; a modal that
+   never becomes opaque is a broken button.
+   ══════════════════════════════════════════════════════════════════════════ */
+#settings-overlay { transition: none; }
+#settings-modal { transition: transform 220ms cubic-bezier(.17,.84,.44,1); }
+#palette, #pal-box { animation: none; }
+#worlddash, #modelcompare { transition: none; }
