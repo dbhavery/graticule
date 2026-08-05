@@ -485,3 +485,98 @@ Don's call, not a number I pick to make a test go green.
 
 Related: the two failures logged previously in this suite were also upstream
 (CO-OPS error body for one station; NWPS serving 329 of 11,602 gauges cold).
+
+---
+
+## 22. The World pane and the board it opens were 24 million people apart (**FIXED** 2026-08-05)
+
+**Found:** 2026-08-05, reading both totals in one `page.evaluate` rather than
+comparing two screenshots taken minutes apart.
+
+| | reading |
+|---|---|
+| rail `#wp-total` | 8,308,414,237 |
+| board `#wd-total` | 8,284,390,050 |
+| **difference** | **24,024,187** |
+
+Stable across repeated reads, so not a tick artefact. Continent rows disagreed
+too — Asia by 18M, Europe by 2.4M.
+
+Two parallel datasets: the rail projected UN WPP constants hard-coded in
+`app.js` (15 countries); the board summed 217 World Bank rows from
+`world_population.json`, a file that only loaded if you opened the board.
+
+**Fix:** one dataset, loaded when the division initialises. `renderRank()` now
+takes the epoch, because the baselines are a year apart.
+
+### 22b. The pane contradicted itself
+
+| | value | implies |
+|---|---|---|
+| `DEATHS_PER_SEC` 2.51 | — | 79.2M/yr vs UN's 62M |
+| births − deaths | 1.73/s | 54.6M/yr |
+| odometer `WORLD_BASE.rate` | 0.0085 | **70.0M/yr** |
+
+A 22% disagreement between a counter and the breakdown printed directly under
+it — the same defect the world board's header calls out in the source it
+replicates. One pair of vital rates now, declared once (`const` does not hoist,
+so they live at the rail and the board aliases them).
+
+### 22c. And the dataset's own rate did not fit either
+
+With the vitals fixed the odometer still grew at 84M/yr, because the file's
+population-weighted rate is 0.970%/yr. No credible birth/death pair produces
+it: holding the UN's births needs 48M deaths, holding its deaths needs 146M
+births. `132M − 62M = 70M` is a coherent system. The total keeps the country
+data as its **base** and grows at the rate the vitals describe; rows still
+project individually and drift ~0.12%/yr from the headline until the data is
+rebaked, which is stated in the code.
+
+---
+
+## 23. A ranking that did not rank by the number it showed (**FIXED** 2026-08-05)
+
+`world_population.json` is sorted on the 2024 baseline; every displayed value
+is that baseline projected forward at each country's own rate. Faster-growing
+countries had overtaken, and the board printed it:
+
+```
+136  Armenia    3,182,120
+139  Qatar      3,314,227
+```
+
+**Fix:** rank on the projected figures. `WD.ranked` feeds the top-15 table, the
+tail window and the rail pane, so the three cannot disagree about who is where.
+
+---
+
+## 24. The full-screen board did not fit the screen (**FIXED** 2026-08-05)
+
+`scrollHeight` 977 in a 950px viewport at 1600x950 — the last REST OF COUNTRIES
+row ran to y=966 and was drawn straight across the source line in the footer.
+
+Not the row count. **A `1fr` grid track carries an implicit `min-height: auto`
+and will not shrink below its content**, and one auto minimum anywhere in the
+chain is enough to push the whole board off the bottom. `.wd-bot` already had
+`min-height: 0`; its `.wd-block` children and their `repeat(5, 1fr)` rows did
+not.
+
+**Fix:** release the floor at every level. Overflow 27px → 0, all five rows
+kept. `#worlddash` also still faded `opacity: 0 → 1` over 200ms — the last
+overlay in the app gating visibility on a transition (see #17). It does not
+animate now.
+
+---
+
+## 25. Thirteen sliders the readability pass never reached (**FIXED** 2026-08-05)
+
+That pass scoped to `.wf-row` and `.ctl`. The settings modal uses neither, so
+all thirteen of its ranges — atmosphere, vignette, idle rotate, seven layer
+opacities, alert opacity, fade, hover delay — were still the untouched 3px
+hairline with no visible thumb, measured **201x3**. Same fix as the rail: 24px
+hit area, 4px track, 14px thumb.
+
+**Also a defect in the checker, not the app:** `ui_audit.py` measured the
+`<input>` for a checkbox or radio rather than the `<label>` wrapping it. A 16px
+box inside a 400x33 row is not a 16px target, and the audit was reporting four
+false failures in settings. An audit that cries wolf stops being read.
