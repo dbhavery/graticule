@@ -392,3 +392,96 @@ could look like it did nothing.
 a modal that arrives 8px low and settles is a cosmetic miss; a modal that never
 becomes opaque is a broken button. `overlay_test.py` covers it, plus Escape on
 every overlay and the palette always being the topmost one.
+
+---
+
+## 18. The rail scrolled and nothing said so (**FIXED** 2026-08-05)
+
+**Found:** 2026-08-05, sampling pixel columns at the rail's right edge.
+
+`#hud-panes` is `overflow-y: auto` and the World division put **688px of
+content below the fold**, with the last visible row — a country in the
+population rank — sliced through the middle. A pixel sample of the 16px
+scrollbar gutter, x=323..338, returned **value 14 in every column**: identical
+to the panel background. Not a faint bar, no bar.
+
+Two separate causes:
+
+* The styled thumb was `rgba(255,255,255,0.16)` inside a 3px transparent
+  border — a 4px hairline at **1.60:1** against `--rail-bg`, under the 3:1
+  WCAG 1.4.11 floor for a non-text UI component.
+* Chromium's overlay scrollbars do not paint until the user is already
+  scrolling, which is no use to someone who does not know there is anywhere to
+  scroll to.
+
+**Fix:** thumb to 0.38 white (**3.54:1**) in a drawn track, plus the app's own
+top/bottom edges with a `▾ MORE` marker, toggled from scroll position rather
+than hover so they are true whether or not a bar is painted.
+
+---
+
+## 19. Three async notifications, none of them reliable (**FIXED** 2026-08-05)
+
+**Found:** 2026-08-05, while #18's test failed intermittently — 3 of 4 runs.
+
+Traced over 2s at 150ms intervals. Each is measured, not inferred:
+
+| Path | Behaviour |
+|---|---|
+| `scroll` event | after a programmatic scroll, arrived **>1050ms later or not at all**, run to run |
+| `ResizeObserver` | on a division switch, fired **450–600ms** after the content had already changed |
+| `scrollTop` alone | when content shrinks, the browser clamps silently, so a stale "more above" survived with nothing to clear it |
+
+For that window the rail asserted there was more above a division that fits in
+one screen. **Third instance of this pathology** — issue #8 (division pills)
+and #17 (fade-ins) are the same failure: on a busy frame an async notification
+is arbitrarily late or absent, and the symptom is chrome stating something no
+longer true.
+
+**Fix:** `room > 4` gates both edges so the clamp case cannot lie; division and
+tab switches call the sync directly rather than waiting to be noticed; and a
+400ms tick backs all of it up. Four consecutive clean runs of 27 checks after.
+
+---
+
+## 20. Half the country missing from the by-state board (**FIXED** 2026-08-05)
+
+**Found:** 2026-08-05, reading the Severe Weather dashboard and noticing
+California absent while the map printed a Ventura County heat warning.
+
+`STATE_OF` parsed the trailing two characters of `areaDesc`. That is
+`"County, ST; County, ST"` for county-based products and free prose for
+zone-based ones — `"Kiska to Attu Pacific Side"`, `"Rio Grande Valley of
+Eastern Hudspeth County"`. Measured on a live pull of 63 active alerts:
+
+| | attributed | distinct areas |
+|---|---|---|
+| areaDesc regex | 30 of 63 | 4 |
+| `geocode.UGC` | **62 of 63** | **22** |
+
+States the regex had never once seen: AN AR AZ **CA** IA IL MO MS MT NC NV OK
+PK PR TN TX VI WY.
+
+**Fix:** `geocode.UGC` first (its first two characters are the state or marine
+prefix by definition, and it was present on 62 of 63), regex as fallback. The
+15 marine prefixes are named rather than left as `PK 6`, and the card title
+says what it covers.
+
+---
+
+## 21. NDBC buoy count fails a fixed threshold (**OPEN — upstream, not the app**)
+
+**Found:** 2026-08-05, running `water_test.py` after unrelated UI work.
+
+`water_test` asserts `buoys >= 500` and got 390. Checked against the source
+rather than assumed: `ndbc.noaa.gov/data/latest_obs/latest_obs.txt` was
+publishing **344 lines** at the time, and `/api/buoys` returned **390
+features** — the app is rendering everything the feed gave it.
+
+The assertion measures how many stations reported to NOAA in the last hour,
+not anything about this code, so it will fail on any quiet hour. Left alone
+rather than moving the threshold: what the app's data-health bar should be is
+Don's call, not a number I pick to make a test go green.
+
+Related: the two failures logged previously in this suite were also upstream
+(CO-OPS error body for one station; NWPS serving 329 of 11,602 gauges cold).
