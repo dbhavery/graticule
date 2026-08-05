@@ -78,8 +78,18 @@ JS = r"""
       }
     }
     if (el.matches('button, a, input, select, summary, label.sw, .chip, .wf-item, .rs-chip')) {
+      // The TARGET is what you can click, which for a checkbox or radio inside
+      // a <label> is the whole label -- a 16px box in a 400x33 row is not a
+      // 16px target. Measuring the input alone reported four false failures in
+      // the settings modal, and an audit that cries wolf stops being read.
+      let box = r;
+      const lab = el.closest('label');
+      if (lab && (el.type === 'checkbox' || el.type === 'radio')) {
+        const lr = lab.getBoundingClientRect();
+        if (lr.width >= r.width && lr.height >= r.height) box = lr;
+      }
       out.targets.push({ tag: el.tagName.toLowerCase(), cls: String(el.className).slice(0, 30),
-                         w: Math.round(r.width), h: Math.round(r.height),
+                         w: Math.round(box.width), h: Math.round(box.height),
                          label: (el.innerText || el.getAttribute('aria-label') || '').slice(0, 28) });
     }
   }

@@ -5485,9 +5485,52 @@ const COUNTRIES = [
   ['DR Congo',       112_800_000, 0.0321],
 ];
 
-// Vital rates, UN WPP 2024: ~4.2 births and ~2.5 deaths per second worldwide.
-const BIRTHS_PER_SEC = 4.24;
-const DEATHS_PER_SEC = 2.51;
+// Vital rates. These were 4.24 and 2.51 per second, and they were wrong in a
+// way the pane displayed against itself: 2.51 deaths/s is 79.2M a year against
+// the UN's ~62M, and births-minus-deaths came to 54.6M a year while the
+// odometer directly above it grew at WORLD_BASE.rate, 70.0M a year. The same
+// panel disagreed with itself by 22%.
+//
+// That is the exact defect the world board's header calls out in the source it
+// replicates -- "the board's TODAY panel and its THIS YEAR panel disagree with
+// each other" -- and we had shipped our own copy of it one screen away. Both
+// surfaces now derive from the single pair below, so births - deaths is 70.0M
+// a year and matches the growth the total is actually accumulating.
+// Declared here, not next to the board, because `const` has no hoisting: the
+// board's copies are 1,600 lines further down and reading them from here would
+// throw on load.
+const WORLD_YEAR_S = 31_556_952;              // mean tropical year, seconds
+const WORLD_BIRTHS_PER_YEAR = 132_000_000;    // UN WPP 2024
+const WORLD_DEATHS_PER_YEAR = 62_000_000;     // UN WPP 2024
+const BIRTHS_PER_SEC = WORLD_BIRTHS_PER_YEAR / WORLD_YEAR_S;
+const DEATHS_PER_SEC = WORLD_DEATHS_PER_YEAR / WORLD_YEAR_S;
+
+/* The rate the world odometer climbs at, and it is deliberately NOT the sum of
+   the dataset's per-country rates.
+
+   world_population.json is 217 World Bank rows whose population-weighted rate
+   is 0.970%/yr, and projecting each country separately compounds that to about
+   84M a year. Measured against the panel directly underneath, which says
+   births minus deaths is 70M a year, that is the same defect this file already
+   fixed once: a counter disagreeing with the breakdown printed below it.
+
+   One of the two has to be wrong and it is the summed rate. 132M births and
+   62M deaths is a coherent demographic system that the UN publishes as such;
+   0.970% is an aggregate of country rates that each carry their own net
+   migration and was never meant to be summed into a world figure. No pair of
+   credible birth and death numbers produces it -- holding the UN's births
+   would require 48M deaths, holding its deaths would require 146M births, and
+   both are far outside the published range.
+
+   So the headline total keeps the real country data as its BASE, because that
+   is what every row on the board adds up to, and grows at the rate the vitals
+   describe. Country and continent rows still project at their own rates, since
+   a ranking needs each country's actual growth; they therefore drift from the
+   headline by about 0.12%/yr, roughly 10M after a full year, until the data is
+   rebaked. That is a real and stated limitation rather than a number nobody
+   can reconcile. */
+const WORLD_GROWTH_RATE =
+  (WORLD_BIRTHS_PER_YEAR - WORLD_DEATHS_PER_YEAR) / 8_231_613_070;
 
 // Compound the annual rate over elapsed years since the epoch.
 function project(base, rate, nowSec) {
@@ -5501,22 +5544,81 @@ function secondsIntoUtcDay(d) {
   return d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
 }
 
+/* The rail pane and the full board, on one dataset.
+
+   `WD.data` is world_population.json, loaded by loadWorldData(). The rows are
+   aggregated once and cached, because only the projection moves between ticks;
+   the total is re-summed each tick since that is what the board's odometer
+   does and the two have to track each other exactly.
+
+   Returns null until the file has loaded, and the caller falls back to the UN
+   constants -- a pane that shows nothing for a second is worse than a pane
+   that shows a slightly different number for a second. */
+const WORLD_SRC = { key: null, continents: [], countries: [], base: 0 };
+
+/* The one place the world total is computed. Both the rail odometer and the
+   full board call this, so there is no second answer to drift from the first. */
+function worldTotalNow() {
+  if (!WORLD_SRC.base) return project(WORLD_BASE.pop, WORLD_BASE.rate, Date.now() / 1000);
+  return wdProject(WORLD_SRC.base, WORLD_GROWTH_RATE, Date.now() / 1000, WD.epoch);
+}
+
+function worldPaneSource() {
+  const data = WD.data;
+  if (!data || !Array.isArray(data.countries) || !data.countries.length) return null;
+
+  if (WORLD_SRC.key !== data.year) {
+    // Continent base is the sum of its countries; its rate is their
+    // population-weighted mean, which is the same aggregation the board's
+    // static build does. Anything else and the continent rows would not add
+    // up to the total sitting above them.
+    const agg = new Map();
+    for (const c of data.countries) {
+      const t = agg.get(c.continent) || { pop: 0, w: 0 };
+      t.pop += c.pop;
+      t.w += c.pop * c.rate;
+      agg.set(c.continent, t);
+    }
+    WORLD_SRC.continents = [...agg.entries()]
+      .map(([name, t]) => [name, t.pop, t.pop ? t.w / t.pop : 0])
+      .sort((a, b) => b[1] - a[1]);
+    WORLD_SRC.countries = (WD.ranked || data.countries).slice(0, 15)
+      .map((c) => [c.name, c.pop, c.rate]);
+    WORLD_SRC.base = data.countries.reduce((s, c) => s + c.pop, 0);
+    WORLD_SRC.key = data.year;
+  }
+
+  return { total: worldTotalNow(), epoch: WD.epoch,
+           continents: WORLD_SRC.continents, countries: WORLD_SRC.countries };
+}
+
 let _worldTimer = null;
 function initWorldPane() {
   renderWorldStatic();
+  // The pane needs the same file the board does, and until now only opening
+  // the board fetched it -- so the rail ran on the fallback constants for the
+  // whole session unless you happened to click through. 40KB, once.
+  loadWorldData().catch((err) => console.warn('world population data:', err.message));
   if (_worldTimer) clearInterval(_worldTimer);
   _worldTimer = setInterval(updateWorldPane, 1000);
   updateWorldPane();
 }
 
-function renderWorldStatic() {
+/* The note has to name the source actually on screen. It said UN WPP
+   unconditionally, which stopped being true the moment the pane started
+   reading world_population.json -- and a citation that names the wrong source
+   is worse than none. */
+function renderWorldStatic(live) {
   const src = document.getElementById('wp-src');
-  if (src) {
-    src.textContent =
-      'Projected from UN World Population Prospects 2024 (medium variant), ' +
+  if (!src) return;
+  const txt = live
+    ? `Projected from World Bank Open Data (SP.POP.TOTL, SP.POP.GROW), ` +
+      `mid-${WD.data.year} baseline. Vital rates UN WPP 2024. Counters ` +
+      `interpolate the published growth rate — a projection, not a live census.`
+    : 'Projected from UN World Population Prospects 2024 (medium variant), ' +
       'mid-2025 baseline. Counters interpolate the published growth rate — ' +
       'a projection, not a live census.';
-  }
+  if (src.textContent !== txt) src.textContent = txt;
 }
 
 function updateWorldPane() {
@@ -5532,7 +5634,20 @@ function updateWorldPane() {
   const d   = new Date();
   const dayS = secondsIntoUtcDay(d);
 
-  const total = project(WORLD_BASE.pop, WORLD_BASE.rate, now);
+  // Prefer the dataset the full board runs on. Measured at the same instant,
+  // the pane said 8,308,414,237 and the board said 8,284,390,050 -- twenty-four
+  // million people apart, on the headline number of the feature, on a board you
+  // reach by clicking a button in the pane. The continent rows disagreed too
+  // (Asia by 18M, Europe by 2.4M), because these were two entirely parallel
+  // datasets: UN WPP constants baked into this file against World Bank figures
+  // in world_population.json.
+  //
+  // The board's is the one that has to win. Its total is the sum of its own
+  // country rows, so every number on it adds up; the constant here was a
+  // standalone figure that agreed with nothing else on screen.
+  const live = worldPaneSource();
+  const total = live ? live.total
+                     : project(WORLD_BASE.pop, WORLD_BASE.rate, now);
   setText('wp-total', fmtInt(total));
 
   const births = dayS * BIRTHS_PER_SEC;
@@ -5541,8 +5656,10 @@ function updateWorldPane() {
   setText('wp-deaths', fmtInt(deaths));
   setText('wp-growth', fmtInt(births - deaths));
 
-  renderRank('wp-continents', CONTINENTS, now);
-  renderRank('wp-countries',  COUNTRIES,  now);
+  const epoch = live ? live.epoch : WPP_EPOCH;
+  renderRank('wp-continents', live ? live.continents : CONTINENTS, now, epoch);
+  renderRank('wp-countries',  live ? live.countries  : COUNTRIES,  now, epoch);
+  renderWorldStatic(live);
   renderMilestone(total);
 }
 
@@ -5551,12 +5668,16 @@ function setText(id, txt) {
   if (el && el.textContent !== txt) el.textContent = txt;
 }
 
-function renderRank(containerId, rows, nowSec) {
+/* `epochSec` matters as much as the figures do. The UN constants are a mid-2025
+   baseline and world_population.json is mid-2024, so projecting World Bank rows
+   from the UN epoch would compound a year of growth that has already happened
+   and put the rail back out of step with the board it feeds. */
+function renderRank(containerId, rows, nowSec, epochSec = WPP_EPOCH) {
   const el = document.getElementById(containerId);
   if (!el) return;
   const html = rows.map((r, i) => {
     const [name, base, rate] = r;
-    const v = project(base, rate, nowSec);
+    const v = wdProject(base, rate, nowSec, epochSec);
     const dir = rate >= 0 ? 'up' : 'down';
     const arrow = rate >= 0 ? '▲' : '▼';
     return `<li><span class="r-i">${i + 1}</span>` +
@@ -7146,12 +7267,14 @@ const WD = {
   prev: new Map(),     // element id -> last rendered string, for tick flashes
 };
 
-// Seconds in a mean Gregorian year, matching the projection in the HUD pane.
-const WD_YEAR_S = 31_556_952;
-
-// UN WPP 2024: ~132M births and ~62M deaths a year.
-const WD_BIRTHS_PER_S = 132_000_000 / WD_YEAR_S;
-const WD_DEATHS_PER_S = 62_000_000 / WD_YEAR_S;
+// One set of vital rates for the whole app. These used to be a second literal
+// copy, and the rail's pair differed from them -- 79.2M deaths a year against
+// 62M -- so the pane and the board it opens disagreed about how many people
+// died today. Aliased rather than re-declared so there is nowhere for a third
+// answer to appear.
+const WD_YEAR_S = WORLD_YEAR_S;
+const WD_BIRTHS_PER_S = BIRTHS_PER_SEC;
+const WD_DEATHS_PER_S = DEATHS_PER_SEC;
 
 const WD_CONTINENT_ICON = {
   'Asia': '🌏', 'Africa': '🌍', 'Europe': '🌍',
@@ -7209,6 +7332,25 @@ async function initWorldDash() {
   });
 }
 
+/* A ranking has to be ranked by the number it is showing.
+
+   world_population.json is sorted by the World Bank's baseline population, and
+   every value on the board is that baseline projected forward at each
+   country's own rate. Faster-growing countries therefore overtake slower ones
+   between the bake and now, and the board printed the result: "136 Armenia
+   3,182,120" three rows above "139 Qatar 3,314,227". A board whose rank column
+   disagrees with its value column is telling you one of the two is wrong.
+
+   Re-sorted on the projected figures, so position and value always agree. The
+   ordering only changes on the scale of months, so this runs when the rest
+   window turns over rather than every tick. */
+function wdRankedCountries(nowSec) {
+  return WD.data.countries
+    .map((c) => ({ c, v: wdProject(c.pop, c.rate, nowSec, WD.epoch) }))
+    .sort((a, b) => b.v - a.v)
+    .map((x) => x.c);
+}
+
 async function loadWorldData() {
   if (WD.data) return WD.data;
   // StaticFiles is mounted at /static, not at the document root — a bare
@@ -7218,7 +7360,12 @@ async function loadWorldData() {
   WD.data = await res.json();
   // World Bank figures are mid-year estimates for the data year.
   WD.epoch = Date.UTC(WD.data.year, 6, 1) / 1000;
-  WD.rest = WD.data.countries.slice(15);
+  // Rank on the projected figures, not the baked baseline -- see
+  // wdRankedCountries(). Everything downstream reads WD.ranked, so the top-15
+  // table, the tail window and the rail pane cannot disagree about who is
+  // where.
+  WD.ranked = wdRankedCountries(Date.now() / 1000);
+  WD.rest = WD.ranked.slice(15);
   buildWorldDashStatic();
   return WD.data;
 }
@@ -7277,7 +7424,7 @@ function buildWorldDashStatic() {
 
   const tEl = document.getElementById('wd-top15');
   tEl.textContent = '';
-  WD.data.countries.slice(0, 15).forEach((c, i) => {
+  (WD.ranked || WD.data.countries).slice(0, 15).forEach((c, i) => {
     tEl.appendChild(wdCountryRow(i + 1, c, `wd-top-${i}`));
   });
 
@@ -7356,13 +7503,12 @@ function tickWorldDash() {
   const now = Date.now() / 1000;
   const d = new Date();
 
-  let world = 0, worldW = 0;
-  for (const c of WD.data.countries) {
-    const v = wdProject(c.pop, c.rate, now, WD.epoch);
-    world += v;
-    worldW += v * c.rate;
-  }
-  wdSet(document.getElementById('wd-total'), fmtInt(world));
+  // One source for the headline, shared with the rail pane. This used to sum
+  // 217 per-country projections here and the rail projected a separate UN
+  // constant, so the two screens were 24,024,187 people apart at the same
+  // instant. `worldW`, the population-weighted rate, was accumulated in that
+  // loop and never read by anything.
+  wdSet(document.getElementById('wd-total'), fmtInt(worldTotalNow()));
 
   // Elapsed seconds since 00:00 UTC today, and since 1 Jan UTC this year.
   const dayS = (d.getTime() - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(),
@@ -7398,21 +7544,29 @@ function tickWorldDash() {
 }
 
 /* REST OF COUNTRIES cycles a window of five through the tail of the ranking,
-   the way the source board does. Rebuild only when the window moves. */
+   the way the source board does. Rebuild only when the window moves.
+
+   The span is a single constant used by both loops. They were two separate
+   literal 5s, so changing one would have left the other updating rows that no
+   longer existed. Five is safe to hard-code because the board's grid now
+   compresses its rows to fit rather than overflowing the viewport -- see the
+   min-height note in the stylesheet. */
+const WD_REST_SPAN = 5;
+
 function tickWorldRest(now) {
   const turn = Math.floor(now / 12);           // a new window every 12s
   const el = document.getElementById('wd-rest');
+  if (!el) return;
   if (turn !== WD.restTurn || !el.childElementCount) {
     WD.restTurn = turn;
-    const span = 5;
-    const windows = Math.max(1, Math.ceil(WD.rest.length / span));
-    WD.restAt = (turn % windows) * span;
+    const windows = Math.max(1, Math.ceil(WD.rest.length / WD_REST_SPAN));
+    WD.restAt = (turn % windows) * WD_REST_SPAN;
     el.textContent = '';
-    WD.rest.slice(WD.restAt, WD.restAt + span).forEach((c, i) => {
+    WD.rest.slice(WD.restAt, WD.restAt + WD_REST_SPAN).forEach((c, i) => {
       el.appendChild(wdCountryRow(16 + WD.restAt + i, c, `wd-rest-${i}`));
     });
   }
-  WD.rest.slice(WD.restAt, WD.restAt + 5).forEach((c, i) => {
+  WD.rest.slice(WD.restAt, WD.restAt + WD_REST_SPAN).forEach((c, i) => {
     wdSet(document.getElementById(`wd-rest-${i}`),
           fmtInt(wdProject(c.pop, c.rate, now, WD.epoch)));
   });

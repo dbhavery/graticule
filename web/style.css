@@ -4504,3 +4504,70 @@ div[data-requires].is-off .wf-item.is-active {
   font-size: var(--fs-lg);
 }
 .gfx-x:hover { color: var(--text); background: rgba(255, 255, 255, 0.1); }
+
+/* ---- The world board overflowed the screen it is designed to fill ----
+   Measured at 1600x950: scrollHeight 977 against a 950px viewport, so the
+   last REST OF COUNTRIES row ran to y=966 and was drawn straight across the
+   source line in the footer. On a board that exists to be looked at, a row
+   printed over the citation is not a small thing.
+
+   The cause is a CSS Grid default, not the row count. A `1fr` track carries an
+   implicit `min-height: auto`, so it will not shrink below its content. The
+   board's fourth row is `1fr` and holds the two country tables; `.wd-bot`
+   already had `min-height: 0`, but its children did not, and neither did the
+   `repeat(5, 1fr)` rows inside them. Every one of those floors has to be
+   released or the outermost `1fr` cannot give way -- one auto minimum anywhere
+   in the chain is enough to push the whole board off the bottom of the screen.
+
+   With these the tables compress to whatever height is left, which is what a
+   fixed full-screen board should do, and the five rows the source board shows
+   stay five. */
+#worlddash .wd-block { min-height: 0; display: flex; flex-direction: column; }
+#worlddash .wd-block > .wd-h { flex: 0 0 auto; }
+#worlddash .wd-top15, #worlddash .wd-rest { flex: 1 1 auto; min-height: 0; }
+#worlddash .wd-top15 { grid-template-rows: repeat(5, minmax(0, 1fr)); }
+#worlddash .wd-rest  { grid-template-rows: repeat(5, minmax(0, 1fr)); }
+#worlddash .wd-c { min-height: 0; overflow: hidden; }
+/* A long name wrapping to two lines was what pushed a 250px column to 274px.
+   One line, clipped, keeps every row the same height as every other. */
+#worlddash .wd-c-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Same rule as every other overlay in this app: nothing that gates visibility
+   animates. #worlddash faded opacity 0 -> 1 over 200ms, and on a busy frame
+   that transition can fail to advance at all, leaving the board notionally
+   open and completely invisible. It is the biggest screen in the product and
+   it was the last one still doing this. */
+#worlddash { transition: none; }
+
+/* ---- The thirteen sliders the readability pass never reached ----
+   That pass gave `.wf-row` and `.ctl` sliders a real track, a 14px thumb and a
+   24px hit area. The settings modal uses neither class, so all thirteen of its
+   ranges -- atmosphere, vignette, idle rotate, seven layer opacities, alert
+   opacity, fade, hover delay -- were still the untouched 3px hairline with no
+   visible thumb, measured 201x3. Same defect, same fix, one selector wider.
+
+   Scoped to the modal rather than folded into the rule above so the rail's
+   grid-column placement, which only makes sense inside a three-track row, does
+   not follow it in here. */
+#settings-overlay input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 24px;            /* the HIT area, not the track */
+  background: none; margin: 0; padding: 0;
+  cursor: pointer;
+}
+#settings-overlay input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+#settings-overlay input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #071016;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  margin-top: -5px;                     /* (4px track - 14px thumb) / 2 */
+}
+#settings-overlay input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); }
+#settings-overlay input[type="range"]:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
