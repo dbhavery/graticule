@@ -331,10 +331,65 @@ const NA_HOME = { lon: -98.0, lat: 39.5, alt: 14_000_000 };
 // framing survives the rail, presentation mode and any window size.
 // Box: the lower 48 plus enough Gulf, Atlantic and southern Canada to show a
 // system approaching from any side.
+/* One definition of "phone", shared with the stylesheet.
+   Three places in this file asked `(max-width: 780px)` and the CSS asked
+   `(max-width: 780px), (max-height: 500px)`, which meant a phone held sideways
+   -- 915x412 -- got the mobile stylesheet while the JS still believed it was a
+   desktop, so the boot frame, the graphic placement and the sheet all
+   disagreed with the layout they were sitting in. Written once. */
+const PHONE_MQ = '(max-width: 780px), (max-height: 500px)';
+const isPhone = () => window.matchMedia(PHONE_MQ).matches;
+
 const NA_FRAME = { west: -131, south: 20.5, east: -62, north: 53.5 };
+/* CONUS is a landscape box, 69 degrees wide by 33 tall. Cesium solves for the
+   altitude that fits the whole rectangle, so the CONSTRAINING dimension wins:
+   in portrait that is the width, and the country spans the full width of the
+   phone with extra latitude visible above and below. That is the right answer
+   and needs no help.
+
+   An earlier version of this padded the box out to the viewport's aspect,
+   reasoning that a wide box in a tall frame would leave the country as a thin
+   band. It does not, and the padding was catastrophic: at 412x915 the aspect
+   is 0.45, so 69 degrees of longitude asked for 153 of latitude, clamped to
+   the poles, and the phone booted looking at the entire planet from orbit.
+   Measured, reverted. The lesson is the cheap one -- a fix for a problem
+   nobody confirmed was real.
+
+   On a phone the sheet covers the bottom ~96px at rest, so the frame is nudged
+   south by half of that in degrees, which keeps the middle of the country in
+   the middle of the VISIBLE map rather than behind the sheet. */
+/* A portrait phone needs its own box, and this one was picked by rendering
+   four candidates and looking at them rather than by reasoning about it.
+
+   The desktop box asks Cesium to fit 69 degrees of longitude across 412px, and
+   the altitude that takes -- 11,920 km, measured -- is far enough out that the
+   vertical field of view runs past the horizon: the phone booted showing the
+   whole planet against space, with the country a small patch in the middle.
+   Pulling the box in to 36 x 22 degrees brings the camera to 6,478 km, which
+   fills the screen edge to edge with the country readable and no space in
+   frame. The tighter box does not lose the coasts, because the extra vertical
+   room in a portrait viewport shows more longitude than the box asks for.
+
+   Centred slightly east of the desktop frame: that is where the population and
+   most of the convection is, and on a screen this size what you cannot fit
+   should be the emptiest part of the map. */
+const NA_FRAME_PHONE = { west: -112, south: 26, east: -76, north: 48 };
+
 function naFrameDestination() {
-  return Cesium.Rectangle.fromDegrees(
-    NA_FRAME.west, NA_FRAME.south, NA_FRAME.east, NA_FRAME.north);
+  const phone = isPhone();
+  let { west, south, east, north } = phone ? NA_FRAME_PHONE : NA_FRAME;
+
+  // The sheet covers the bottom of the map at rest, so the frame is nudged
+  // south by half of what it hides: that puts the middle of the country in the
+  // middle of the VISIBLE map rather than behind the sheet.
+  const el = document.getElementById('cesiumContainer');
+  const h = el ? el.clientHeight : 0;
+  if (phone && h > 0) {
+    const shift = (north - south) * (96 / h) * 0.5;
+    south -= shift;
+    north -= shift;
+  }
+  return Cesium.Rectangle.fromDegrees(west, south, east, north);
 }
 
 let viewer;
@@ -380,9 +435,44 @@ const feedActivity = {};   // layer -> last update timestamp (ms)
 const recentEvents = [];   // ticker entries (newest first)
 const TICKER_MAX = 6;
 
+// ---------- Installable ------------------------------------------------------
+//
+// Registered after load, not during it. A worker registration competes with the
+// first paint for the same main thread, and on the boot this app already has --
+// Cesium, terrain, four feeds -- that is the wrong thing to be doing at second
+// zero. Nothing on screen depends on it, so it can wait for a quiet moment.
+//
+// Deliberately quiet on failure. A service worker is unavailable over plain
+// HTTP on a non-localhost origin, in a private window, and behind some
+// enterprise policies. None of those is an error the operator can act on, and
+// the app works without it.
+function initServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+      .then((reg) => {
+        // A new worker takes over on the next navigation, which for an app
+        // nobody reloads means never. Tell the operator instead of swapping
+        // the code out from under a radar loop they are watching.
+        reg.addEventListener('updatefound', () => {
+          const w = reg.installing;
+          if (!w) return;
+          w.addEventListener('statechange', () => {
+            if (w.state === 'installed' && navigator.serviceWorker.controller) {
+              pushEvent('UPDATE', 'A new version is ready — reload to use it',
+                        Date.now());
+            }
+          });
+        });
+      })
+      .catch(() => { /* see above: not actionable */ });
+  });
+}
+
 // ---------- Bootstrap --------------------------------------------------------
 
 (async function main() {
+  initServiceWorker();
   await initViewer();
   initDataSources();
   initFeedChips();
@@ -768,6 +858,32 @@ function initFeedChips() {
     head.setAttribute('aria-expanded', String(open));
   };
   head.addEventListener('click', toggle);
+  // A MOVING SHEET MUST NOT HAND YOUR TAP TO WHATEVER SLID UNDER IT.
+  //
+  // A touch fires touchstart/touchend and then, milliseconds later, the browser
+  // synthesises mousedown/mouseup/click at the same SCREEN coordinates for
+  // pages written before touch existed. By the time that click is dispatched
+  // the sheet has moved, so the point that was the drag handle is now over a
+  // layer row. Traced with a spy on sheetGo: one tap logged `2` at t=36627 and
+  // `1` at t=36634 from the change listener -- the phantom click had landed on
+  // a switch, toggled a layer, and the sheet collapsed in response to a change
+  // the operator never made. Tapping the handle was silently turning layers on,
+  // which is far worse than the detent bug that led me to it.
+  //
+  // preventDefault on touchend was the obvious answer and it did not work: the
+  // click still arrived. So this does not try to out-argue the platform about
+  // which synthetic events it owes whom. It swallows clicks inside the sheet
+  // for 350ms after the geometry changes, in the capture phase, before anything
+  // downstream can act on them. A click aimed at coordinates that no longer
+  // mean what the user thought is not a click worth delivering.
+  document.getElementById('hud')?.addEventListener('click', (e) => {
+    if (!sheetIsPhone()) return;
+    if (performance.now() > (SHEET.guardUntil || 0)) return;
+    if (e.target.closest('#rail-head')) return;      // the handle itself is fine
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
   head.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
   });
@@ -9606,6 +9722,27 @@ function gfxPlace(el, cfg) {
   const s = Math.max(0.5, Math.min(2.5, (cfg.scale || 100) / 100));
 
   el.style.left = el.style.right = el.style.top = el.style.bottom = '';
+
+  // A phone gets one placement and it is not negotiable. These graphics are
+  // drag-positioned and the anchor, scale and nudge are written here as INLINE
+  // styles, which no stylesheet can override without !important -- so the
+  // mobile rules were being ignored and the alert banner sat at a saved
+  // desktop corner, 29px past the right edge of a 412px screen. That was the
+  // last thing widening the layout viewport to 422.
+  //
+  // A saved position from a 1600px monitor means nothing on a phone anyway,
+  // and neither does a 2.5x scale on a screen where the graphic is already
+  // full width.
+  if (isPhone()) {
+    el.style.left = '8px';
+    el.style.right = '8px';
+    el.style.bottom = `${settings.presenting ? 12 : 112}px`;
+    el.style.width = 'auto';
+    el.style.transform = 'none';
+    el.style.transformOrigin = 'bottom left';
+    return;
+  }
+  el.style.width = '';
   // '0px', not '0'. calc() cannot add a unitless zero to a length, and an
   // invalid value in a transform drops the WHOLE declaration silently -- which
   // is exactly what happened: the anchor still worked, because that is
@@ -11626,6 +11763,119 @@ function initRailScrollEdges() {
   syncRailScrollEdges();
 }
 
+// ---------- The bottom sheet -------------------------------------------------
+//
+// On a phone the rail is a sheet over the map, at one of three detents. The
+// detent is a class on <body>, so CSS owns the geometry and this owns nothing
+// but which of three states we are in -- there is no continuously tracked
+// offset to get stuck at a wrong value, and no transition anywhere that gates
+// whether a control exists.
+//
+// Drag is deliberately thin: a pointerdown on the handle, a total dy at
+// pointerup, and a threshold. Following the finger pixel-for-pixel would mean
+// writing transform on every pointermove, which is the frame budget the globe
+// is already using, and it would put the sheet's position back under an
+// animation clock this app has watched stall three times.
+
+const SHEET = { detents: ['peek', 'half', 'full'], at: 0, y0: 0, t0: 0,
+                dragging: false, lastUp: 0 };
+
+function sheetIsPhone() {
+  return isPhone();
+}
+
+function sheetGo(i) {
+  SHEET.at = Math.max(0, Math.min(SHEET.detents.length - 1, i));
+  // See the capture listener in initSheet(): the sheet has just moved several
+  // hundred pixels, and any click still in flight was aimed at where things
+  // used to be.
+  SHEET.guardUntil = performance.now() + 350;
+  const name = SHEET.detents[SHEET.at];
+  document.body.classList.toggle('sheet-half', name === 'half');
+  document.body.classList.toggle('sheet-full', name === 'full');
+  const head = document.getElementById('rail-head');
+  if (head) head.setAttribute('aria-expanded', String(name !== 'peek'));
+  // The sheet covers a different amount of map at each detent, and the scroll
+  // edges are computed from a box whose height just changed.
+  syncRailScrollEdges();
+}
+
+function initSheet() {
+  const head = document.getElementById('rail-head');
+  if (!head) return;
+
+  head.setAttribute('role', 'button');
+  head.setAttribute('tabindex', '0');
+  head.setAttribute('aria-controls', 'hud-panes');
+  head.setAttribute('aria-label', 'Expand or collapse the panel');
+
+  // Tap the handle to step up, and from the top back down to peek. A single
+  // affordance that cycles beats two arrows nobody can hit on a phone.
+  const step = () => sheetGo(SHEET.at >= SHEET.detents.length - 1 ? 0 : SHEET.at + 1);
+
+  head.addEventListener('pointerdown', (e) => {
+    if (!sheetIsPhone()) return;
+    // The icon buttons in the head are their own targets, not sheet handles.
+    if (e.target.closest('button, a, input')) return;
+    SHEET.dragging = true;
+    SHEET.y0 = e.clientY;
+    SHEET.t0 = e.timeStamp;
+    head.setPointerCapture?.(e.pointerId);
+  });
+
+  head.addEventListener('pointerup', (e) => {
+    if (!SHEET.dragging) return;
+    SHEET.dragging = false;
+    head.releasePointerCapture?.(e.pointerId);
+
+    // One tap, one gesture. A touch on a phone fires the pointer pair TWICE --
+    // once for the touch itself, then again from the compatibility mouse events
+    // the browser synthesises for pages that only listen for mouse. Traced with
+    // a spy on sheetGo, a single tap logged `2` and then `1`: the sheet opened
+    // to full and the phantom second gesture immediately dragged it back to
+    // half, so it looked as though it simply refused to open all the way.
+    //
+    // Guarding on pointerType is not enough on its own, because the synthetic
+    // events report `mouse` on some engines and `touch` on others. A time gate
+    // is what the two have in common: they arrive in the same few
+    // milliseconds, and no human taps a sheet handle twice in 400ms meaning it.
+    if (e.timeStamp - (SHEET.lastUp || 0) < 400) return;
+    SHEET.lastUp = e.timeStamp;
+
+    const dy = e.clientY - SHEET.y0;
+    const dt = Math.max(1, e.timeStamp - SHEET.t0);
+    // A flick is a short gesture with speed; a drag is distance. Either can
+    // move one detent, so a fast small swipe works and so does a slow long one.
+    const flick = Math.abs(dy) / dt > 0.5 && Math.abs(dy) > 12;
+    if (flick || Math.abs(dy) > 40) sheetGo(SHEET.at + (dy < 0 ? 1 : -1));
+    else step();
+  });
+
+  head.addEventListener('keydown', (e) => {
+    if (!sheetIsPhone()) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); step(); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); sheetGo(SHEET.at + 1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); sheetGo(SHEET.at - 1); }
+  });
+
+  // There was an auto-collapse here: switch a layer on and the sheet dropped to
+  // half to show you the map. It read well and it caused two separate bugs --
+  // synthetic change events from feeds yanking the sheet shut under the finger
+  // that had just opened it, and then the phantom click above toggling a layer
+  // and collapsing the sheet in one gesture. Both were fixable, and it was
+  // still the wrong feature: a panel that moves when you did not move it is
+  // exactly the kind of thing that makes an app feel like it is fighting you.
+  // The sheet moves when the operator moves it, and not otherwise.
+
+  // Rotating the phone changes which layout applies and how tall the sheet is.
+  window.addEventListener('resize', () => {
+    if (!sheetIsPhone() && SHEET.at !== 0) sheetGo(0);
+    syncRailScrollEdges();
+  });
+
+  sheetGo(0);
+}
+
 // ---------- Command palette --------------------------------------------------
 //
 // Everything in this app is two to four clicks deep: pick a tab, pick a
@@ -11853,6 +12103,7 @@ function initWeatherfrontShell() {
   initDashboards();
   initRailStatus();
   initRailScrollEdges();
+  initSheet();
   initCommandPalette();
   syncRailTitle();
 }

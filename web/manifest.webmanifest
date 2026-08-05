@@ -1,0 +1,30 @@
+{
+  "name": "Graticule — Weather & Earth",
+  "short_name": "Graticule",
+  "description": "Live radar, satellite, forecast models, NWS alerts and Earth observation on a 3D globe.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "background_color": "#04070d",
+  "theme_color": "#0b0e13",
+  "categories": ["weather", "navigation", "utilities"],
+  "dir": "ltr",
+  "lang": "en",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/static/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Radar", "short_name": "Radar", "url": "/?d=radar",
+      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "NWS Alerts", "short_name": "Alerts", "url": "/?t=alerts",
+      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Satellite", "short_name": "Satellite", "url": "/?d=satellite",
+      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

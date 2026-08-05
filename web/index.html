@@ -2,6 +2,37 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+
+  <!-- There was no viewport tag at all, which is not a small omission: without
+       one a phone lays the page out at a 980px fallback width and scales the
+       result down to fit. Measured on a 393x852 iPhone, innerWidth reported
+       1185 and the whole app rendered at roughly a third size -- every 12px
+       label became 4px, and the readability work was annihilated the moment
+       anyone opened it on a phone. It also produced 205px of horizontal
+       scroll.
+
+       `viewport-fit=cover` lets the map run under the notch and the home
+       indicator; the chrome is inset with env(safe-area-inset-*) instead, so
+       the globe fills the glass without any control hiding under hardware.
+       No `maximum-scale`: pinch-zoom is an accessibility right, and blocking
+       it is a WCAG 1.4.4 failure. -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+  <meta name="theme-color" content="#0b0e13">
+  <meta name="description"
+        content="Live radar, satellite, models, alerts and Earth observation on a 3D globe.">
+
+  <!-- Installable. iOS ignores the manifest's display mode and needs its own
+       pair, so both are here rather than one standing in for the other. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Graticule">
+  <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+
   <title>Graticule</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

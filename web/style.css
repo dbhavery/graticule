@@ -4571,3 +4571,263 @@ div[data-requires].is-off .wf-item.is-active {
 #settings-overlay input[type="range"]:focus-visible::-webkit-slider-thumb {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PHONE
+   ═══════════════════════════════════════════════════════════════════════════
+   The desktop shape is a 340px rail down the left edge. On a 393px phone that
+   is 87% of the screen, so it was never going to survive the move -- and until
+   the viewport tag was added the page did not even lay out at phone width, it
+   laid out at 980px and scaled the result down to about a third.
+
+   The map is the content, so on a phone it gets the whole glass and the rail
+   becomes a bottom sheet over it: the pattern every mapping app converges on,
+   because it keeps the thing you are looking at visible while you change what
+   is on it. Three detents -- peek, half, full -- driven by a class on <body>
+   rather than by a live drag, so nothing here can stall mid-transition the way
+   the fade-ins did.
+
+   Breakpoint is 780px on width and coarse pointer separately, not together: a
+   small window on a desktop still wants the sheet, and a touch laptop does not.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* A phone on its side is 915x412 and sails past a width-only breakpoint, so it
+   was getting the desktop layout: the telemetry bar alone has a min-content
+   width of 902px, which forced the layout viewport to 1178 and put 263px of
+   horizontal scroll on a device that has none. Height is the tell -- no
+   desktop window is 412px tall, and every phone in landscape is. */
+@media (max-width: 780px), (max-height: 500px) {
+
+  :root {
+    /* Apple HIG says 44x44pt, Material says 48dp. A finger is not a mouse and
+       the 24px desktop floor is far too small to hit while moving. */
+    --hit: 44px;
+    /* ZERO, not 100vw. Nine surfaces position themselves off this token to
+       clear the left rail -- #gfx, #timeline, #alerts-panel, #ticker,
+       #history-strip, #scenebar, #countybar and the two pane splits. There is
+       no left rail on a phone, so the offset is nothing.
+
+       Setting it to 100vw for the sheet's width put the containing block of
+       every one of those at x=412 on a 412px screen: the alert banner computed
+       to left 420, width 2, and hung off the right edge. #hud takes its width
+       from an explicit `width: 100vw` below instead, which is what it needed
+       all along. */
+    --rail-w: 0px;
+    --sheet-peek: 96px;
+  }
+
+  /* The globe takes the whole screen, including under the notch and the home
+     indicator. Chrome insets itself; the map does not. */
+  #cesiumContainer, #cesiumContainer canvas { inset: 0; width: 100vw; height: 100dvh; }
+
+  html, body { overflow-x: hidden; overscroll-behavior: none; }
+
+  /* ---- Top bar: the readout, not the instrument cluster ----
+     Eight telemetry groups do not fit across 393px, and shrinking them to fit
+     would put us back under the readable floor. The two that answer "is this
+     live, and where am I" stay; the rest move into the sheet. */
+  #topbar {
+    height: auto; min-height: 44px;
+    padding: calc(env(safe-area-inset-top, 0px) + 6px) 10px 6px;
+    gap: 10px;
+    justify-content: space-between;
+    background: linear-gradient(to bottom, rgba(4, 7, 13, 0.92), rgba(4, 7, 13, 0));
+    border-bottom: 0;
+    pointer-events: none;                 /* the map shows through the gradient */
+  }
+  #topbar > * { pointer-events: auto; }
+  #topbar .tm { display: none; }
+  #topbar .tm.tm-utc { display: flex; }
+  #topbar-search { display: none; }       /* the sheet carries search instead */
+  .brand-text { display: none; }
+
+  /* ---- The rail, as a bottom sheet ---- */
+  #hud {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: 100vw; max-height: none;
+    height: calc(100dvh - 88px);
+    transform: translateY(calc(100% - var(--sheet-peek)));
+    border: 0;
+    border-top: 1px solid var(--ctl-border);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.6);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+
+    /* NO TRANSITION, and the reasoning that first put one here was wrong.
+       I argued a transform-only transition was safe because it leaves the
+       sheet in the wrong place rather than invisible. Then I measured it: a
+       260ms transition was still 60% incomplete 1.5 SECONDS after the class
+       changed -- computed translateY 731px -> 157px, when it should have been
+       0. Cesium renders the globe on the main thread and the animation clock
+       barely advances.
+
+       A sheet stuck at the peek detent is a tap on the handle that appears to
+       do nothing, which is the exact complaint this run of work started from.
+       Fourth instance in this app after the division pills, the fade-ins and
+       the scroll edges, so the rule earns its generalisation: IF THE CLOCK CAN
+       STALL, NOTHING A USER IS WAITING ON GOES BEHIND IT. The sheet snaps. */
+    z-index: 40;
+  }
+  body.sheet-half #hud { transform: translateY(52%); }
+  body.sheet-full #hud { transform: translateY(0); }
+
+  /* The grab handle, and the only thing visible at peek besides the title. */
+  #rail-head {
+    position: relative;
+    padding: 16px 16px 10px;
+    touch-action: none;
+  }
+  #rail-head::before {
+    content: '';
+    position: absolute; top: 6px; left: 50%;
+    transform: translateX(-50%);
+    width: 36px; height: 4px; border-radius: 2px;
+    background: rgba(255, 255, 255, 0.28);
+  }
+
+  /* At peek the rest is off-screen anyway; hiding it keeps it out of the tab
+     order and away from a screen reader. */
+  body:not(.sheet-half):not(.sheet-full) #hud-scroll,
+  body:not(.sheet-half):not(.sheet-full) #rail-tools,
+  body:not(.sheet-half):not(.sheet-full) #rail-status { visibility: hidden; }
+
+  #hud-tabs { position: sticky; top: 0; z-index: 3; background: var(--rail-bg); }
+  .hud-tab { flex: 1 1 0; min-height: var(--hit); font-size: var(--fs-base); }
+
+  /* Two columns of division tiles, full-width targets. */
+  .div-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .div-grid .chip { min-height: var(--hit); font-size: var(--fs-base); }
+
+  .sw, .wf-row, .ctl { min-height: var(--hit); }
+  .wf-item, .al-type, .seg-b, .tool-btn, .sm-btn { min-height: var(--hit); }
+  .wf-row, .ctl { grid-template-columns: 92px 1fr auto; }
+
+  /* A thumb under a fingertip needs more room than one under a cursor.
+     #tl-range is scoped separately because the transport is not inside #hud --
+     it sits over the map -- so the rail selector missed it and the app's main
+     time scrubber stayed 26px on a phone. */
+  #hud input[type="range"], #tl-range { height: var(--hit); }
+  #tl-track { height: var(--hit); }
+  #hud input[type="range"]::-webkit-slider-thumb,
+  #tl-range::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8px; }
+  #tl-range::-webkit-slider-runnable-track { height: var(--hit); }
+
+  /* ---- Map chrome ---- */
+  #legend { left: auto; right: 8px; bottom: calc(var(--sheet-peek) + 56px); }
+  #feedstrip, #compass, #panel { display: none; }
+
+  #timeline {
+    left: 8px; right: 8px; width: auto;
+    bottom: calc(var(--sheet-peek) + 8px);
+    padding: 6px 8px;
+    border-radius: var(--r-md);
+    background: rgba(4, 7, 13, 0.86);
+  }
+  #tl-label { min-width: 0; font-size: var(--fs-xs); }
+  .tl-speed { display: none; }
+  #timeline button { min-width: var(--hit); min-height: var(--hit); }
+
+  /* Broadcast graphics are authored for a 16:9 frame and do not become
+     readable by being scaled onto a phone. The alert banner is the one that
+     matters on a small screen, so it goes full width and the rest stand down. */
+  #gfx .gfx { display: none; }
+  #gfx .gfx-warning {
+    display: block;
+    left: 8px; right: 8px; top: auto;
+    width: auto;
+    bottom: calc(var(--sheet-peek) + 52px);
+    transform: none;
+  }
+
+  /* ---- Full-frame surfaces ---- */
+  #settings-overlay .sm-box, #pal-box { width: calc(100vw - 16px); max-width: none; }
+  .sm-row { grid-template-columns: 1fr; gap: 6px; }
+  #settings-overlay input[type="range"] { height: var(--hit); }
+
+  .db-grid { grid-template-columns: 1fr; }
+  .db-w2, .db-w3 { grid-column: 1 / -1; }
+  #dashboard { padding: calc(env(safe-area-inset-top, 0px) + 8px) 8px 8px; }
+
+  /* The world board is a 1600x950 broadcast layout. It does not turn into a
+     phone screen by shrinking, so on a phone it stacks and scrolls. */
+  #worlddash {
+    grid-template-rows: none;
+    grid-auto-rows: min-content;
+    overflow-y: auto;
+    padding: calc(env(safe-area-inset-top, 0px) + 8px) 8px
+             calc(env(safe-area-inset-bottom, 0px) + 8px);
+  }
+  #worlddash .wd-top, #worlddash .wd-mid, #worlddash .wd-bot { grid-template-columns: 1fr; }
+  #worlddash .wd-top15 { grid-template-columns: 1fr; grid-auto-flow: row; }
+  #worlddash .wd-block { min-height: 0; }
+  #worlddash .wd-ms-cols { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* A finger cannot hover, so anything gated on :hover is unreachable by touch.
+   That is a real rule, and I applied it to the wrong control: `.rt-when-drawing`
+   -- undo, clear and the colour swatch -- is gated on DRAWING BEING ON, not on
+   hover. Revealing it here put three dead buttons in the tools row of every
+   touch device with drawing switched off, which is the same "a live-looking
+   control that does nothing" defect the radar product list had this morning.
+   Progressive disclosure stays; only genuinely hover-gated affordances belong
+   in this block. */
+@media (pointer: coarse) {
+  :root { --hit: 44px; }
+}
+
+/* ---- Horizontal overflow on a phone, and why innerWidth lied ----
+   At 412x915 the page reported innerWidth 494. Chromium widens the layout
+   viewport to fit content that overflows it, so that number was the symptom,
+   not the cause: four elements were sticking out and the browser made the page
+   wide enough to hold them. Fix the four and innerWidth becomes 412.
+
+   Three of the four are the same trap, and it is the one that bit the world
+   board this morning too: A FLEX OR GRID ITEM DEFAULTS TO min-width: auto AND
+   WILL NOT SHRINK BELOW ITS CONTENT. `.gfx-col` inside `.gfx-cols`, `.apf`
+   inside `#ap-filters`, and the alert card's `.al-meta` all held long text --
+   "HUNTERDON · MERCER · BUCKS", "Gloucester, NJ; Delaware, ..." -- and pushed
+   their containers open rather than wrapping inside them. */
+@media (max-width: 780px), (max-height: 500px) {
+
+  .gfx-cols { flex-wrap: wrap; gap: 4px 10px; padding: 7px 10px; }
+  .gfx-col  { min-width: 0; flex: 1 1 100%; }
+  .gfx-col .gfx-big, .gfx-col .gfx-sub { min-width: 0; overflow-wrap: anywhere; }
+
+  #ap-filters { flex-wrap: wrap; }
+  .apf { min-width: 0; }
+
+  /* Draw / MAPS 1 2 4 / Present is one row on a desktop. With 44px finger
+     targets that row wants ~470px and the phone has 412, so `Present` was
+     hanging 70px off the right edge. It wraps. */
+  /* The rail footer's active-layer chips and the alert graphic's dismiss were
+     26px, sized for a cursor rather than a fingertip. */
+  .rs-chip, .gfx-x { min-height: var(--hit); }
+  .gfx-x { width: var(--hit); height: var(--hit); }
+
+  #rail-tools { flex-wrap: wrap; gap: 6px; }
+  #rail-tools > * { flex: 0 1 auto; min-width: 0; }
+  #present-btn { flex: 1 0 100%; }
+
+  /* The fourth is arithmetic, not a min-width: the panel is sized
+     `min(560px, calc(100vw - 280px))`, where 280 is the desktop rail plus its
+     margins. On a 412px phone that resolves to 132px, and a 132px box cannot
+     hold an alert headline, so every card inside it overflowed. There is no
+     rail on a phone. */
+  #alerts-panel {
+    left: 8px; right: 8px;
+    width: auto; max-width: none;
+    transform: none;
+    bottom: calc(var(--sheet-peek) + 8px);
+    max-height: 52dvh;
+  }
+  #alerts-panel.hidden { transform: none; }
+  .al-card, .al-text, .al-meta { min-width: 0; overflow-wrap: anywhere; }
+}
+
+/* Same rule as every other overlay: nothing that gates visibility animates.
+   #alerts-panel faded opacity 1 -> 0 over 160ms with `.hidden`, so on a busy
+   frame it could sit at opacity 0 with no hidden class -- present, clickable,
+   invisible. It is the last surface in the app that was still doing this.
+   The translate stays: arriving 8px low is cosmetic. */
+#alerts-panel { transition: transform 200ms cubic-bezier(.17,.84,.44,1); }
+#alerts-panel.hidden { visibility: hidden; opacity: 0; }

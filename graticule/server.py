@@ -832,6 +832,46 @@ async def index() -> FileResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Installable-app plumbing.
+#
+# All four have to be served from the ROOT, not from /static, and the service
+# worker is the reason. A worker's default scope is the directory it was served
+# from, so /static/sw.js can only ever control /static/* -- it would never see
+# the navigation to "/" that it exists to keep working offline. The manifest is
+# at the root for the same reason its `scope` and `start_url` are "/".
+# ---------------------------------------------------------------------------
+
+
+@app.get("/sw.js")
+async def service_worker() -> FileResponse:
+    return FileResponse(
+        WEB_DIR / "sw.js",
+        media_type="application/javascript",
+        # The worker script itself must never be served stale, or a deploy
+        # cannot replace the worker that is caching the old deploy.
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/manifest.webmanifest")
+async def manifest() -> FileResponse:
+    return FileResponse(
+        WEB_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/offline.html")
+async def offline() -> FileResponse:
+    return FileResponse(WEB_DIR / "offline.html", media_type="text/html")
+
+
+@app.get("/favicon.ico")
+async def favicon() -> FileResponse:
+    return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-icon")
+
+
 @app.middleware("http")
 async def no_cache_static(request, call_next):
     """Disable caching for /static/* so WebView2 always fetches the latest JS/CSS/data."""
