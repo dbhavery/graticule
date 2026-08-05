@@ -100,7 +100,17 @@ complete with every layer switched off.
   and age, hottest fire detections, volcano and EONET counts
 - **Space weather** — planetary Kp against the NOAA G-scale, X-ray flux class,
   orbital population, the launch window from T−1 h onward
-- **World population** — the full-frame board behind the World division
+- **World population** — the full-frame board behind the World division. The
+  rail pane and the board read one dataset and one pair of vital rates, so the
+  two never disagree: they were 24 million people apart before that. Rankings
+  sort on the projected figure rather than the baked baseline, or a country
+  that has since overtaken its neighbour prints out of order
+
+Every opener sits at the **top** of its division rather than the bottom of a
+scroll, and the rail draws its own top and bottom scroll edges with a `▾ MORE`
+marker. Browser overlay scrollbars do not paint until you are already
+scrolling, which is no help when the question is whether there is anything
+below the fold.
 
 Plus a telemetry bar (UTC, cursor, altitude, subsolar point, moon phase, Kp,
 X-ray, tracked total), a bottom transport, a standing colour scale on the
