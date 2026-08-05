@@ -107,10 +107,15 @@
          driving, or the tab if the tab has no divisions. One wordmark, and the
          rail gained a title. -->
     <header id="rail-head">
-      <span class="rb-mark"></span>
-      <span class="rb-name" id="rail-title">RADAR</span>
-      <button id="palette-btn" class="rail-icon" aria-label="Command palette"
-              title="Command palette (Ctrl+K)"><svg class="ic-search" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      <div class="rb-text">
+        <span class="rb-name" id="rail-title">RADAR</span>
+        <!-- One line saying what is in here. Nine division names on their own
+             tell you nothing about which one holds the thing you want; this is
+             the cheapest possible answer to "where do I go for X". -->
+        <span class="rb-sub" id="rail-sub">Where it is raining, now and 30 minutes out</span>
+      </div>
+      <button id="palette-btn" class="rail-icon" aria-label="Search everything"
+              title="Search everything (Ctrl+K)"><svg class="ic-search" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4 L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       <button id="settings-btn" class="rail-icon" aria-label="Settings" title="Settings">&#9881;</button>
       <button id="rail-collapse" class="rail-icon" aria-label="Collapse the panel"
               title="Collapse the panel (\)">&times;</button>
@@ -127,28 +132,36 @@
     <!-- Tool icons. Was a floating strip in the top-right corner of the map;
          the reference app keeps these in the rail, where they read as part of
          the workstation rather than as a widget parked on the globe. -->
+    <!-- A pencil, a hook, a backspace glyph, a coloured dot, "1 2 4" and a
+         square told nobody anything. Every group is named now, and the
+         panes/present controls read as words instead of symbols. -->
+    <!-- One row, not two, and undo/clear/colour only appear once you are
+         actually drawing: they mean nothing before the first stroke, and two
+         rows of tools were taking 90px off every division's workspace. -->
     <div id="rail-tools">
-      <div id="drawbar" role="group" aria-label="Drawing tools">
-        <button id="draw-toggle" class="tool-btn" aria-label="Draw on the globe"
-                aria-pressed="false" title="Draw on the globe">&#9998;</button>
-        <button id="draw-undo"   class="tool-btn" aria-label="Undo last stroke"
+      <div class="rt-grp" id="drawbar" role="group" aria-label="Drawing tools">
+        <button id="draw-toggle" class="tool-btn is-wide" aria-label="Draw on the globe"
+                aria-pressed="false" title="Draw on the globe">&#9998; Draw</button>
+        <button id="draw-undo"   class="tool-btn rt-when-drawing" aria-label="Undo last stroke"
                 title="Undo last stroke">&#8630;</button>
-        <button id="draw-clear"  class="tool-btn" aria-label="Clear all strokes"
+        <button id="draw-clear"  class="tool-btn rt-when-drawing" aria-label="Clear all strokes"
                 title="Clear all strokes">&#9003;</button>
-        <button id="draw-color"  class="tool-swatch" aria-label="Cycle stroke colour"
+        <button id="draw-color"  class="tool-swatch rt-when-drawing" aria-label="Cycle stroke colour"
                 title="Cycle stroke colour"></button>
       </div>
-      <span class="rt-sep"></span>
-      <div id="panebar" role="group" aria-label="Pane layout">
+      <div class="rt-grp" id="panebar" role="group" aria-label="Pane layout">
+        <span class="rt-lab">Maps</span>
         <div class="seg">
-          <button class="seg-b is-active" data-panes="single" aria-pressed="true" title="Single pane">1</button>
-          <button class="seg-b" data-panes="dual"   aria-pressed="false" title="Dual pane">2</button>
-          <button class="seg-b" data-panes="quad"   aria-pressed="false" title="Quad pane">4</button>
+          <button class="seg-b is-active" data-panes="single" aria-pressed="true"
+                  title="One map">1</button>
+          <button class="seg-b" data-panes="dual"   aria-pressed="false"
+                  title="Two maps side by side">2</button>
+          <button class="seg-b" data-panes="quad"   aria-pressed="false"
+                  title="Four maps">4</button>
         </div>
       </div>
-      <span class="rt-sep"></span>
-      <button id="present-btn" class="tool-btn" aria-label="Presentation mode"
-              aria-pressed="false" title="Presentation mode (P) — hide the chrome">&#9635;</button>
+      <button id="present-btn" class="tool-btn is-wide" aria-label="Presentation mode"
+              aria-pressed="false" title="Hide all the chrome (P)">Present</button>
     </div>
 
     <div id="hud-panes">
@@ -159,16 +172,28 @@
       <!-- Divisions. Weatherfront's Radar / Model / Satellite / Observations /
            Outlooks / Mapping grid, extended with the three non-weather
            divisions that used to be top-level tabs. One nav model, not two. -->
-      <div class="div-grid" id="wx-modes">
-        <button class="chip is-active" data-mode="radar">Radar</button>
-        <button class="chip" data-mode="model">Model</button>
-        <button class="chip" data-mode="satellite">Satellite</button>
-        <button class="chip" data-mode="obs">Observations</button>
-        <button class="chip" data-mode="outlooks">Outlooks</button>
-        <button class="chip" data-mode="mapping">Mapping</button>
-        <button class="chip" data-mode="earth">Earth</button>
-        <button class="chip" data-mode="sky">Sky</button>
-        <button class="chip" data-mode="world">World</button>
+      <!-- Nine identical tiles read as one undifferentiated block, and nothing
+           said which of them was the main one or how they related. Two named
+           groups: the five that answer "what is the weather doing", then the
+           four that answer "what else is out there". Radar leads because it is
+           what the app opens on. The grid keeps id="wx-modes" so every existing
+           chip binding still finds them. -->
+      <div id="wx-modes">
+        <div class="div-sec">Weather</div>
+        <div class="div-grid">
+          <button class="chip is-active" data-mode="radar">Radar</button>
+          <button class="chip" data-mode="model">Model</button>
+          <button class="chip" data-mode="satellite">Satellite</button>
+          <button class="chip" data-mode="obs">Observations</button>
+          <button class="chip" data-mode="outlooks">Outlooks</button>
+        </div>
+        <div class="div-sec">Map &amp; world</div>
+        <div class="div-grid">
+          <button class="chip" data-mode="mapping">Mapping</button>
+          <button class="chip" data-mode="earth">Earth</button>
+          <button class="chip" data-mode="sky">Sky</button>
+          <button class="chip" data-mode="world">World</button>
+        </div>
       </div>
 
       <!-- ---- RADAR ----

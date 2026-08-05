@@ -5000,12 +5000,39 @@ const DIVISION_TITLE = {
   obs: 'OBSERVATIONS', outlooks: 'OUTLOOKS', mapping: 'MAPPING',
   earth: 'EARTH', sky: 'SKY', world: 'WORLD',
 };
+
+/* One plain line under the title saying what is in here. Nine division names
+   on their own tell you nothing about which one holds the thing you want, and
+   "I'm not even sure what to click" is what that costs. Written as the answer
+   to a question somebody would actually ask, not as a restatement of the
+   name -- "Outlooks: where severe weather is expected later today" is useful;
+   "Outlooks: outlook products" is not. */
+const DIVISION_SUB = {
+  radar:     'Where it is raining, now and 30 minutes out',
+  model:     'What the forecast models expect, up to 24 hours ahead',
+  satellite: 'Cloud tops from GOES, visible and infrared',
+  obs:       'What stations, cameras and spotters are reporting on the ground',
+  outlooks:  'Where severe weather, tropical systems and aurora are expected',
+  mapping:   'The base map, boundaries and what the frame covers',
+  earth:     'Quakes, volcanoes, fires, ships and water levels',
+  sky:       'Aircraft, airspace, satellites and launches',
+  world:     'Live world population, births, deaths and country ranks',
+};
+const TAB_SUB = {
+  alerts:    'Every NWS product in effect right now',
+  broadcast: 'The graphics that stay on screen in presentation mode',
+};
+
 function syncRailTitle() {
   const el = document.getElementById('rail-title');
+  const sub = document.getElementById('rail-sub');
   if (!el) return;
   el.textContent = RAIL_TAB === 'alerts'    ? 'NWS ALERTS'
                  : RAIL_TAB === 'broadcast' ? 'BROADCAST'
                  : (DIVISION_TITLE[RAIL_DIV] || 'DATA');
+  if (sub) {
+    sub.textContent = TAB_SUB[RAIL_TAB] || DIVISION_SUB[RAIL_DIV] || '';
+  }
 }
 
 function initTabs() {
@@ -5112,6 +5139,13 @@ function initTimeline() {
     TL.speedMs = Number(speed.value) || 600;
     if (TL.playing) { stopTimeline(); startTimeline(); }
   });
+
+  // The end labels are relative to now, so they go stale between frame
+  // updates: RainViewer publishes roughly every ten minutes, and the track was
+  // still claiming "-2h 05m" when the oldest frame was two and a quarter hours
+  // old. Caught by tl_test comparing the label against the frames a minute
+  // after they were drawn.
+  setInterval(labelTimelineEnds, 30_000);
 }
 
 function refreshTimeline() {
@@ -6584,6 +6618,38 @@ const NWS_EVENT_ORDER = [
 const WARN_STYLE = Object.fromEntries(NWS_EVENT_ORDER.map(
   ([name, c], i) => [name, { c, p: NWS_EVENT_ORDER.length - i }]));
 
+/* The NWS palette is designed to be printed on a LIGHT map. Seven of its 111
+   colours are dark enough that, used as text on this app's near-black panels,
+   they are unreadable: Flash Flood Warning #8b0000 measured 1.80:1 against the
+   alert card, where AA wants 4.5.
+
+   So the published colour still owns the swatch and the card's left bar --
+   that is the identity a forecaster recognises -- and the WORDS get a lifted
+   version of the same hue, raised in value only until it clears the floor.
+   Same colour, legible weight of it. */
+const WARN_INK_CACHE = new Map();
+function warnInk(hex, bg = [18, 21, 26]) {
+  if (WARN_INK_CACHE.has(hex)) return WARN_INK_CACHE.get(hex);
+  const h = String(hex).replace('#', '');
+  let r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  if (![r, g, b].every(Number.isFinite)) return hex;
+  const chan = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const lum = (c) => 0.2126 * chan(c[0]) + 0.7152 * chan(c[1]) + 0.0722 * chan(c[2]);
+  const cr = (c) => {
+    const a = lum(c), z = lum(bg);
+    return (Math.max(a, z) + 0.05) / (Math.min(a, z) + 0.05);
+  };
+  // Lift toward white in small steps, which keeps the hue and only raises the
+  // value. Bounded so a colour that can never pass simply ends up white.
+  let out = [r, g, b];
+  for (let i = 0; i < 24 && cr(out) < 4.5; i++) {
+    out = out.map((v) => Math.min(255, Math.round(v + (255 - v) * 0.14)));
+  }
+  const css = '#' + out.map((v) => v.toString(16).padStart(2, '0')).join('');
+  WARN_INK_CACHE.set(hex, css);
+  return css;
+}
+
 function warnStyle(evt) {
   if (WARN_STYLE[evt]) return WARN_STYLE[evt];
   // Not on the published list. Rank below everything that is, and take the
@@ -7445,7 +7511,8 @@ function warnCard(feature, index) {
   const li = document.createElement('li');
   li.className = mappable ? 'warn-card' : 'warn-card is-zone';
   li.dataset.warn = String(index);
-  li.style.setProperty('--wc', st.c);
+  li.style.setProperty('--wc', st.c);          // the bar: the published colour
+  li.style.setProperty('--wc-ink', warnInk(st.c));  // the words: legible on dark
   li.title = mappable
     ? 'Click to zoom to the warning polygon'
     : 'Zone-based alert — no polygon issued';
@@ -10558,6 +10625,21 @@ async function dashRefresh() {
 }
 
 function initDashboards() {
+  // The full-frame board is the biggest thing a division can do, and its
+  // button sat at the BOTTOM of the pane -- below a scroll, in several cases
+  // off-screen entirely. One dominant action per surface, at the top, where
+  // the eye lands. Moved here rather than in the markup so a division's
+  // controls stay in their authored order and nothing else has to change.
+  // Each opener rises to the top of ITS OWN division, found by walking up from
+  // the button rather than down from a container. Sweeping `.hud-pane` for
+  // descendants instead hoisted all five of them into the shared Data pane, so
+  // every division opened with five dashboard buttons stacked above its own
+  // navigation. `closest` on the union stops at the division body when there
+  // is one and at the pane when there is not.
+  document.querySelectorAll('[data-dash]').forEach((b) => {
+    const host = b.closest('[data-mode-body], .hud-pane');
+    if (host && host.firstElementChild !== b) host.prepend(b);
+  });
   document.querySelectorAll('[data-dash]').forEach((b) =>
     b.addEventListener('click', () => dashOpen(b.dataset.dash)));
   document.addEventListener('keydown', (e) => {
@@ -10584,10 +10666,18 @@ function dbCard(title, inner, cls = '') {
   return `<section class="db-card ${width}"><h2 class="db-card-h">${escapeHtml(title)}</h2>${inner}</section>`;
 }
 
+/* A zero is not an alarm. "0" printed in warning-red under "Tornado warnings"
+   reads at a glance as the opposite of what it says -- the eye takes the
+   colour before it takes the digit. Colour is reserved for a count that is
+   actually non-zero; a zero goes quiet. */
 function dbStats(items) {
-  return '<div class="db-stats">' + items.map((s) =>
-    `<div class="db-stat"><span class="db-stat-v mono" style="${s.color ? `color:${s.color}` : ''}">${s.value}</span>` +
-    `<span class="db-stat-k">${escapeHtml(s.label)}</span></div>`).join('') + '</div>';
+  return '<div class="db-stats">' + items.map((s) => {
+    const zero = /^0$|^—$/.test(String(s.value).trim());
+    const tint = s.color && !zero ? `color:${s.color}` : '';
+    return `<div class="db-stat${zero ? ' is-zero' : ''}">` +
+      `<span class="db-stat-v mono" style="${tint}">${s.value}</span>` +
+      `<span class="db-stat-k">${escapeHtml(s.label)}</span></div>`;
+  }).join('') + '</div>';
 }
 
 /* A ranked bar chart, scaled to the largest row. Rows with a zero count are
@@ -10709,7 +10799,7 @@ const DASH_STORM = {
           }
         }
         return { fly, cells: [
-          `<span style="color:${warnStyle(p.event).c};font-weight:600">${escapeHtml(p.event || '—')}</span>`,
+          `<span style="color:${warnInk(warnStyle(p.event).c)};font-weight:600">${escapeHtml(p.event || '—')}</span>`,
           escapeHtml(String(p.areaDesc || '').split(';').slice(0, 2).join(';') || '—'),
           `<span class="mono">${escapeHtml(fmtExpiry(p.expires) || '—')}</span>`,
           escapeHtml(bits.join(' · ') || '—'),
@@ -10819,7 +10909,7 @@ const DASH_TROPICAL = {
     const prod = alerts.slice(0, 14).map((f) => {
       const p = f.properties || {};
       return { cells: [
-        `<span style="color:${warnStyle(p.event).c};font-weight:600">${escapeHtml(p.event || '—')}</span>`,
+        `<span style="color:${warnInk(warnStyle(p.event).c)};font-weight:600">${escapeHtml(p.event || '—')}</span>`,
         escapeHtml(String(p.areaDesc || '').split(';').slice(0, 2).join(';') || '—'),
         `<span class="mono">${escapeHtml(fmtExpiry(p.expires) || '—')}</span>`,
       ] };

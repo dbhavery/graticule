@@ -11,10 +11,26 @@
   --panel-border: rgba(255, 255, 255, 0.07);
   --panel-rule:   rgba(255, 255, 255, 0.05);
 
-  --text:      #e8edf2;
-  --text-dim:  #8a94a3;
-  --text-mute: #5a6373;
-  --accent:    #4dd2ff;
+  /* Three text tones, every one of them clearing WCAG AA (4.5:1) on every
+     surface in the app. Measured against the rail (#0b0e13), the strong panel
+     and the dashboard card:
+
+       before                        rail   after                      rail
+       --text      #e8edf2          16.41   #e6ecf3                   16.25
+       --text-dim  #8a94a3           6.30   #a8b3c2                    9.10
+       --text-mute #5a6373           3.19   #8892a3                    6.16
+                                     ^^^^ this one line was most of 178 AA
+                                          failures: it is the colour of nearly
+                                          every label in the app.
+
+     There is no fourth, fainter tone. A tone nobody can read is not a level of
+     hierarchy, it is text that is missing. Hierarchy comes from size and
+     weight, which the scale above now actually has. */
+  --text:      #e6ecf3;
+  --text-dim:  #a8b3c2;
+  --text-mute: #8892a3;
+  --accent:    #5cd6ff;
+  --accent-ink:#04141c;   /* text on an accent fill */
 
   --c-planes:     #ffd14a;
   --c-ships:      #4dd2ff;
@@ -56,33 +72,70 @@
   --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 
   /* ---- Scale ---------------------------------------------------------------
-     Measured 2026-08-02: this file carried 16 distinct font-sizes, 6 radii and
-     14 letter-spacings. A designed system runs 5-7 / 2-3 / 2-3. Sixteen sizes
-     between 7px and 23px is not a hierarchy, it is noise, and it is the
-     measurable half of "looks cheap" — no amount of shadow or press feedback
-     fixes an absent scale.
+     REBASED 2026-08-04. Don: "typography and readability... extremely hard to
+     understand what I want to click."
 
-     Seven steps, chosen so nothing had to move more than 1px:
-       7, 8.5, 9, 9.5  -> 9      17, 18 -> 18
-       10, 10.5        -> 10     22, 23 -> 22
-       11, 11.5        -> 11
-       12, 12.5, 13    -> 12
-     Add a step only by editing this block. A raw px value in a declaration
-     below is a bug. */
-  --fs-micro: 9px;    /* dense telemetry labels, counts, ticks */
-  --fs-xs:   10px;    /* control labels, chips, captions */
-  --fs-sm:   11px;    /* body of the HUD, list rows */
-  --fs-base: 12px;    /* panel body, readable prose */
-  --fs-lg:   14px;    /* panel titles, section heads */
-  --fs-xl:   18px;    /* detail headline */
-  --fs-2xl:  22px;    /* the one big number on a card */
+     The 2026-08-02 pass fixed the number of steps and got the sizes wrong.
+     Seven steps is right; 9-10-11-12 is not a scale, it is four weights of
+     small. Audited across every division, tab, dashboard and modal, 1,116 of
+     1,480 rendered text elements sat below 12px, and 178 of 486 distinct
+     strings failed WCAG AA.
 
-  --r-sm: 3px;        /* controls: buttons, chips, inputs, swatches */
+     Every source on dense dark UIs lands in the same place: 14px body, 12px
+     labels, and 12px as a hard floor -- and dark backgrounds make small text
+     WORSE, not better, because light-on-dark halates and thin strokes thin out
+     further. IBM Carbon's productive set, which exists for exactly this kind
+     of tool, is body-compact-01 14/18 and label-01 12/16.
+
+       before -> after       role
+         9  ->  12           labels, counts, captions
+        10  ->  12           control labels, chips
+        11  ->  13           dense list rows
+        12  ->  14           body, control text, list items
+        14  ->  16           section heads
+        18  ->  20           detail headline
+        22  ->  28           the one big number
+
+     --fs-tick is the single exception and it is 10px: the numerals painted
+     beside the colour ramp. They are part of a graphic, not prose, and nobody
+     has to read one to operate the app. Anything a user must READ uses 12px or
+     larger. A raw px value in a declaration below is a bug. */
+  --fs-tick:  10px;   /* colour-scale numerals ONLY */
+  --fs-micro: 12px;   /* labels, counts, captions */
+  --fs-xs:    12px;   /* control labels, chips */
+  --fs-sm:    13px;   /* dense list rows */
+  --fs-base:  14px;   /* body, control text, list items */
+  --fs-lg:    16px;   /* panel titles, section heads */
+  --fs-xl:    20px;   /* detail headline */
+  --fs-2xl:   28px;   /* the one big number on a card */
+
+  /* Dark UIs want a heavier stroke at small sizes: at 12-13px, Regular reads
+     thin and grey against near-black. These two are used wherever the old file
+     said `font-weight: 400` on something small. */
+  --fw-body: 450;
+  --fw-med:  550;
+
+  --r-sm: 4px;        /* controls: buttons, chips, inputs, swatches */
   --r-md: 8px;        /* surfaces: panels, modals, cards */
 
-  --tr-tight: 0.5px;  /* sentence-case text */
-  --tr-wide:  1.5px;  /* uppercase labels */
-  --tr-xwide: 3px;    /* the few display-size uppercase headers */
+  /* Tracking comes DOWN as size comes up: 3px of tracking on 12px uppercase
+     was legible only because the words were short. */
+  --tr-tight: 0.2px;  /* sentence-case text */
+  --tr-wide:  0.9px;  /* uppercase labels */
+  --tr-xwide: 1.6px;  /* the few display-size uppercase headers */
+
+  /* Spacing. The rail was laid out in ad-hoc 2/3/4/5/6/7/8/9/10/11/12/14px
+     values; grouping is what makes density readable, and grouping needs a
+     consistent rhythm. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+
+  /* Minimum comfortable pointer target. The audit found 11x11 and 13x13
+     controls. */
+  --hit: 28px;
 }
 
 * { box-sizing: border-box; }
@@ -383,7 +436,10 @@ html, body {
   letter-spacing: 0;
   color: var(--text-mute);
 }
-.cat .cat-count:empty::before { content: '0'; opacity: 0.35; }
+/* Removed 2026-08-04: this printed a faded '0' beside every group header
+   whose layers were off -- a number that was never counted from
+   anything, at 0.35 opacity, sitting in the same column as 1,196
+   volcanoes. The switches already say the group is off. */
 
 /* Per-layer rows */
 .layer-list label {
@@ -3566,3 +3622,746 @@ body.is-presenting .tl-end { display: none; }
    every layer left a REFLECTIVITY ramp on air describing nothing. Scoped to
    #gfx so it outranks any graphic's own display rule, present or future. */
 #gfx .hidden { display: none; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   READABILITY AND AFFORDANCE PASS — 2026-08-04
+
+   Don: "It is not very intuitive to a human. I'm not even sure what to click.
+   And some of the sliders aren't even centered... typography and Readability.
+   and color contrast with the dashboards and menus."
+
+   Audited before touching anything (scratchpad/audit.py, which composites every
+   ancestor background so an rgba stack resolves to a real colour):
+
+     178 of 486 distinct visible strings failed WCAG AA
+     1,116 of 1,480 rendered text elements sat below 12px
+     seven font sizes, but 9/10/11/12 carried 96% of them
+     .ctl value columns ended at x=285 on 18 rows and x=153 on 2
+     interactive targets down to 11x11 and 13x13
+
+   What the sources say, and what each one changes here:
+
+   * 14px body, 12px labels, 12px hard floor for anything a user must read.
+     Dark backgrounds make small text worse, not better: light-on-dark halates
+     and thin strokes thin out further, so weight goes UP as well as size.
+     IBM Carbon's productive set exists for exactly this class of tool and runs
+     body-compact-01 14/18 and label-01 12/16.
+   * NN/g's eyetracking on weak clickability signifiers: 22% more time on task
+     and 25% more fixations. Their rule is blunt -- never give static text and
+     interactive text the same visual treatment, and do not lean on colour
+     alone or on hover-only cues. Every control below gets a border and a
+     surface at rest.
+   * Dashboards are a cockpit, not a report: one dominant action per surface,
+     headline first, detail on demand. So each division now leads with the one
+     switch that turns it on, and the settings sit under it.
+
+   Sources: nngroup.com/articles/clickable-elements/ ·
+   nngroup.com/articles/flat-ui-less-attention-cause-uncertainty/ ·
+   carbondesignsystem.com/guidelines/typography/type-sets/ ·
+   stephaniewalter.design (minimum font size for high-density data apps)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* 300 -> 340. The type had to grow and the rail had to grow with it; three
+     tiles of "Observations" at 12px do not fit in 300. */
+  --rail-w: 340px;
+  --rail-edge:  rgba(255, 255, 255, 0.10);
+  --rail-hover: rgba(255, 255, 255, 0.07);
+  --rail-sel:   rgba(92, 214, 255, 0.14);
+  /* One surface + one border for every control at rest, so "is this a button"
+     never needs a hover to answer. */
+  --ctl-bg:      rgba(255, 255, 255, 0.045);
+  --ctl-bg-hi:   rgba(255, 255, 255, 0.085);
+  --ctl-border:  rgba(255, 255, 255, 0.14);
+  --ctl-border-hi: rgba(255, 255, 255, 0.26);
+}
+
+body { font-size: var(--fs-base); letter-spacing: var(--tr-tight); }
+
+/* ---- Rail head: title + what is in here ---- */
+#rail-head {
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-2) var(--sp-3) var(--sp-4);
+}
+.rb-mark { display: none; }          /* the wordmark is in the topbar corner */
+.rb-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rb-name {
+  font-size: var(--fs-lg); font-weight: 700;
+  letter-spacing: var(--tr-wide); color: var(--text);
+}
+.rb-sub {
+  font-size: var(--fs-micro); font-weight: var(--fw-body);
+  line-height: 1.4; color: var(--text-mute);
+  letter-spacing: var(--tr-tight);
+  white-space: normal;
+}
+.rail-icon {
+  width: var(--hit); height: var(--hit);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-base); padding: 0;
+  border: 1px solid transparent;
+}
+.rail-icon:hover { border-color: var(--ctl-border); background: var(--ctl-bg-hi); }
+
+/* ---- Tabs: bigger, and the inactive ones legible ---- */
+.hud-tab {
+  font-size: var(--fs-base); font-weight: var(--fw-med);
+  letter-spacing: var(--tr-tight);
+  padding: var(--sp-3) var(--sp-1) 10px;
+  color: var(--text-mute);
+}
+.hud-tab.is-active { color: var(--text); font-weight: 700; }
+.hud-tab:hover:not(.is-active) { color: var(--text-dim); }
+
+/* ---- Tool strip: every group named ---- */
+#rail-tools {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+}
+.rt-grp { display: flex; align-items: center; gap: var(--sp-1); }
+.rt-lab {
+  flex: 0 0 44px;
+  font-size: var(--fs-micro); font-weight: var(--fw-med);
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+}
+.rt-sep { display: none; }
+.tool-btn {
+  min-width: var(--hit); height: var(--hit);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-base);
+  background: var(--ctl-bg);
+  border: 1px solid var(--ctl-border);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  padding: 0 var(--sp-2);
+}
+.tool-btn:hover { background: var(--ctl-bg-hi); border-color: var(--ctl-border-hi); color: var(--text); }
+.tool-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tool-btn.is-wide {
+  margin-left: auto;
+  font-size: var(--fs-xs); font-weight: var(--fw-med);
+  letter-spacing: var(--tr-tight);
+}
+.tool-swatch {
+  width: var(--hit); height: var(--hit);
+  border: 1px solid var(--ctl-border-hi); border-radius: var(--r-sm);
+}
+
+/* ---- Divisions: two named groups, tiles that read as buttons ---- */
+#wx-modes { margin-bottom: var(--sp-4); }
+.div-sec {
+  font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+  margin: var(--sp-3) 0 var(--sp-2);
+}
+.div-sec:first-child { margin-top: 0; }
+.div-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-1); margin-bottom: 0;
+}
+.div-grid .chip {
+  min-height: 34px;
+  padding: var(--sp-2) 5px;
+  font-size: var(--fs-xs); font-weight: var(--fw-med);
+  letter-spacing: var(--tr-tight);
+  background: var(--ctl-bg);
+  border: 1px solid var(--ctl-border);
+  color: var(--text-dim);
+  border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+  line-height: 1.15;
+}
+.div-grid .chip:hover:not(.is-active) {
+  background: var(--ctl-bg-hi); border-color: var(--ctl-border-hi); color: var(--text);
+}
+.div-grid .chip.is-active {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--accent-ink); font-weight: 700;
+}
+
+/* ---- Panes ---- */
+.hud-pane { padding: var(--sp-4) var(--sp-4) var(--sp-5); }
+
+/* ---- Section headings inside a division ---- */
+.wf-sec, .wf-grp, .gfx-grp-label, .cat-name {
+  font-size: var(--fs-micro); font-weight: 700;
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-mute);
+}
+.wf-sec, .wf-grp { margin: var(--sp-4) 0 var(--sp-2); }
+
+/* ---- Control rows: ONE grid, so every label edge and value edge lines up ----
+   The audit found the .ctl value column ending at x=285 on eighteen rows and
+   x=153 on two, and .sw labels starting at x=20 on one row and x=259 on four.
+   A shared three-track grid makes that impossible to get wrong again:
+   label | control (flexes) | value (fixed width, right-aligned). */
+.wf-row, .ctl {
+  display: grid;
+  grid-template-columns: 84px 1fr auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--panel-rule);
+}
+.wf-row-l, .ctl-l {
+  grid-column: 1;
+  font-size: var(--fs-xs); font-weight: var(--fw-med);
+  letter-spacing: var(--tr-tight); text-transform: none;
+  color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wf-row > select, .wf-row > input, .wf-row > button,
+.ctl > select, .ctl > input, .ctl > button { grid-column: 2; }
+.wf-row-v, .ctl-v, .wf-row > .ctl-v, .ctl > .ctl-v {
+  grid-column: 3;
+  min-width: 52px; text-align: right;
+  font-size: var(--fs-xs); color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+/* A select IS the value, so it takes both the control and value tracks. */
+.wf-row > select.wf-row-v, .ctl > select.ctl-sel {
+  grid-column: 2 / -1; min-width: 0; text-align: left;
+}
+.wf-row-btn > button, .wf-row > button.sm-btn { grid-column: 2 / -1; justify-self: stretch; }
+
+select.wf-row-v, select.ctl-sel, .sm-btn, #pal-q, input[type="text"] {
+  font-size: var(--fs-xs); font-weight: var(--fw-body);
+  min-height: var(--hit);
+  background: var(--ctl-bg);
+  border: 1px solid var(--ctl-border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  padding: 0 var(--sp-2);
+}
+select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
+  background: var(--ctl-bg-hi); border-color: var(--ctl-border-hi);
+}
+.sm-btn { font-weight: var(--fw-med); cursor: pointer; }
+
+/* ---- Sliders: a real track, a real thumb, vertically centred ----
+   These were a 3px hairline with no visible thumb box: the audit logged them
+   as 171x3 targets. */
+.wf-row input[type="range"], .ctl input[type="range"], #model-hour {
+  grid-column: 2;
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 20px;            /* the HIT area, not the track */
+  background: none; margin: 0; padding: 0;
+  cursor: pointer;
+}
+.wf-row input[type="range"]::-webkit-slider-runnable-track,
+.ctl input[type="range"]::-webkit-slider-runnable-track,
+#model-hour::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+.wf-row input[type="range"]::-webkit-slider-thumb,
+.ctl input[type="range"]::-webkit-slider-thumb,
+#model-hour::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #071016;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  margin-top: -5px;                     /* (4px track - 14px thumb) / 2 */
+}
+.wf-row input[type="range"]:hover::-webkit-slider-thumb,
+.ctl input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); }
+
+/* ---- Switch rows: the whole row is the target, and it looks like one ---- */
+.sw, .layer-list .sw {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 38px;
+  padding: 0 var(--sp-2);
+  margin: 0 calc(var(--sp-2) * -1);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.sw:hover { background: var(--rail-hover); }
+.sw > input[type="checkbox"] { grid-column: 1; }
+.sw-t { grid-column: 1; }
+.sw .dot { grid-column: 1; justify-self: end; }
+.sw-l {
+  grid-column: 2;
+  font-size: var(--fs-base); font-weight: var(--fw-body);
+  color: var(--text-dim); letter-spacing: var(--tr-tight);
+  white-space: normal; line-height: 1.3;
+}
+.sw:hover .sw-l { color: var(--text); }
+.sw input:checked ~ .sw-l { color: var(--text); font-weight: var(--fw-med); }
+.sw .count, .sw-n {
+  grid-column: 3;
+  font-size: var(--fs-micro); color: var(--text-mute);
+  font-variant-numeric: tabular-nums; min-width: 34px; text-align: right;
+}
+
+/* ---- Product list: these are buttons, so they look like buttons ----
+   NN/g's finding is specifically about this shape: a list of plain text that
+   happens to be clickable. Border and surface at rest, accent bar and fill
+   when selected. */
+.wf-item {
+  min-height: 36px;
+  display: flex; align-items: center;
+  margin-bottom: var(--sp-1);
+  padding: var(--sp-2) 10px;
+  font-size: var(--fs-sm); font-weight: var(--fw-body);
+  background: var(--ctl-bg);
+  border: 1px solid var(--ctl-border);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+}
+.wf-item:hover:not(.is-active) {
+  background: var(--ctl-bg-hi); border-color: var(--ctl-border-hi); color: var(--text);
+}
+.wf-item.is-active {
+  background: var(--rail-sel);
+  border-color: var(--accent);
+  color: var(--text); font-weight: var(--fw-med);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---- Segmented controls ---- */
+.seg { display: flex; gap: 2px; background: none; padding: 0; }
+.seg-b {
+  min-width: var(--hit); min-height: var(--hit);
+  padding: 0 10px;
+  font-size: var(--fs-xs); font-weight: var(--fw-med);
+  background: var(--ctl-bg);
+  border: 1px solid var(--ctl-border);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  line-height: 1.15;
+}
+.seg-b:hover:not(.is-active) { background: var(--ctl-bg-hi); color: var(--text); }
+.seg-b.is-active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+
+.theme-btn {
+  min-height: var(--hit); padding: 0 var(--sp-2);
+  font-size: var(--fs-micro); font-weight: var(--fw-med);
+  background: var(--ctl-bg);
+  border: 1px solid var(--ctl-border);
+  color: var(--text-dim);
+}
+.theme-btn:hover:not(.is-active) { background: var(--ctl-bg-hi); color: var(--text); }
+#theme-picker { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-1); }
+
+/* ---- Dashboard opener: a real button, at the top, not a text link at the
+        bottom of a scroll. ---- */
+.dash-open {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; min-height: 42px;
+  margin: var(--sp-3) 0 var(--sp-2);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-sm); font-weight: var(--fw-med);
+  background: var(--rail-sel);
+  border: 1px solid rgba(92, 214, 255, 0.42);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  letter-spacing: var(--tr-tight);
+  cursor: pointer;
+}
+.dash-open::after { content: '\203A'; font-size: var(--fs-lg); color: var(--accent); }
+.dash-open:hover { background: rgba(92, 214, 255, 0.22); border-color: var(--accent); }
+
+/* ---- Notes and hints ---- */
+.pane-note, .wf-hint, .db-note {
+  font-size: var(--fs-micro); line-height: 1.55;
+  color: var(--text-mute);
+  letter-spacing: var(--tr-tight);
+}
+.pane-note { margin: var(--sp-3) 0 0; padding-left: 10px; }
+
+/* ---- Accordions ---- */
+.wf-acc > summary, .cat > summary {
+  min-height: var(--hit);
+  display: flex; align-items: center; gap: var(--sp-2);
+  cursor: pointer;
+}
+.wf-acc-t { font-size: var(--fs-micro); font-weight: 700; letter-spacing: var(--tr-wide); color: var(--text-mute); }
+.wf-acc-n, .cat-count {
+  margin-left: auto;
+  font-size: var(--fs-micro); color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Alerts pane ---- */
+.al-big { font-size: var(--fs-2xl); }
+.al-big-l { font-size: var(--fs-micro); line-height: 1.45; }
+.al-type { min-height: 34px; display: flex; align-items: center; gap: var(--sp-2); }
+.al-name { font-size: var(--fs-sm); color: var(--text-dim); }
+.al-type:hover .al-name { color: var(--text); }
+.al-n { font-size: var(--fs-micro); color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.wc-evt { font-size: var(--fs-sm); font-weight: var(--fw-med); }
+.wc-area, .wc-desc { font-size: var(--fs-xs); color: var(--text-dim); line-height: 1.45; }
+.wc-exp, .wc-par-k { font-size: var(--fs-micro); color: var(--text-mute); }
+.wc-par-v { font-size: var(--fs-micro); color: var(--text-dim); }
+
+/* ---- Rail footer ---- */
+.rs-cap, .rs-feed-t, .rs-age, .rs-n, .rs-clear, .rs-none {
+  font-size: var(--fs-micro);
+}
+.rs-clear { min-height: var(--hit); padding: 0 var(--sp-2); font-weight: var(--fw-med); }
+.rs-chip { min-height: 26px; font-size: var(--fs-micro); padding: 0 var(--sp-1) 0 var(--sp-2); }
+.rs-feed-t { color: var(--text-dim); }
+
+/* ---- Topbar ---- */
+.tm-label { font-size: var(--fs-micro); color: var(--text-mute); letter-spacing: var(--tr-wide); }
+.tm-val   { font-size: var(--fs-xs); color: var(--text); }
+.telemetry { gap: var(--sp-4); }
+.brand-name { font-size: var(--fs-base); letter-spacing: var(--tr-wide); }
+.tb-search { min-height: var(--hit); font-size: var(--fs-micro); }
+.tbs-k { font-size: var(--fs-micro); color: var(--text-mute); }
+.hdr-toggle {
+  min-height: var(--hit); font-size: var(--fs-micro); font-weight: var(--fw-med);
+  border: 1px solid var(--ctl-border);
+}
+.hdr-toggle:hover { border-color: var(--ctl-border-hi); }
+.hdr-n { font-size: var(--fs-micro); }
+
+/* ---- Colour scale: the numerals are the one sub-12px thing in the app ---- */
+#lg-ticks, .gfx-scale-ticks { font-size: var(--fs-tick); color: var(--text-dim); }
+#lg-title, #lg-unit { font-size: var(--fs-micro); }
+
+/* ---- Transport ---- */
+#tl-label { font-size: var(--fs-xs); color: var(--text); }
+.tl-end { font-size: var(--fs-micro); color: var(--text-mute); }
+.tl-btn { min-width: var(--hit); min-height: var(--hit); font-size: var(--fs-base); }
+.tl-speed { min-height: var(--hit); font-size: var(--fs-micro); }
+
+/* ---- Command palette ---- */
+#pal-q { font-size: var(--fs-lg); }
+.pal-kind { flex-basis: 78px; font-size: var(--fs-micro); }
+.pal-label { font-size: var(--fs-base); }
+.pal-hint { font-size: var(--fs-micro); color: var(--text-mute); }
+.pal-row { min-height: 34px; }
+#pal-foot, .pal-esc { font-size: var(--fs-micro); }
+
+/* ---- Dashboards ---- */
+.db-card-h { font-size: var(--fs-micro); letter-spacing: var(--tr-wide); color: var(--text-dim); }
+.db-stat-v { font-size: var(--fs-2xl); }
+.db-stat-l { font-size: var(--fs-micro); color: var(--text-mute); }
+.db-bar-l  { font-size: var(--fs-sm); color: var(--text-dim); }
+.db-bar-n  { font-size: var(--fs-xs); color: var(--text); font-variant-numeric: tabular-nums; }
+.db-table th { font-size: var(--fs-micro); letter-spacing: var(--tr-wide); color: var(--text-mute); }
+.db-table td { font-size: var(--fs-xs); color: var(--text-dim); }
+.db-empty { font-size: var(--fs-xs); color: var(--text-mute); line-height: 1.5; }
+.db-scale-r { font-size: var(--fs-sm); color: var(--text-dim); min-height: 26px; }
+
+/* ---- Settings ---- */
+.sm-check, .sm-radio, .set-l, .set-note { font-size: var(--fs-xs); }
+.sm-check, .sm-radio { min-height: var(--hit); display: flex; align-items: center; gap: var(--sp-2); }
+.set-note { color: var(--text-mute); line-height: 1.5; }
+
+/* ---- Feed strip ---- */
+#feedstrip .chip { font-size: var(--fs-micro); min-height: 22px; }
+.strip-head { font-size: var(--fs-micro); }
+
+/* ---- Switch rows, corrected ----
+   The first cut put the track and the colour dot both in grid column 1, so the
+   grid opened a second ROW and every switch stacked: track, then dot, then
+   label, then count, down the left edge of a 40px tall row. Four explicit
+   tracks instead, one item each.
+
+   `.layer-list input:disabled { opacity: 0.35 }` also overrode the
+   `.sw input { opacity: 0 }` that hides the native box, so a disabled layer
+   drew a real checkbox next to its switch. A disabled row already reads as
+   disabled from the 0.5 on the label; the box was never meant to be seen. */
+.sw, .layer-list .sw {
+  display: grid;
+  grid-template-columns: 26px 12px 1fr auto;
+  grid-auto-rows: auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 38px;
+  padding: var(--sp-1) var(--sp-2);
+  margin: 0 calc(var(--sp-2) * -1);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.sw > input[type="checkbox"] {
+  position: absolute; opacity: 0; pointer-events: none;
+  width: 0; height: 0; margin: 0;
+}
+.layer-list input[type="checkbox"]:disabled { opacity: 0; }
+.sw > .sw-t { grid-column: 1; grid-row: 1; }
+.sw > .dot  { grid-column: 2; grid-row: 1; justify-self: center; }
+.sw > .sw-l { grid-column: 3; grid-row: 1; }
+.sw > .count, .sw > .sw-n { grid-column: 4; grid-row: 1; }
+/* Rows with no colour dot leave column 2 empty rather than shifting the label,
+   so every label in a list starts on the same x. */
+
+/* The track needed to grow with the type: a 26x14 pill beside 14px text read
+   as a leftover. */
+.sw-t { width: 30px; height: 17px; }
+.sw-t::after { width: 13px; height: 13px; top: 2px; left: 2px; }
+.sw input:checked + .sw-t { background: rgba(92, 214, 255, 0.4); }
+.sw input:checked + .sw-t::after { transform: translateX(13px); }
+.sw input:focus-visible + .sw-t { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- Move the tool strip below the data, not above it ----
+   Draw / Panes / Present sat between the tabs and the navigation, so the first
+   thing under "Data" was a pencil and a swatch rather than the list of places
+   you can go. Navigation goes directly under the tabs; the tools sit against
+   the footer where you reach for them, not where you trip over them. */
+#hud { display: flex; flex-direction: column; }
+#rail-tools {
+  order: 3;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--rail-edge);
+  border-bottom: 0;
+  background: rgba(0, 0, 0, 0.2);
+}
+#hud-panes { order: 2; }
+#rail-status { order: 4; }
+#rail-head { order: 0; }
+#hud-tabs { order: 1; }
+
+/* Disclosure markers. `<summary>` draws one by default and, once the summary
+   became a flex row, it rendered as a stray glyph at the right of every
+   category header where it read as a "0" next to the real counts. */
+.cat > summary, .wf-acc > summary { list-style: none; }
+.cat > summary::-webkit-details-marker,
+.wf-acc > summary::-webkit-details-marker { display: none; }
+.cat > summary::marker, .wf-acc > summary::marker { content: ''; }
+
+/* The group can be opened and closed, so it says so. */
+.cat > summary::after, .wf-acc > summary::after {
+  content: '\25BE';
+  margin-left: var(--sp-2);
+  font-size: var(--fs-micro); color: var(--text-mute);
+  transition: transform 140ms ease;
+}
+.cat:not([open]) > summary::after,
+.wf-acc:not([open]) > summary::after { transform: rotate(-90deg); }
+.cat > summary:hover, .wf-acc > summary:hover { color: var(--text); }
+
+/* A count of nothing is not information. Disabled and empty rows were printing
+   a 0 in the same column as 1,196 volcanoes. */
+.sw > .count:empty, .sw > .sw-n:empty { display: none; }
+
+/* ---- Dashboards ---- */
+#dashboard { background: #05070b; }
+.db-head h1, .db-title {
+  font-size: var(--fs-xl); font-weight: 700; letter-spacing: var(--tr-wide);
+}
+.db-sub { font-size: var(--fs-xs); color: var(--text-mute); }
+.db-card {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  padding: var(--sp-4) var(--sp-4) var(--sp-4);
+}
+.db-card-h { margin-bottom: var(--sp-3); }
+.db-stat-v { line-height: 1.05; font-variant-numeric: tabular-nums; }
+.db-stat-l { margin-top: 5px; letter-spacing: var(--tr-tight); }
+.db-bar-row { min-height: 26px; }
+.db-table th, .db-table td { padding: var(--sp-2) var(--sp-2); }
+.db-table tr + tr td { border-top: 1px solid rgba(255, 255, 255, 0.07); }
+#db-close, #wd-close {
+  width: 36px; height: 36px; font-size: var(--fs-lg);
+  border: 1px solid var(--ctl-border); border-radius: var(--r-sm);
+}
+#db-close:hover, #wd-close:hover { border-color: var(--ctl-border-hi); }
+
+/* ---- Settings modal ---- */
+#settings-modal h2, .set-h {
+  font-size: var(--fs-lg); font-weight: 700; letter-spacing: var(--tr-wide);
+  color: var(--text);
+}
+.set-grp-t, .sm-h {
+  font-size: var(--fs-micro); font-weight: 700; letter-spacing: var(--tr-wide);
+  text-transform: uppercase; color: var(--text-mute);
+}
+#settings-modal label { font-size: var(--fs-xs); color: var(--text-dim); }
+#settings-modal input[type="checkbox"], #settings-modal input[type="radio"] {
+  width: 16px; height: 16px; accent-color: var(--accent);
+}
+
+/* ---- Alerts pane cards ---- */
+.warn-card { padding: var(--sp-3); }
+.warn-card + .warn-card { margin-top: var(--sp-2); }
+
+/* ---- Focus. Keyboard users could not see where they were at all. ---- */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ---- Scrollbars in the rail and the boards ---- */
+#hud-panes::-webkit-scrollbar, .db-body::-webkit-scrollbar,
+#pal-list::-webkit-scrollbar, .rs-chips::-webkit-scrollbar { width: 10px; }
+#hud-panes::-webkit-scrollbar-thumb, .db-body::-webkit-scrollbar-thumb,
+#pal-list::-webkit-scrollbar-thumb, .rs-chips::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+#hud-panes::-webkit-scrollbar-thumb:hover, .db-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3); background-clip: content-box;
+}
+#hud-panes::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- The last twelve contrast failures, and the rows that would not line up ---- */
+
+/* The alert card keeps the published NWS colour on its left bar and its swatch;
+   the event NAME uses the lifted version, because seven of the 111 official
+   colours are dark enough to be unreadable as text on near-black. Flash Flood
+   Warning #8b0000 measured 1.80:1 here. */
+.wc-evt { color: var(--wc-ink, var(--wc, #cbd5e1)); }
+
+/* A control whose layer is off used to be faded to 32% opacity, which took its
+   label to 1.65:1 -- present, unreadable, and still occupying the row. Fading
+   the WORDS was always the wrong lever: it is the control that is inert, not
+   the label. The label stays at full contrast and says what the row is; the
+   control looks and behaves disabled. */
+.ctl.is-off, .wf-row.is-off { opacity: 1; }
+.ctl.is-off .ctl-l, .wf-row.is-off .wf-row-l { color: var(--text-mute); }
+.ctl.is-off .ctl-v, .wf-row.is-off .ctl-v { color: var(--text-mute); opacity: 0.7; }
+.ctl.is-off select, .ctl.is-off input,
+.wf-row.is-off select, .wf-row.is-off input {
+  opacity: 0.45; cursor: not-allowed; filter: grayscale(1);
+}
+
+/* Same argument for a layer this build cannot serve: the row has to stay
+   readable so you can see WHY it is off. 0.5 opacity put these at 3.07:1. */
+.layer-list label:has(input:disabled) { opacity: 1; cursor: not-allowed; }
+.layer-list label:has(input:disabled) .sw-l { color: var(--text-mute); }
+.layer-list label:has(input:disabled) .sw-t { opacity: 0.45; }
+.layer-list label:has(input:disabled) .dot { opacity: 0.45; }
+.layer-list label:has(input:disabled):hover { background: none; }
+
+/* Empty counts reserve their column instead of collapsing it. `display: none`
+   made the label the last child, so rows with a count ended at x=323 and rows
+   without ended at x=315 -- a ragged right edge down every list. */
+.sw > .count:empty, .sw > .sw-n:empty { display: block; visibility: hidden; }
+.sw > .count, .sw > .sw-n { min-width: 40px; }
+
+/* A button sharing a row with a control takes the value track, not the whole
+   row. `grid-column: 2 / -1` on every .sm-btn collided with the slider already
+   in track 2, so the model's forecast-hour row wrapped to 73px tall and threw
+   its label 18px off centre. Only a row that is nothing BUT a button spans. */
+.wf-row > button.sm-btn { grid-column: 3; justify-self: end; }
+.wf-row.wf-row-btn > button { grid-column: 2 / -1; justify-self: stretch; }
+
+/* Targets the audit still had under 24px. */
+.tool-swatch { width: var(--hit); height: var(--hit); min-width: var(--hit); }
+.seg .seg-b { min-width: var(--hit); width: auto; padding: 0 10px; }
+.gfx-anchor-b { min-width: 26px; min-height: 26px; }
+
+/* Alerts: the census rows are buttons that fly the camera, so they read as
+   buttons. This is the same NN/g point as the product list. */
+.al-type {
+  width: 100%;
+  padding: var(--sp-2) 10px;
+  margin-bottom: 3px;
+  background: var(--ctl-bg);
+  border: 1px solid var(--ctl-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.al-type:hover { background: var(--ctl-bg-hi); border-color: var(--ctl-border-hi); }
+.al-dot { width: 10px; height: 10px; border-radius: 2px; background: var(--ad); flex: 0 0 auto; }
+.al-name { flex: 1 1 auto; text-align: left; }
+
+/* ---- Ragged right edges, and the last of the small targets ---- */
+
+/* A FIXED fourth track, not an auto one. Reserving the column only when an
+   empty count element happened to exist still left rows that carry no count at
+   all ending 8px short, so every list in the rail had a ragged right edge.
+   Four fixed tracks means the label ends on the same x whether the row has a
+   count, an empty count, or none. */
+.sw, .layer-list .sw { grid-template-columns: 26px 12px 1fr 40px; }
+.sw > .count, .sw > .sw-n { min-width: 0; }
+
+/* The graphics panel's on/off is a `.sw` with only a track inside it -- no
+   label, no count -- sitting at the right end of a <summary>. It should not
+   inherit the four-track layout meant for a full-width list row. */
+.sw.gfx-item-on {
+  display: inline-flex; align-items: center;
+  grid-template-columns: none;
+  min-height: 0; margin: 0; padding: 0;
+}
+
+/* `#rail-tools .tool-swatch { width: 13px; height: 13px }` from the first
+   Weatherfront pass was still winning on height. */
+#rail-tools .tool-swatch { width: var(--hit); height: var(--hit); }
+.tool-swatch { border-radius: var(--r-sm); }
+
+/* `.seg-b` was being squeezed below its min-width by the flex row. */
+.seg { flex: 0 0 auto; }
+.seg .seg-b { flex: 0 0 auto; min-width: var(--hit); }
+
+/* A 20px-tall hit area on a slider is a thin ribbon to grab. */
+.wf-row input[type="range"], .ctl input[type="range"], #model-hour { height: 24px; }
+
+/* The value column in a row whose control is inactive stays readable: dimming
+   it to 0.7 put "0.55" at 3.57:1, the last AA failure in the app. */
+.ctl.is-off .ctl-v, .wf-row.is-off .ctl-v { opacity: 1; }
+
+/* ---- Settings modal ink ----
+   `.sm-hint` and `.sm-section-label` sat on --text-mute, which clears AA on
+   the rail but not on the modal's own rows: those carry an rgba(255,255,255,
+   0.03) fill, and a checked one carries rgba(77,210,255,0.08) on top, lifting
+   the surface enough to drop the same grey to 3.54:1. The surface is still
+   dark, so the ink goes LIGHTER, not darker. */
+#settings-modal .sm-hint,
+#settings-modal .sm-section-label,
+#settings-modal .sm-hint-block { color: var(--text-dim); }
+
+/* `#rail-tools .seg-b { min-width: 22px }` from the first Weatherfront pass
+   outranked `.seg .seg-b` and was still squeezing the pane buttons under the
+   pointer-target floor. */
+#rail-tools .seg .seg-b { min-width: var(--hit); height: var(--hit); }
+.sw.gfx-item-on { min-height: 24px; padding: 4px 0; }
+
+/* ---- Tool strip: one row, and progressive disclosure on the draw tools ----
+   Two labelled rows of tools sat between the navigation and the footer and
+   took 90px out of every division's workspace -- enough that the radar
+   division's product list was cut off mid-item at 950px tall. Undo, clear and
+   the colour swatch only appear once drawing is on, because before the first
+   stroke there is nothing to undo, nothing to clear and nothing to recolour. */
+#rail-tools {
+  flex-direction: row; align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+}
+#drawbar { gap: var(--sp-1); }
+.rt-when-drawing { display: none; }
+#drawbar.is-drawing .rt-when-drawing { display: inline-flex; }
+#panebar { margin-left: auto; }
+#present-btn { flex: 0 0 auto; }
+.tool-btn.is-wide { margin-left: 0; padding: 0 10px; gap: 6px; }
+
+/* The active-layer chips are capped: nineteen layers on at once would push the
+   feed line off the bottom of the rail. */
+.rs-chips { max-height: 58px; }
+
+/* ---- Dashboard bar rows ----
+   A 128px label column truncated "Small Craft Advisory", "Flash Flood
+   Warning" and "Special Weather Statement" while 285px of empty track sat next
+   to them. The name is the data; the bar is the comparison. */
+.db-bar-k { flex: 0 0 190px; font-size: var(--fs-xs); }
+.db-bar-t { flex: 1 1 auto; max-width: 320px; height: 8px; }
+.db-bar-n { flex: 0 0 52px; }
+
+/* A count of zero goes quiet. */
+.db-stat.is-zero .db-stat-v { color: var(--text-mute); }
+
+/* The dashboard opener is the first thing in its pane now, so it needs to sit
+   above the division grid's own margin rather than fight it. */
+.hud-pane > .dash-open:first-child,
+[data-mode-body] > .dash-open:first-child { margin: 0 0 var(--sp-4); }
+
+/* Settings: a two-line label with a two-line hint beside it collided. The hint
+   drops under the label when the row is tight instead of wrapping into it. */
+.sm-check, .sm-radio { flex-wrap: wrap; row-gap: 2px; }
+.sm-check > span:first-of-type, .sm-radio > span:first-of-type { flex: 1 1 auto; }
+.sm-hint { flex: 0 1 auto; text-align: right; max-width: 100%; }
