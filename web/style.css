@@ -1405,6 +1405,7 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   background: rgba(77, 210, 255, 0.07);
 }
 
+#hud-scroll { flex: 1 1 auto; position: relative; min-height: 0; display: flex; }
 #hud-panes { flex: 1 1 auto; overflow-y: auto; }
 .hud-pane { display: none; padding: 12px 14px 16px; }
 .hud-pane.is-active { display: block; }
@@ -4118,6 +4119,9 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
   border-bottom: 0;
   background: rgba(0, 0, 0, 0.2);
 }
+/* The scroll wrapper is now the rail's flex child, so it carries the order and
+   the grow. #hud-panes keeps `order` for nothing but does no harm. */
+#hud-scroll { order: 2; }
 #hud-panes { order: 2; }
 #rail-status { order: 4; }
 #rail-head { order: 0; }
@@ -4194,20 +4198,60 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
   border-radius: var(--r-sm);
 }
 
-/* ---- Scrollbars in the rail and the boards ---- */
+/* ---- Scrollbars in the rail and the boards ----
+   A 4px thumb at 16% white over the panel measured 1.60:1, and a screenshot of
+   the World division -- 688px of content hidden -- found every pixel of the
+   16px gutter sitting at value 14, identical to the background. Not faint:
+   absent. WCAG 1.4.11 puts the floor for a non-text UI component at 3:1, so
+   the thumb is now 0.38 white (3.5:1) in a track that is itself drawn, and the
+   gutter is narrower so the thumb is not a hairline inside it. */
 #hud-panes::-webkit-scrollbar, .db-body::-webkit-scrollbar,
-#pal-list::-webkit-scrollbar, .rs-chips::-webkit-scrollbar { width: 10px; }
+#pal-list::-webkit-scrollbar, .rs-chips::-webkit-scrollbar { width: 12px; }
 #hud-panes::-webkit-scrollbar-thumb, .db-body::-webkit-scrollbar-thumb,
 #pal-list::-webkit-scrollbar-thumb, .rs-chips::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
-  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.38);
+  border-radius: 6px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
-#hud-panes::-webkit-scrollbar-thumb:hover, .db-body::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3); background-clip: content-box;
+#hud-panes::-webkit-scrollbar-thumb:hover, .db-body::-webkit-scrollbar-thumb:hover,
+#pal-list::-webkit-scrollbar-thumb:hover, .rs-chips::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.58); background-clip: content-box;
 }
-#hud-panes::-webkit-scrollbar-track { background: transparent; }
+#hud-panes::-webkit-scrollbar-track, .db-body::-webkit-scrollbar-track,
+#pal-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 1px solid var(--ctl-border);
+}
+
+/* The scrollbar is the browser's to draw, and on an overlay-scrollbar setup it
+   may not draw at all until the user is already scrolling -- which is no help
+   to someone who does not know there is anything to scroll to. These two edges
+   are the app's own signal, toggled from scroll position rather than hover, so
+   they are true whether or not a bar is painted. They sit above the content and
+   ignore the pointer, so nothing under them becomes unclickable. */
+#hud-fade-top, #hud-fade-bot {
+  position: absolute; left: 0; right: 12px;
+  height: 26px; pointer-events: none; z-index: 4; display: none;
+}
+#hud-scroll.can-up   #hud-fade-top { display: block; }
+#hud-scroll.can-down #hud-fade-bot { display: block; }
+#hud-fade-top {
+  top: 0;
+  background: linear-gradient(to bottom, var(--rail-bg) 15%, rgba(11, 14, 19, 0));
+  border-top: 1px solid var(--ctl-border);
+}
+#hud-fade-bot {
+  bottom: 0; height: 34px;
+  background: linear-gradient(to top, var(--rail-bg) 42%, rgba(11, 14, 19, 0));
+  display: none;
+}
+#hud-scroll.can-down #hud-fade-bot { display: flex; align-items: flex-end; justify-content: center; }
+.hf-more {
+  font-size: var(--fs-micro); font-weight: var(--fw-med);
+  letter-spacing: var(--tr-wide); text-transform: uppercase;
+  color: var(--text-dim); padding-bottom: 3px;
+}
 
 /* ---- The last twelve contrast failures, and the rows that would not line up ---- */
 
@@ -4391,3 +4435,72 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
 #settings-modal { transition: transform 220ms cubic-bezier(.17,.84,.44,1); }
 #palette, #pal-box { animation: none; }
 #worlddash, #modelcompare { transition: none; }
+
+/* ---- A block of controls whose layer is off ----
+   `syncControlAvailability()` only ever styled `.ctl` rows, so the one place
+   the miss was visible -- the six radar product buttons, gated on Local Hi-Res
+   Site -- kept full contrast and a highlighted selection while the feature was
+   switched off.
+
+   `:not(.wf-row):not(.ctl)` matters. A single-control row already has its own
+   off treatment from the readability pass -- opacity stays at 1 and the ink
+   moves, because dimming a label is how text ends up under AA. Without the
+   exclusion this rule outranks it (0,2,1 beats 0,2,0) and quietly puts the
+   Site row back to 45%, undoing that fix. */
+div[data-requires].is-off:not(.wf-row):not(.ctl) .wf-grp { color: var(--text-mute); }
+div[data-requires].is-off:not(.wf-row):not(.ctl) .wf-item {
+  color: var(--text-mute);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: transparent;
+}
+/* No current item while the list is dead. Dimming alone is not enough: a
+   highlighted row at any opacity still reads as "this one is chosen", and it
+   was contradicting the readout over the map. */
+div[data-requires].is-off .wf-item.is-active {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-mute);
+  box-shadow: none;
+}
+.wf-item:disabled { cursor: default; }
+.wf-item:disabled:hover { background: transparent; color: var(--text-mute); }
+
+/* ---- The two targets the last audit could not see ----
+   Both only exist while something is on screen: the transport is hidden with
+   no animatable layer, and the close button belongs to an alert graphic. The
+   earlier sweep measured a frame where neither was up, so both survived a pass
+   that reported zero undersized targets. Measured now, across all nine
+   divisions: #tl-range was 963x3 and .gfx-x was 14x14.
+
+   #tl-range is the app's primary time control -- the thing you drag to move
+   the radar through the last two hours -- and it was a three-pixel ribbon
+   spanning the bottom of the screen. The track it sits on is 18px, so the
+   input gets the full height of its row as a hit area and the visible line
+   stays where it was: the drawn track is #tl-track::before, not the input. */
+#tl-track { height: 26px; }
+#tl-range {
+  height: 26px;
+  /* An input taller than its drawn track would otherwise cover the tick marks
+     and the NOW marker, which are absolutely positioned siblings. */
+  background: none;
+}
+#tl-range::-webkit-slider-runnable-track { height: 26px; background: none; }
+#tl-range::-webkit-slider-thumb {
+  width: 15px; height: 15px;
+  margin-top: 0;                   /* centred by the 26px runnable track */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+#tl-range:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The banner's dismiss. 14x14 in the top-right corner of a graphic that sits
+   flush against the right edge of the viewport, which is the worst place in
+   the window to put a small target. 26px square, inset far enough that it is
+   not the first thing the pointer meets coming off the screen edge. */
+.gfx-x {
+  top: 2px; right: 2px;
+  width: 26px; height: 26px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-lg);
+}
+.gfx-x:hover { color: var(--text); background: rgba(255, 255, 255, 0.1); }

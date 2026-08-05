@@ -164,6 +164,11 @@
               aria-pressed="false" title="Hide all the chrome (P)">Present</button>
     </div>
 
+    <!-- The rail scrolls, and until now nothing said so. World hid 688px of
+         content below a fold that sliced a country row through the middle.
+         The wrapper carries the scroll-state classes; the two edges are its
+         children so they stay pinned while the content moves under them. -->
+    <div id="hud-scroll">
     <div id="hud-panes">
 
     <!-- ═══════════  DATA  ═══════════ -->
@@ -536,7 +541,12 @@
         <div class="wp-sec-label">NEXT MILESTONE</div>
         <div id="wp-milestone" class="wp-milestone"></div>
 
-        <button id="wd-open" class="wp-open">OPEN FULL DASHBOARD</button>
+        <!-- Carries `dash-open` so initDashboards() promotes it to the top of
+             the division like the other five. It has its own click handler in
+             initWorldDash() and no `data-dash`, because the population board
+             is not in the DASHBOARDS registry -- it runs a 10Hz odometer of
+             its own rather than a 30s fetch-and-render. -->
+        <button id="wd-open" class="dash-open">Open world population dashboard</button>
 
         <p class="pane-note" id="wp-src">—</p>
         </div>
@@ -626,6 +636,11 @@
       </div>
     </section>
 
+    </div>
+    <div id="hud-fade-top" aria-hidden="true"></div>
+    <div id="hud-fade-bot" aria-hidden="true">
+      <span class="hf-more">▾ more</span>
+    </div>
     </div>
 
     <!-- ─────────  RAIL FOOTER  ─────────

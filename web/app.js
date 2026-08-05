@@ -445,6 +445,16 @@ async function initViewer() {
 
   viewer = new Cesium.Viewer('cesiumContainer', {
     baseLayerPicker: false,
+
+    // Cesium's default base layer is Ion asset 2, requested from the
+    // constructor before initMapTheme() ever runs. With no Ion token that is a
+    // guaranteed 401 on every boot -- api.cesium.com/v1/assets/2/endpoint with
+    // an empty access_token -- and a console error for a layer we then throw
+    // away and replace. `false` means the viewer starts with no imagery at all
+    // and initMapTheme() installs the real base, which is what was happening
+    // anyway, minus the failed round trip.
+    baseLayer: false,
+
     geocoder: false, homeButton: false, sceneModePicker: false,
     timeline: false, animation: false, fullscreenButton: false,
     navigationHelpButton: false, selectionIndicator: false, infoBox: false,
@@ -5061,6 +5071,7 @@ function initTabs() {
       syncRailTitle();
       // The timeline only makes sense against an animatable imagery layer.
       syncTimelineVisibility();
+      syncRailScrollEdges();      // same reason as the division switch below
     });
   });
 
@@ -5092,6 +5103,14 @@ function initTabs() {
     RAIL_DIV = name;
     syncRailTitle();
     railStatusRender();
+    // Swapping divisions replaces the whole content of the scrolling box, and
+    // neither of the events that normally drive the scroll edges is reliable
+    // here: the browser clamps scrollTop silently rather than dispatching a
+    // scroll, and the ResizeObserver was measured landing 450-600ms late. For
+    // that window the rail claimed there was more above a division that fits
+    // in one screen. A division switch is an explicit action with a handler,
+    // so it says so directly instead of waiting to be noticed.
+    syncRailScrollEdges();
     return true;
   };
   chips.forEach((chip) => {
@@ -5361,12 +5380,23 @@ const SCALES = {
 // Controls that only act on a layer are dead weight while that layer is off,
 // and a live-looking control that does nothing is the thing that makes an app
 // feel unfinished. Each is tagged data-requires="<layer>" in the markup.
+// The selector used to be `.ctl[data-requires]`, which is narrower than the
+// markup and let the exact thing this function exists to prevent through the
+// gap: the radar product list is a plain `<div data-requires="radar_site">`
+// with no `.ctl` class, so with Local Hi-Res Site switched OFF the rail still
+// showed six product buttons with "Super-Res Reflectivity" highlighted as the
+// live selection, while the readout above the map said BASE REFLECTIVITY /
+// RAINVIEWER COMPOSITE. Two surfaces disagreeing about what is on screen, and
+// the one you can click is the one that is wrong.
+//
+// Buttons are disabled alongside selects and inputs for the same reason -- a
+// `<select>` was the only control type the old loop knew about.
 function syncControlAvailability() {
-  document.querySelectorAll('.ctl[data-requires]').forEach((row) => {
+  document.querySelectorAll('[data-requires]').forEach((row) => {
     const cb = document.querySelector(`input[data-layer="${row.dataset.requires}"]`);
     const live = !!(cb && cb.checked);
     row.classList.toggle('is-off', !live);
-    row.querySelectorAll('select, input').forEach((el) => { el.disabled = !live; });
+    row.querySelectorAll('select, input, button').forEach((el) => { el.disabled = !live; });
   });
 }
 
@@ -10645,7 +10675,13 @@ function initDashboards() {
   // every division opened with five dashboard buttons stacked above its own
   // navigation. `closest` on the union stops at the division body when there
   // is one and at the pane when there is not.
-  document.querySelectorAll('[data-dash]').forEach((b) => {
+  // Promotion keys on the CLASS, not on `data-dash`. The World division's
+  // opener has no `data-dash` -- the population board runs a 10Hz odometer
+  // rather than the registry's fetch-and-render, so it is wired separately in
+  // initWorldDash() -- and keying on the attribute left the single most
+  // elaborate screen in the app sitting under 688px of unscrolled rail, which
+  // is the exact defect this loop was written to fix for the other five.
+  document.querySelectorAll('.dash-open').forEach((b) => {
     const host = b.closest('[data-mode-body], .hud-pane');
     if (host && host.firstElementChild !== b) host.prepend(b);
   });
@@ -10729,10 +10765,40 @@ async function dbFetch(url, ttlMs = 25_000) {
 
 // ---- 1. Severe weather ------------------------------------------------------
 
-const STATE_OF = (areaDesc) => {
-  // NWS areaDesc is "County, ST; County, ST". The state is the last two
-  // characters of a segment, and only when they really are a state code.
+// NWS marine and offshore zones use the same two-letter UGC slot as a state,
+// and none of them is one. Naming them keeps a row reading "PK 6" -- which
+// means nothing to anybody -- off a board that is meant to be read at a
+// glance. https://www.weather.gov/nwr/marine_zones
+const MARINE_ZONE = {
+  AM: 'Caribbean waters', AN: 'Atlantic coastal', GM: 'Gulf waters',
+  LC: 'Lake St. Clair',   LE: 'Lake Erie',        LH: 'Lake Huron',
+  LM: 'Lake Michigan',    LO: 'Lake Ontario',     LS: 'Lake Superior',
+  PH: 'Hawaii waters',    PK: 'Alaska waters',    PM: 'Marianas waters',
+  PS: 'Samoa waters',     PZ: 'Pacific coastal',  SL: 'St. Lawrence R.',
+};
+
+/* Which states an alert covers.
+   `areaDesc` reads "County, ST; County, ST" for county-based products and
+   plain prose for zone-based ones -- "Rio Grande Valley of Eastern Hudspeth
+   County", "Kiska to Attu Pacific Side". Parsing the trailing two characters
+   therefore worked on the county products and silently dropped the rest: on a
+   live pull of 63 active alerts it attributed 30 of them and found four
+   states, while California had an Extreme Heat Warning printed across the top
+   of the map. A card that authoritative should not be missing half the
+   country.
+   `geocode.UGC` is the service's own answer and was on 62 of the 63. Its first
+   two characters are the state or marine prefix by definition, so it goes
+   first and the prose regex stays as the fallback for the rare alert with no
+   UGC at all. Same pull, after: 62 alerts attributed across 22 areas. */
+const STATE_OF = (arg) => {
+  const props = (arg && typeof arg === 'object') ? arg : null;
+  const areaDesc = props ? props.areaDesc : arg;
   const out = new Set();
+  for (const ugc of (props?.geocode?.UGC) || []) {
+    const m = String(ugc).match(/^([A-Z]{2})[CZ]\d{3}$/);
+    if (m) out.add(m[1]);
+  }
+  if (out.size) return [...out];
   for (const seg of String(areaDesc || '').split(';')) {
     const m = seg.trim().match(/,\s*([A-Z]{2})$/);
     if (m) out.add(m[1]);
@@ -10775,13 +10841,13 @@ const DASH_STORM = {
 
     const byState = new Map();
     for (const f of alerts) {
-      for (const st of STATE_OF(f.properties?.areaDesc)) {
+      for (const st of STATE_OF(f.properties)) {
         byState.set(st, (byState.get(st) || 0) + 1);
       }
     }
     const stateRows = [...byState.entries()]
       .sort((a, b) => b[1] - a[1]).slice(0, 12)
-      .map(([label, n]) => ({ label, n }));
+      .map(([code, n]) => ({ label: MARINE_ZONE[code] || code, n }));
 
     // Impact-bearing products first: the hazard parameters NWS attaches are
     // what separates a routine advisory from something worth a slide.
@@ -10845,7 +10911,9 @@ const DASH_STORM = {
     return '<div class="db-grid">' +
       dbCard('In effect right now', hero, 'db-w3') +
       dbCard('By product type', typeRows.length ? dbBars(typeRows) : dbEmpty('No active NWS products.')) +
-      dbCard('By state', stateRows.length ? dbBars(stateRows) : dbEmpty('No product carries a state code.')) +
+      dbCard('By state & marine zone',
+             stateRows.length ? dbBars(stateRows)
+                              : dbEmpty('No product carries a zone code.')) +
       dbCard('SPC Day 1 convective outlook', spcCard) +
       dbCard('Impact products',
         impact.length
@@ -11343,6 +11411,67 @@ function initRailStatus() {
   railStatusRender();
 }
 
+// ---------- "There is more below this" ---------------------------------------
+//
+// The rail scrolls. Nothing said so. Measured on the World division, 688px of
+// content sat below the fold with the last visible row -- a country in the
+// population rank -- sliced through the middle, and a screenshot found every
+// pixel of the 16px scrollbar gutter at exactly the panel's own value. The bar
+// was not faint, it was not painted: overlay scrollbars stay invisible until
+// you are already scrolling, which is no use to someone who does not know
+// there is anywhere to scroll to.
+//
+// So the app draws its own edges and does not rely on the browser's. Toggled
+// from scroll position, not hover, so the answer is true whether or not a bar
+// happens to be on screen. A ResizeObserver on the scrolling box catches the
+// case that matters most: switching division swaps 1,260px of content for
+// 400px and no scroll event fires.
+function syncRailScrollEdges() {
+  const wrap = document.getElementById('hud-scroll');
+  const box = document.getElementById('hud-panes');
+  if (!wrap || !box) return;
+  // A sub-pixel remainder is not "more content". One row of the tightest list
+  // in the rail is 28px, so 4px of slack keeps a rounding error from promising
+  // something that is not there.
+  const room = box.scrollHeight - box.clientHeight;
+  // `room` gates BOTH edges, and it has to. Reading scrollTop on its own left a
+  // stale "more above" behind: scroll World to the end, switch to a division
+  // that fits, and the observation that fires as the content shrinks can still
+  // see the old scrollTop while scrollHeight is already small. Nothing scrolls
+  // after that, so nothing clears it, and a division with 572px of content in a
+  // 572px box claimed there was more above it. If there is no room to scroll
+  // there is no edge, whatever scrollTop happens to say at that instant.
+  const scrollable = room > 4;
+  wrap.classList.toggle('can-up', scrollable && box.scrollTop > 4);
+  wrap.classList.toggle('can-down', scrollable && box.scrollTop < room - 4);
+}
+
+function initRailScrollEdges() {
+  const box = document.getElementById('hud-panes');
+  if (!box) return;
+  box.addEventListener('scroll', syncRailScrollEdges, { passive: true });
+  // The content's height changes without a scroll event on every division
+  // switch, every <details> toggle, and every feed that lands a new row.
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(syncRailScrollEdges);
+    ro.observe(box);
+    for (const p of box.children) ro.observe(p);
+  }
+  window.addEventListener('resize', syncRailScrollEdges);
+
+  // Backstop, and it is not belt-and-braces -- it is the third time this app
+  // has been caught by the same thing. A CSS transition that gated visibility
+  // never advanced; a ResizeObserver landed 450-600ms late; and the scroll
+  // event above was measured arriving after more than a second, or not at all,
+  // on a busy frame. Each time the symptom was chrome asserting something that
+  // was no longer true, which is the failure Don described as the app not being
+  // readable. Two integer reads and two class toggles, 2.5 times a second, on a
+  // globe that is in explicit-render mode and otherwise idle: the cost is
+  // nothing next to being wrong for a second at a time.
+  setInterval(syncRailScrollEdges, 400);
+  syncRailScrollEdges();
+}
+
 // ---------- Command palette --------------------------------------------------
 //
 // Everything in this app is two to four clicks deep: pick a tab, pick a
@@ -11569,6 +11698,7 @@ function initWeatherfrontShell() {
   initAlertsTab();
   initDashboards();
   initRailStatus();
+  initRailScrollEdges();
   initCommandPalette();
   syncRailTitle();
 }
