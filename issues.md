@@ -580,3 +580,105 @@ hit area, 4px track, 14px thumb.
 `<input>` for a checkbox or radio rather than the `<label>` wrapping it. A 16px
 box inside a 400x33 row is not a 16px target, and the audit was reporting four
 false failures in settings. An audit that cries wolf stops being read.
+
+---
+
+## 26. No viewport tag, so a phone rendered the app at a third size (**FIXED** 2026-08-05)
+
+**Found:** 2026-08-05, first time anything measured this app at phone size.
+
+`<meta name="viewport">` was absent. Without one a phone lays the page out at a
+980px fallback width and scales the result down.
+
+| measured at 393x852 | |
+|---|---|
+| `innerWidth` reported | **1185** |
+| effective size of a 12px label | ~4px |
+| horizontal scroll | **205px** |
+| manifest / service worker | none |
+
+The entire readability pass (issue #18) was void on mobile, and no desktop
+suite could see it — they all run at 1600x950.
+
+**Fix:** viewport tag with `viewport-fit=cover`, a phone layout (bottom sheet,
+44px targets, safe-area insets), and the PWA layer. `scripts/mobile_test.py`,
+62 checks across four device sizes plus an offline reload.
+
+### 26b. Four bugs I introduced doing it
+
+| | measured |
+|---|---|
+| `--rail-w: 100vw` for the sheet | nine surfaces position off that token to clear the left rail; their containing block started at x=412, alert banner computed to `left: 420, width: 2` |
+| aspect-padded boot frame | asked 69° of longitude to fit 153° of latitude; phone booted at **11,920 km**, looking at the whole planet |
+| SW aborting `/api/` at 4.5s | `/api/nws/alerts` returns in ~1s alone, exceeded the deadline under boot concurrency → hard 503 with nothing cached to replace it. **Two console errors that did not exist before the worker.** |
+| `.rt-when-drawing` on coarse pointers | "a finger cannot hover" applied to a control gated on *drawing*, not hover → three dead buttons on every touch device |
+
+The boot frame is the cheap lesson: a fix for a problem nobody had confirmed
+was real. The phone frame was picked by rendering four candidates and looking.
+
+---
+
+## 27. Tapping the sheet handle silently turned layers on (**FIXED** 2026-08-05)
+
+**Found:** 2026-08-05, chasing a sheet that would not open past its half detent.
+
+Traced with a spy on `sheetGo`: **one** tap logged
+
+```
+2   t=36627   from step()
+1   t=36634   from the change listener
+```
+
+A touch fires touchstart/touchend, then the browser synthesises a click at the
+same **screen** coordinates. By then the sheet has moved several hundred pixels,
+so the point that was the drag handle is over a layer row. The phantom click
+toggled a layer, and the sheet collapsed in response to a change the operator
+never made.
+
+The layer toggle is the real defect; the detent was the symptom that exposed it.
+`preventDefault` on `touchend` is the documented remedy and **did not work** —
+the click still arrived. So the sheet swallows clicks inside itself for 350ms
+after its geometry changes, in the capture phase, rather than arguing with the
+platform about which synthetic events it owes whom.
+
+The auto-collapse-on-layer-change was removed rather than repaired. It caused
+two bugs and was the wrong feature: a panel that moves when you did not move it
+is what makes an app feel like it is fighting you.
+
+---
+
+## 28. The stalled animation clock, fourth instance (**FIXED** 2026-08-05)
+
+I put a 260ms transform transition on the sheet and argued **in the comment**
+that it was safe, because a stalled transform leaves the sheet in the wrong
+place rather than invisible. Measured:
+
+| after the class changed | computed `translateY` |
+|---|---|
+| expected at 260ms | 0px |
+| **actual at 1,500ms** | **157px** (from 731px) |
+
+Still 60% incomplete six times past its own duration. Cesium renders the globe
+on the main thread and the clock barely advances.
+
+A sheet stuck at peek is a tap that appears to do nothing — the exact complaint
+this run of work started from. After #8 (division pills), #17 (fade-ins) and
+#19 (scroll edges), the rule generalises: **if the clock can stall, nothing a
+user is waiting on goes behind it.** The sheet snaps.
+
+---
+
+## 29. `/api/rivers` takes 31 seconds (**OPEN — pre-existing**)
+
+Noticed while timing endpoints for #26b, unrelated to that work. Measured
+directly against the server, not through the worker:
+
+```
+/api/nws/alerts    200  1.04s
+/api/lsr?hours=12  200  0.95s
+/api/buoys         200  0.69s
+/api/rivers        200  31.22s
+```
+
+11,602 gauges. Not touched, since it is outside the mobile task and the fix is
+likely a server-side cache or a bbox filter — Don's call on which.
