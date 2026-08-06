@@ -41,3 +41,7 @@ graphify-out/
 # scripts/slim_boundaries.py can be re-run at a different tolerance without a
 # round trip through the zips. Reproducible: scripts/build_boundaries.py.
 web/data/ne_*.full.geojson
+
+# Visual test output. The committed reference frames live in
+# scripts/visual_reference/; this is the per-run capture and diff scratch.
+scripts/_visual_out/

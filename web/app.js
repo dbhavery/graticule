@@ -591,7 +591,9 @@ async function initViewer() {
 
   viewer.imageryLayers.removeAll();
   // Before the base, so it lands at index 0 and the base stacks on top of it.
-  initPolarBackstop();
+  // Awaited: it resolves a TMS descriptor, and applyImageryBase below reads
+  // polarBackstopLayers.length as the floor it may lower the base to.
+  await initPolarBackstop();
   // Imagery base is settings-driven now (Satellite / Streets / Topo / Night).
   // applyImageryBase honors settings.imageryBase, falls back to satellite, and
   // tracks the layer so the picker can swap it later.
@@ -4233,13 +4235,19 @@ function initRealisticEarth() {
   scene.skyBox.show    = !!settings.showStars;
 
   syncLensFlare();
+  // Whether the sun is in frame is a property of the CAMERA, so it has to be
+  // re-asked when the camera moves. `changed` fires during a fly-through,
+  // `moveEnd` catches the last frame of it.
+  scene.camera.changed.addEventListener(syncLensFlare);
+  scene.camera.moveEnd.addEventListener(syncLensFlare);
 
   // 2. Night lights ride on the same lighting model.
   toggleNightLights(!!settings.nightLights);
 
   // Keep the header's sun/moon readout honest — recompute on a slow tick
-  // rather than per-frame; the subsolar point moves 0.25°/minute.
-  setInterval(updateCelestialReadout, 30_000);
+  // rather than per-frame; the subsolar point moves 0.25°/minute. The flare
+  // rides along: a stationary camera still watches the sun set.
+  setInterval(() => { updateCelestialReadout(); syncLensFlare(); }, 30_000);
   updateCelestialReadout();
 }
 
@@ -4259,8 +4267,50 @@ let _lensFlareStage = null;
    So it follows the same condition as the grade: suspended while anything is
    drawn over the base, restored when the globe is the picture again. The
    Settings switch still decides whether it is wanted at all. */
+/* And the star has to actually be there.
+   Cesium's stage never asks where the sun is: once attached it mirrors the
+   brightest pixels through screen centre every frame, in frame or not. On the
+   solstice at the full-globe view, with the sun almost directly BEHIND the
+   camera and nothing of it on screen, it wrapped the planet in a rainbow halo
+   and turned the Pacific neon cyan -- the single worst-looking frame in the
+   app, and reachable by zooming out. Nothing that reads state could see it.
+
+   So gate on the two conditions the Settings label already claims: the sun is
+   within the frustum, and the Earth is not in the way. */
+const SUN_DISTANCE_M = 1.496e11;   // 1 AU; only the direction matters
+
+function sunPositionWC() {
+  const [lat, lon] = subsolarLatLon(Cesium.JulianDate.toDate(viewer.clock.currentTime));
+  // The subsolar point is by definition where the sun is straight overhead, so
+  // the surface normal there is the direction to the sun.
+  const dir = Cesium.Cartesian3.normalize(
+    Cesium.Cartesian3.fromDegrees(lon, lat, 0), new Cesium.Cartesian3());
+  return Cesium.Cartesian3.multiplyByScalar(dir, SUN_DISTANCE_M, new Cesium.Cartesian3());
+}
+
+function sunIsInFrame() {
+  if (!viewer) return false;
+  try {
+    const camera = viewer.scene.camera;
+    const sun = sunPositionWC();
+    const toSun = Cesium.Cartesian3.normalize(
+      Cesium.Cartesian3.subtract(sun, camera.positionWC, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3());
+    // A real lens flares slightly before the source crosses the frame edge,
+    // so the cone is a little wider than the vertical field of view.
+    const fovy = camera.frustum.fovy || Cesium.Math.toRadians(60);
+    if (Cesium.Cartesian3.dot(camera.directionWC, toSun) < Math.cos(fovy * 0.9)) {
+      return false;
+    }
+    return new Cesium.EllipsoidalOccluder(viewer.scene.globe.ellipsoid, camera.positionWC)
+      .isPointVisible(sun);
+  } catch {
+    return false;
+  }
+}
+
 function lensFlareWanted() {
-  return settings.lensFlare !== false && !baseHasOverlay();
+  return settings.lensFlare !== false && !baseHasOverlay() && sunIsInFrame();
 }
 
 function syncLensFlare() { applyLensFlare(lensFlareWanted()); }
@@ -4449,8 +4499,8 @@ function buildGraticule(ds) {
  * frame the moment anyone tilted north of Canada.
  *
  * The fix is a permanent bottom-most layer in a GEOGRAPHIC tiling scheme,
- * which does reach ±90. NASA GIBS publishes Blue Marble in EPSG:4326 with no
- * key, so the caps get real imagery -- ice, not a painted disc.
+ * which does reach ±90, so the caps get real imagery -- ice, not a painted
+ * disc and not a fan of smeared texels.
  *
  * Two traps this has to avoid, both already documented elsewhere in this file:
  *   * It must be flagged `__scenery`, or baseHasOverlay() counts it as a data
@@ -4460,47 +4510,43 @@ function buildGraticule(ds) {
  *     put the base UNDER the backstop and hide the actual basemap. The floor
  *     is index 1 whenever a backstop exists.
  */
-/* A flat ice tone, drawn as a 69-byte 1x1 PNG stretched over each cap.
+/* Natural Earth II, the raster Cesium already ships beside its own build.
  *
- * Photographic imagery was tried first and every source failed a different
- * way, which is why this is a colour and not a picture:
+ * EPSG:4326, geodetic profile, bounds -180/-90 to 180/90, levels 0-2 at
+ * 0.703 / 0.352 / 0.176 degrees per pixel. Two properties matter and both were
+ * read off its tilemapresource.xml, not assumed:
  *
- *   Blue Marble bathymetry  the Arctic is dark OCEAN, so the cap still read as
- *                           a hole -- the same complaint, one layer down.
- *   Blue Marble NextGen /   near-black ocean at the pole. Worse.
- *     Shaded Relief
- *   MODIS true colour       correct and current in POLAR DAY, and pure BLACK
- *                           in polar night. It does not return "no data" when
- *                           the sun is down, it returns black pixels, so it
- *                           painted a black disc over Antarctica in August.
+ *   * It REACHES ±90. Every basemap in the picker is Web Mercator, which is
+ *     undefined at the poles and stops at ±85.0511°, which is what left the
+ *     caps bare in the first place.
+ *   * Its pyramid IS power-of-two, so Cesium's GeographicTilingScheme addresses
+ *     it directly. That is exactly what NASA GIBS EPSG:4326 is not -- measured
+ *     against the live service, GIBS goes 2x1, 3x2, 5x3, 10x5 where Cesium
+ *     asks 2x1, 4x2, 8x4, 16x8, so only level 0 lines up and everything below
+ *     it 400s. The same trap is recorded against the night basemap above.
  *
- * All three also hit the GIBS tile-matrix trap below. Above 85° there is sea
- * ice in the north and the ice sheet in the south, all year, so a flat ice
- * tone is the most truthful thing that can be drawn there -- and the globe's
- * own sun shading still darkens it on the night side, so it tracks the
- * terminator like everything else.
+ * ~19.5 km/px at level 2 is soft, but it is real ice with real coastlines and
+ * it carries the sun shading like the rest of the globe. Everything tried
+ * before it failed differently: Blue Marble puts dark BATHYMETRY on the Arctic,
+ * NextGen and Shaded Relief are near-black there, and MODIS true colour returns
+ * BLACK PIXELS in polar night rather than no data, so it painted a black disc
+ * over Antarctica in August.
  */
+const POLAR_TMS_URL = Cesium.buildModuleUrl('Assets/Textures/NaturalEarthII');
+const POLAR_MAX_LEVEL = 2;   // the product stops here; level 3 would 404 every tile
+
+/* Last resort only. A flat pale disc looks pasted on and is not what should be
+   shipping -- but Cesium fills an uncovered cap by upsampling whatever texels
+   sit at the Mercator edge, and that draws a fan of smeared colour radiating
+   from the pole. A wrong-looking disc still beats a pinwheel. */
 const POLAR_ICE_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe'
   + 'AAAADElEQVR4nGO4/+IdAAVfArY/reJ5AAAAAElFTkSuQmCC';
 
-/* Why not real satellite imagery here: THE GIBS EPSG:4326 TILE MATRIX IS NOT A
-   POWER-OF-TWO PYRAMID, the same trap this file already records against the
-   night basemap. Measured against the live service:
-
-       level    GIBS 500m      Cesium GeographicTilingScheme
-         0        2 x 1                 2 x 1     <- the only match
-         1        3 x 2                 4 x 2
-         2        5 x 3                 8 x 4
-         3       10 x 5                16 x 8
-
-   Above level 0 Cesium asks for columns that do not exist (400, with an XML
-   body) and misplaces the ones that do. Anyone putting photography back on
-   the caps has to solve that first, and the polar-night problem above. */
-
 let polarBackstopLayers = [];
+let polarBackstopSource = 'none';
 
-function initPolarBackstop() {
+async function initPolarBackstop() {
   if (!viewer || polarBackstopLayers.length) return;
   const lat = Cesium.Math.toDegrees(Cesium.WebMercatorProjection.MaximumLatitude);
   // Two caps, clipped. A rectangle cannot describe both at once, and leaving
@@ -4511,27 +4557,48 @@ function initPolarBackstop() {
     Cesium.Rectangle.fromDegrees(-180,  -90, 180, -lat),
   ];
   for (const rectangle of CAPS) {
+    let provider;
     try {
-      const provider = new Cesium.UrlTemplateImageryProvider({
+      provider = await Cesium.TileMapServiceImageryProvider.fromUrl(POLAR_TMS_URL, {
+        rectangle,
+        maximumLevel: POLAR_MAX_LEVEL,
+        credit: 'Natural Earth II',
+      });
+      polarBackstopSource = 'naturalearth2';
+    } catch (e) {
+      console.error('Polar cap imagery unreachable, falling back to flat ice:', e);
+      provider = new Cesium.UrlTemplateImageryProvider({
         // No {z}/{x}/{y} in the URL, so every tile resolves to the same inline
         // image. Nothing leaves the machine.
         url: POLAR_ICE_PNG,
-        // Geographic, NOT WebMercator -- that is the entire point: this is the
-        // only tiling scheme that reaches ±90°.
         tilingScheme: new Cesium.GeographicTilingScheme(),
-        maximumLevel: POLAR_MAX_LEVEL,
+        maximumLevel: 0,
         rectangle,
       });
-      const layer = new Cesium.ImageryLayer(provider, { rectangle });
-      viewer.imageryLayers.add(layer);
-      // Or baseHasOverlay() reads these as a data field drawn over the map and
-      // holds the whole globe at the muted grade forever.
-      layer.__scenery = true;
-      polarBackstopLayers.push(layer);
-    } catch (e) {
-      console.warn('Polar cap unavailable:', e);
+      polarBackstopSource = 'flat';
     }
+    const layer = new Cesium.ImageryLayer(provider, { rectangle });
+    viewer.imageryLayers.add(layer);
+    // Or baseHasOverlay() reads these as a data field drawn over the map and
+    // holds the whole globe at the muted grade forever.
+    layer.__scenery = true;
+    polarBackstopLayers.push(layer);
   }
+
+  /* This function shipped once with an undeclared constant in it. Both caps
+     threw a ReferenceError, a try/catch turned that into a console.warn, and
+     the app ran for a session with no polar backstop at all while a handoff
+     said it had one. Nothing that reads state could see it and nothing that
+     reads pixels existed yet. So: say so loudly, and publish the count where
+     scripts/globe_visual_test.py can assert on it. */
+  if (polarBackstopLayers.length !== CAPS.length) {
+    console.error(`Polar backstop MISSING: ${polarBackstopLayers.length} of `
+      + `${CAPS.length} caps installed. The poles will smear.`);
+  }
+  window.__graticule_scenery = Object.assign(window.__graticule_scenery || {}, {
+    polarCaps: polarBackstopLayers.length,
+    polarSource: polarBackstopSource,
+  });
 }
 
 let baseImageryLayer = null;
@@ -4683,10 +4750,30 @@ function gradeBaseImagery() {
      Left ungraded they kept full brightness while everything around them was
      muted to 0.58, and the south cap read as a pale disc pasted onto a dark
      Antarctica -- the polar hole again, in the opposite direction. */
+  /* Natural Earth II is a different raster from the Esri imagery it butts
+     against at 85.05°, and its Arctic ocean is brighter and bluer, so the cap
+     read as a lighter disc pasted over the pole. Measured across the seam in
+     the overhead polar view: (21,108,180) inside the cap against (0,74,105)
+     immediately outside it. These are RATIOS applied to whatever the base is
+     graded to, not absolutes, so the cap keeps tracking it through the muted
+     grade as well.
+
+     Both numbers come off a 24-cell sweep measured across the seam, not off a
+     colour-theory argument -- the argument was wrong twice. Raising saturation
+     to pull the cap toward teal CRUSHED its green channel, which was the one
+     that had to rise, and the first hue shift went the wrong way and made the
+     mismatch worse in all twelve cells. Summed channel error across the seam:
+     130 ungraded, 23.5 at brightness alone, 8.3 here. */
+  const CAP_BRIGHTNESS = 0.70;
+  const CAP_HUE        = 0.16;   // radians; raises green, drops blue
   for (const cap of polarBackstopLayers) {
-    cap.brightness = baseImageryLayer.brightness;
+    const flat = polarBackstopSource === 'flat';
+    cap.brightness = baseImageryLayer.brightness * (flat ? 1 : CAP_BRIGHTNESS);
     cap.contrast   = baseImageryLayer.contrast;
-    cap.saturation = 0;   // it is one flat colour; saturating it does nothing good
+    // Saturation was pinned to 0 back when the cap was a single flat colour;
+    // a real raster takes the real grade.
+    cap.saturation = flat ? 0 : baseImageryLayer.saturation;
+    cap.hue        = flat ? 0 : CAP_HUE;
     cap.gamma      = baseImageryLayer.gamma;
   }
   syncLensFlare();
