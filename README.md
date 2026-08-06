@@ -25,8 +25,10 @@ a true 15°/hour and matches real UTC:
   Depth-testing against terrain is deliberately left off: a ridge occluding the
   warning pin in the valley behind it is realistic and useless.
 - **Stay centred on North America** — the camera holds the continent while the
-  sunlight rotates around it. Re-centres only after 12 s idle, above 3 Mm, and
-  past 12° of drift, so panning and zooming stay free.
+  sunlight rotates around it. Returns home only after 90 s with no cursor movement,
+  no click and no key, above 3 Mm and past 12° of drift. A moving cursor
+  counts as a person: at 12 s, and with mousemove not counted, the camera
+  flew home while you were reading, which made the globe feel locked.
 
 ## The opening frame
 

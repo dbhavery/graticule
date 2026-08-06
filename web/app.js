@@ -590,6 +590,8 @@ async function initViewer() {
   window.__graticule_viewer = viewer;
 
   viewer.imageryLayers.removeAll();
+  // Before the base, so it lands at index 0 and the base stacks on top of it.
+  initPolarBackstop();
   // Imagery base is settings-driven now (Satellite / Streets / Topo / Night).
   // applyImageryBase honors settings.imageryBase, falls back to satellite, and
   // tracks the layer so the picker can swap it later.
@@ -4437,6 +4439,101 @@ function buildGraticule(ds) {
 
 // ---------- Imagery base picker ---------------------------------------------
 
+/* THE HOLE AT THE POLE.
+ *
+ * Web Mercator is undefined at the poles -- the projection sends 90° to
+ * infinity -- so EPSG:3857 is cut off at ±85.0511°. Esri World Imagery,
+ * OpenStreetMap, OpenTopoMap and the VIIRS city-lights layer are all Mercator,
+ * so above that latitude there is no tile to draw and the globe was showing a
+ * black ellipse straight through itself. It is ~5° of latitude and it sat in
+ * frame the moment anyone tilted north of Canada.
+ *
+ * The fix is a permanent bottom-most layer in a GEOGRAPHIC tiling scheme,
+ * which does reach ±90. NASA GIBS publishes Blue Marble in EPSG:4326 with no
+ * key, so the caps get real imagery -- ice, not a painted disc.
+ *
+ * Two traps this has to avoid, both already documented elsewhere in this file:
+ *   * It must be flagged `__scenery`, or baseHasOverlay() counts it as a data
+ *     field drawn over the map and holds the whole globe at the muted grade
+ *     forever.
+ *   * applyImageryBase lowers the base to the bottom of the stack, which would
+ *     put the base UNDER the backstop and hide the actual basemap. The floor
+ *     is index 1 whenever a backstop exists.
+ */
+/* A flat ice tone, drawn as a 69-byte 1x1 PNG stretched over each cap.
+ *
+ * Photographic imagery was tried first and every source failed a different
+ * way, which is why this is a colour and not a picture:
+ *
+ *   Blue Marble bathymetry  the Arctic is dark OCEAN, so the cap still read as
+ *                           a hole -- the same complaint, one layer down.
+ *   Blue Marble NextGen /   near-black ocean at the pole. Worse.
+ *     Shaded Relief
+ *   MODIS true colour       correct and current in POLAR DAY, and pure BLACK
+ *                           in polar night. It does not return "no data" when
+ *                           the sun is down, it returns black pixels, so it
+ *                           painted a black disc over Antarctica in August.
+ *
+ * All three also hit the GIBS tile-matrix trap below. Above 85° there is sea
+ * ice in the north and the ice sheet in the south, all year, so a flat ice
+ * tone is the most truthful thing that can be drawn there -- and the globe's
+ * own sun shading still darkens it on the night side, so it tracks the
+ * terminator like everything else.
+ */
+const POLAR_ICE_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe'
+  + 'AAAADElEQVR4nGO4/+IdAAVfArY/reJ5AAAAAElFTkSuQmCC';
+
+/* Why not real satellite imagery here: THE GIBS EPSG:4326 TILE MATRIX IS NOT A
+   POWER-OF-TWO PYRAMID, the same trap this file already records against the
+   night basemap. Measured against the live service:
+
+       level    GIBS 500m      Cesium GeographicTilingScheme
+         0        2 x 1                 2 x 1     <- the only match
+         1        3 x 2                 4 x 2
+         2        5 x 3                 8 x 4
+         3       10 x 5                16 x 8
+
+   Above level 0 Cesium asks for columns that do not exist (400, with an XML
+   body) and misplaces the ones that do. Anyone putting photography back on
+   the caps has to solve that first, and the polar-night problem above. */
+
+let polarBackstopLayers = [];
+
+function initPolarBackstop() {
+  if (!viewer || polarBackstopLayers.length) return;
+  const lat = Cesium.Math.toDegrees(Cesium.WebMercatorProjection.MaximumLatitude);
+  // Two caps, clipped. A rectangle cannot describe both at once, and leaving
+  // these unclipped would make Cesium fetch two extra global imagery layers
+  // for every tile on screen to draw ~5° of latitude nobody is looking at.
+  const CAPS = [
+    Cesium.Rectangle.fromDegrees(-180,  lat, 180,   90),
+    Cesium.Rectangle.fromDegrees(-180,  -90, 180, -lat),
+  ];
+  for (const rectangle of CAPS) {
+    try {
+      const provider = new Cesium.UrlTemplateImageryProvider({
+        // No {z}/{x}/{y} in the URL, so every tile resolves to the same inline
+        // image. Nothing leaves the machine.
+        url: POLAR_ICE_PNG,
+        // Geographic, NOT WebMercator -- that is the entire point: this is the
+        // only tiling scheme that reaches ±90°.
+        tilingScheme: new Cesium.GeographicTilingScheme(),
+        maximumLevel: POLAR_MAX_LEVEL,
+        rectangle,
+      });
+      const layer = new Cesium.ImageryLayer(provider, { rectangle });
+      viewer.imageryLayers.add(layer);
+      // Or baseHasOverlay() reads these as a data field drawn over the map and
+      // holds the whole globe at the muted grade forever.
+      layer.__scenery = true;
+      polarBackstopLayers.push(layer);
+    } catch (e) {
+      console.warn('Polar cap unavailable:', e);
+    }
+  }
+}
+
 let baseImageryLayer = null;
 async function applyImageryBase(kind) {
   if (!viewer) return;
@@ -4491,10 +4588,41 @@ async function applyImageryBase(kind) {
         });
       }
     }
-    baseImageryLayer = viewer.imageryLayers.addImageryProvider(provider);
+    /* Clip the base to the Mercator limit, or it smears over the pole.
+     *
+     * This is what the black disc at the North Pole actually was, and it was
+     * NOT a hole: with the base hidden the cap rendered clean Blue Marble, and
+     * with the globe's baseColor set to magenta the disc stayed dark, which
+     * rules out "no imagery here". Every base in the picker -- Esri, OSM,
+     * OpenTopoMap, VIIRS city lights -- is Web Mercator, which is undefined at
+     * the poles and stops at ±85.0511°. Above that Cesium was clamping the top
+     * row of texels and stretching them across the cap, so the polar disc was
+     * Arctic Ocean pixels smeared to the pole, with one ice edge dragged into
+     * the bright streak inside it.
+     *
+     * Clipping the LAYER (not the provider) to the projection's own maximum
+     * latitude stops the smear and lets the geographic backstop underneath
+     * draw the cap. MaximumLatitude is Cesium's own constant, so this matches
+     * the tiling scheme exactly and leaves no seam.
+     *
+     * ImageryLayerCollection.add() returns NOTHING -- only addImageryProvider()
+     * hands the layer back. Assigning from add() left baseImageryLayer null, so
+     * the removal at the top of this function never fired and every basemap
+     * switch stacked another copy: three Esri layers deep after two swaps, with
+     * the newest one winning and the rest burning texture memory. Build the
+     * layer, add it, then keep the reference. */
+    const MERC_LAT = Cesium.WebMercatorProjection.MaximumLatitude;
+    const layer = new Cesium.ImageryLayer(provider, {
+      rectangle: Cesium.Rectangle.fromRadians(-Math.PI, -MERC_LAT, Math.PI, MERC_LAT),
+    });
+    viewer.imageryLayers.add(layer);
+    baseImageryLayer = layer;
     gradeBaseImagery();
-    // Keep it on the bottom; other overlays (radar, clouds, parcels) ride on top
-    while (viewer.imageryLayers.indexOf(baseImageryLayer) > 0) {
+    // Keep it near the bottom; other overlays (radar, clouds, parcels) ride on
+    // top. The floor is 1 rather than 0 when the polar backstop is present --
+    // lowering to 0 would bury the actual basemap underneath Blue Marble.
+    const floor = polarBackstopLayers.length;
+    while (viewer.imageryLayers.indexOf(baseImageryLayer) > floor) {
       viewer.imageryLayers.lower(baseImageryLayer);
     }
   } catch (e) {
@@ -4550,6 +4678,16 @@ function gradeBaseImagery() {
     baseImageryLayer.contrast   = photographic ? 1.40 : 1.0;
     baseImageryLayer.saturation = photographic ? 1.25 : 1.0;
     baseImageryLayer.gamma      = photographic ? 0.95 : 1.0;
+  }
+  /* The polar caps are part of the base map, so they take the same grade.
+     Left ungraded they kept full brightness while everything around them was
+     muted to 0.58, and the south cap read as a pale disc pasted onto a dark
+     Antarctica -- the polar hole again, in the opposite direction. */
+  for (const cap of polarBackstopLayers) {
+    cap.brightness = baseImageryLayer.brightness;
+    cap.contrast   = baseImageryLayer.contrast;
+    cap.saturation = 0;   // it is one flat colour; saturating it does nothing good
+    cap.gamma      = baseImageryLayer.gamma;
   }
   syncLensFlare();
   viewer?.scene.requestRender();
@@ -4685,17 +4823,29 @@ function applyNorthAmericaLock(on) {
   if (_naLockHandle) { clearInterval(_naLockHandle); _naLockHandle = null; }
   if (!on || !viewer) return;
 
-  // Any interaction defers the re-centre so we never fight the user's hand.
+  /* Any sign of a person defers the re-centre so we never fight the user's
+     hand -- and MOUSEMOVE counts.
+     Without it, "idle" meant "sent no click", which is exactly what someone
+     does while READING: drag the globe to a typhoon near Japan, stop touching
+     anything to look at it, and twelve seconds later the camera flew back to
+     North America on its own. That is indistinguishable from a map that will
+     not let you leave home, and it is the reason the globe felt un-rotatable.
+     A cursor moving over the map is a person at the map. */
   if (!applyNorthAmericaLock._installed) {
     applyNorthAmericaLock._installed = true;
     const reset = () => { _lastInteractionAt = performance.now(); };
-    ['mousedown','wheel','keydown','touchstart','pointerdown'].forEach(ev => {
+    ['mousedown', 'mousemove', 'wheel', 'keydown',
+     'touchstart', 'touchmove', 'pointerdown'].forEach(ev => {
       document.addEventListener(ev, reset, { passive: true });
     });
     reset();
   }
 
-  const SETTLE_MS   = 12_000;   // hands-off grace period before re-centring
+  /* 90 s, not 12. The threshold is meant to separate "walked away from the
+     desk" from "paused to look at something", and twelve seconds is well
+     inside the second one. Re-centring is a big, disorienting move; it should
+     need real evidence that nobody is there. */
+  const SETTLE_MS   = 90_000;
   const DRIFT_DEG   = 12;       // only correct once we're this far off centre
   const MIN_ALT_M   = 3_000_000; // zoomed in? leave the user where they are
 

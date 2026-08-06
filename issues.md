@@ -778,3 +778,64 @@ it from whether a key exists.
 
 Still open for Don: whether the aisstream.io key is expired, over quota, or the
 service is down. Worth checking before paying it any more attention.
+
+---
+
+## 35. Black disc at the poles (**FIXED**) — and four wrong diagnoses on the way
+
+Don tilted north of Canada and saw a black ellipse through the planet. Nothing
+in any suite could see it: every check reads state, and this was pixels.
+
+**Cause.** Web Mercator is undefined at the poles, so EPSG:3857 stops at
+±85.0511°. Every basemap — Esri, OSM, OpenTopoMap, VIIRS city lights — is
+Mercator, so above that latitude nothing was drawn and the globe's navy
+`baseColor` showed through.
+
+**Four diagnoses that were wrong**, each killed by a measurement:
+
+1. *"maximumLevel is wrong."* Guessed 8; the layer stops at 7 and level 8
+   returns 400 with an XML body. Real bug, but the hole was unchanged.
+2. *"The Mercator base is smearing its top texel row over the cap."* Clipped
+   the base to `WebMercatorProjection.MaximumLatitude`. Rendering Esri alone
+   over a magenta `baseColor` showed a clean magenta disc, so the cap was a
+   genuine gap, not a smear.
+3. *"Blue Marble fills it."* It did — with BATHYMETRY. The Arctic came back
+   dark ocean, which against Esri's bright sea ice still read as a hole.
+4. *"MODIS true colour tracks the season."* It does not: in polar night it
+   returns BLACK PIXELS, not absent data, so it painted a black disc over
+   Antarctica in August. Verified by rendering the south pole.
+
+**Also found while doing it:** `ImageryLayerCollection.add()` returns nothing,
+only `addImageryProvider()` returns the layer. Assigning from `add()` left
+`baseImageryLayer` null, so the removal at the top of `applyImageryBase` never
+fired and every basemap switch stacked another copy — three Esri layers deep
+after two swaps.
+
+**And the trap this repo already knew:** the GIBS EPSG:4326 tile matrix is not
+a power-of-two pyramid (measured 2x1, 3x2, 5x3, 10x5 against Cesium's 2x1,
+4x2, 8x4, 16x8). A comment on the night basemap says exactly this. I hit it
+anyway.
+
+**Fix.** Both caps are drawn with a flat ice tone from a 69-byte inline PNG,
+clipped to the two polar rectangles, graded with the base map. Above 85° there
+is sea ice or ice sheet all year, so it is the most truthful thing available,
+it costs no network, and it cannot fail seasonally or on a tile matrix.
+
+Residual, cosmetic: in polar night the south cap sits slightly brighter than
+the shaded terrain around it — a soft disc, not a hole, at a pole the app
+never opens on. Real polar imagery would need a projection Cesium cannot
+consume for imagery (EPSG:3413/3031).
+
+---
+
+## 36. The globe felt un-rotatable (**FIXED**)
+
+It always rotated — Cesium's default controls — but "Stay centred on North
+America" reset its idle timer on `mousedown`, `wheel`, `keydown`,
+`touchstart` and `pointerdown`, and **not on `mousemove`**. So "idle" meant
+"sent no click", which is exactly what a person does while READING. Drag the
+globe to a storm near Japan, stop touching anything to look at it, and twelve
+seconds later the camera flew back to North America on its own.
+
+Now: a moving cursor counts as a person, and the grace period is 90 s rather
+than 12 — long enough to mean "walked away" instead of "paused to look".
