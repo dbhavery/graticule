@@ -638,7 +638,10 @@ async function initViewer() {
      which is what CI and Playwright use) terrain costs enough that a full
      page screenshot could not complete inside 60 s. */
   const terrainParam = new URLSearchParams(location.search).get('terrain');
-  if (terrainParam !== 'off' && settings.terrain) applyTerrain(true);
+  // syncTerrainForView, not applyTerrain(true): the app opens on North America
+  // from orbit, where relief is under a pixel and terrain is pure cost. It
+  // loads on the way down. `?terrain=off` still forces it off outright.
+  if (terrainParam !== 'off' && settings.terrain) syncTerrainForView();
 
   // Click → panel + ripple + history push
   const click = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -2512,20 +2515,106 @@ async function loadTerrainProvider() {
   return terrainPending;
 }
 
+let terrainIsReal = false;
+/* Turning terrain on is asynchronous, turning it off is not, so a late load can
+   land on top of a later decision and switch terrain back on by itself. The
+   keyless suite caught exactly that: descend (terrain starts loading), toggle
+   off, and the in-flight provider arrives afterwards and re-attaches. Now that
+   the view can swap terrain on its own, this races constantly. Every call takes
+   a ticket and a stale one discards its result. */
+let _terrainGen = 0;
+
 async function applyTerrain(on) {
   if (!viewer) return;
+  const gen = ++_terrainGen;
   if (!on) {
     viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+    terrainIsReal = false;
     return;
   }
   try {
-    viewer.terrainProvider = await loadTerrainProvider();
+    const provider = await loadTerrainProvider();
+    if (gen !== _terrainGen) return;          // superseded while loading
+    viewer.terrainProvider = provider;
+    terrainIsReal = true;
   } catch (e) {
+    if (gen !== _terrainGen) return;
     // A dead terrain service must not cost the user their map. The ellipsoid is
     // a genuinely usable globe; it is what the app shipped on until now.
     console.warn('Terrain unavailable, staying on the ellipsoid:', e);
     viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+    terrainIsReal = false;
   }
+}
+
+/* ---- Why real terrain gets switched off near the poles ---------------------
+ *
+ * The elevation service is Web Mercator, which is undefined at the poles and
+ * stops at ±85.0511°. For an IMAGERY layer that only means "nothing painted
+ * there". For a TERRAIN provider it means far more, because the provider's
+ * tiling scheme defines the globe's entire quadtree: above 85.05° Cesium
+ * creates no surface tiles at all, so there is no geometry, nothing for the
+ * polar caps to paint on, and **you see the sky atmosphere on the far side
+ * through the planet**. That is the hard white disc at the north pole.
+ *
+ * It is worth being precise that this is not the same defect as the earlier
+ * polar hole. That one was missing IMAGERY over a surface that existed. This
+ * one is missing SURFACE, which is why the magenta sentinel could not see it
+ * either -- globe.baseColor needs a globe.
+ *
+ * No free elevation source is geographic; every one of them is Mercator, so
+ * there is no provider swap that fixes this. What does fix it: real elevation
+ * is worth nothing in a view that can see a pole, because at that altitude
+ * relief is invisible anyway. So the ellipsoid takes over whenever the view
+ * reaches past 84°, and the planet is closed again.
+ */
+const TERRAIN_POLE_LIMIT_DEG = 84;
+
+/* Real terrain is also switched off from far away, and that is the single
+   biggest thing keeping the frame rate up. Measured on one machine with the
+   camera moving, same instrument each time, median frame:
+
+     terrain on,  borders on     6137 ms      <- the default the app shipped
+     terrain on,  borders off    2570 ms
+     terrain off, borders on     1106 ms
+     terrain off, borders off     964 ms
+
+   (Software rendering, so read the RATIOS, not the milliseconds.) Terrain is
+   the dominant cost, and above ~1,500 km a 4 km mountain is under a pixel, so
+   the whole expense buys nothing you can see. Hysteresis, or it re-tiles the
+   globe every few frames while you zoom. */
+const TERRAIN_MAX_ALT_M = 1_500_000;
+const TERRAIN_MIN_ALT_M = 1_000_000;
+
+function viewReachesPole() {
+  if (!viewer) return false;
+  const carto = viewer.camera.positionCartographic;
+  if (!carto) return false;
+  const lat = Cesium.Math.toDegrees(carto.latitude);
+  const R = viewer.scene.globe.ellipsoid.maximumRadius;
+  const h = Math.max(carto.height, 0);
+  // Half-angle of the spherical cap visible from this altitude.
+  const reach = Cesium.Math.toDegrees(Math.acos(R / (R + h)));
+  return (lat + reach) >= TERRAIN_POLE_LIMIT_DEG
+      || (lat - reach) <= -TERRAIN_POLE_LIMIT_DEG;
+}
+
+function terrainWantedForView() {
+  if (!settings.terrain) return false;
+  if (viewReachesPole()) return false;
+  const h = viewer.camera.positionCartographic.height;
+  return terrainIsReal ? h <= TERRAIN_MAX_ALT_M : h <= TERRAIN_MIN_ALT_M;
+}
+
+let _terrainSyncTimer = null;
+
+function syncTerrainForView() {
+  if (!viewer || !settings.terrain) return;
+  const want = terrainWantedForView();
+  if (want === terrainIsReal) return;
+  // Swapping providers re-tiles the whole globe, so never do it mid-drag.
+  clearTimeout(_terrainSyncTimer);
+  _terrainSyncTimer = setTimeout(() => applyTerrain(want), 250);
 }
 
 /* Note on depth testing: `scene.globe.depthTestAgainstTerrain` is left at its
@@ -2856,7 +2945,19 @@ async function buildCountries() {
       if (positions.length < 2) continue;
       countriesDS.entities.add({
         polyline: {
-          positions, width: 1.0, material: lineMaterial, clampToGround: true,
+          /* NOT clampToGround. Ground-clamping builds draped geometry that has
+             to be recomputed against terrain tiles, and there are 8,037 of
+             these plus 5,061 state lines. Measured with the camera moving, the
+             median frame went 6137 ms with terrain and borders on against
+             2570 ms with borders off -- while WITHOUT terrain the same borders
+             cost only 1106 vs 964. Borders are nearly free on their own; it is
+             the draping that is expensive.
+
+             And it bought nothing to look at: `depthTestAgainstTerrain` is
+             false by deliberate design a few hundred lines up, so an operational
+             symbol is never occluded by a ridge. A plain polyline at height 0
+             therefore draws on top exactly the same way a draped one does. */
+          positions, width: 1.0, material: lineMaterial, clampToGround: false,
         },
         properties: { kind: 'country_border', ...f.properties },
       });
@@ -2941,7 +3042,8 @@ async function buildStates() {
       if (positions.length < 2) continue;
       statesDS.entities.add({
         polyline: {
-          positions, width: 1.0, material: lineMaterial, clampToGround: true,
+          // Not ground-clamped, same reason as the country borders above.
+          positions, width: 1.0, material: lineMaterial, clampToGround: false,
           // States only readable at regional zoom — hide when very far
           distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 8e6),
         },
@@ -4108,7 +4210,11 @@ function initSettings() {
   checkbox('show-moon',       'showMoon',       applyMoon);
   checkbox('show-stars',      'showStars',      applyStars);
   checkbox('hdr',             'hdr',            applyHdr);
-  checkbox('show-terrain',    'terrain',        applyTerrain);
+  // The switch says whether terrain is WANTED; the view decides whether it is
+  // worth loading right now, and whether it would punch a hole in a pole.
+  checkbox('show-terrain',    'terrain',        (on) => {
+    if (!on) applyTerrain(false); else syncTerrainForView();
+  });
   checkbox('lens-flare',      'lensFlare',      syncLensFlare);
   checkbox('lock-na',         'lockNorthAmerica', applyNorthAmericaLock);
   checkbox('diagnostics',     'diagnostics',    applyDiagnostics);
@@ -4240,6 +4346,8 @@ function initRealisticEarth() {
   // `moveEnd` catches the last frame of it.
   scene.camera.changed.addEventListener(syncLensFlare);
   scene.camera.moveEnd.addEventListener(syncLensFlare);
+  // Terrain coverage is also a property of where the camera is looking.
+  scene.camera.moveEnd.addEventListener(syncTerrainForView);
 
   // 2. Night lights ride on the same lighting model.
   toggleNightLights(!!settings.nightLights);

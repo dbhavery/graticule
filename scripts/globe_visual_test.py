@@ -143,6 +143,12 @@ DETERMINISTIC = """() => {
   applyNorthAmericaLock(false);
   settings.idleRotateSec = 0;
 
+  // Terrain off for the golden sweep only, and only after phase 0 has already
+  // asked about polar geometry with terrain in its real state. A displaced
+  // mesh makes captures non-reproducible and, under software rendering, slow
+  // enough to miss a 60 s timeout.
+  applyTerrain(false);
+
   // The sun is driven off the clock, and the clock is real time. Stop it.
   // Solstice, so the north cap is inspected in full polar DAY and the south
   // cap in full polar NIGHT -- the case that made MODIS paint a black disc.
@@ -232,6 +238,52 @@ SETTLE = """async (timeoutMs) => {
 
 GRAB = """() => window.__graticule_viewer.canvas.toDataURL('image/png')"""
 
+# ---------------------------------------------------------------------------
+# Polar geometry. A separate defect class from a missing IMAGERY layer, and the
+# reason this file now loads the app with terrain in its real default state
+# instead of ?terrain=off.
+#
+# The elevation service is Web Mercator, so it stops at ±85.0511°. A terrain
+# provider's tiling scheme defines the globe's whole quadtree, so with real
+# terrain on there is NO SURFACE above that latitude -- not dark imagery, an
+# actual hole, showing the sky atmosphere on the far side as a hard white disc.
+#
+# Neither existing detector could see it. The magenta sentinel needs a globe to
+# paint globe.baseColor onto, and every golden in this suite was captured with
+# ?terrain=off, which is exactly the condition that hides it. So: ask the globe
+# whether it has a surface there.
+POLAR_GEOMETRY = """(lat) => {
+  const v = window.__graticule_viewer;
+  v.camera.lookAt(Cesium.Cartesian3.fromDegrees(lat > 0 ? -90 : 0, lat, 0),
+    new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-90), 6_000_000));
+  v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+  return { terrainReal: terrainIsReal,
+           altKm: Math.round(v.camera.positionCartographic.height / 1000) };
+}"""
+
+POLAR_PICK = """() => {
+  const v = window.__graticule_viewer;
+  const ray = v.camera.getPickRay(new Cesium.Cartesian2(
+    v.canvas.clientWidth / 2, v.canvas.clientHeight / 2));
+  const hit = ray ? v.scene.globe.pick(ray, v.scene) : undefined;
+  if (!hit) return null;
+  const c = Cesium.Cartographic.fromCartesian(hit);
+  return { lat: +Cesium.Math.toDegrees(c.latitude).toFixed(3),
+           height: +c.height.toFixed(1) };
+}"""
+
+# Disarming the gate matters and is not incidental. The first version of this
+# control just called applyTerrain(true) and then aimed the camera at the pole,
+# and it FAILED -- because aiming the camera fires moveEnd, syncTerrainForView
+# sees the view reaching a pole, and the fix puts the ellipsoid straight back.
+# Setting settings.terrain false makes syncTerrainForView return early, so real
+# terrain stays put and the hole it causes can actually be observed.
+FORCE_TERRAIN = """async () => {
+  settings.terrain = false;      // disarm the gate, do not disable terrain
+  await applyTerrain(true);
+  return terrainIsReal;
+}"""
+
 
 # --------------------------------------------------------------------------
 # Image analysis
@@ -286,11 +338,13 @@ def variety(img):
 
 # --------------------------------------------------------------------------
 
-async def run(port, update, selftest, terrain):
+async def run(port, update, selftest):
     OUTDIR.mkdir(exist_ok=True)
     REFDIR.mkdir(exist_ok=True)
-    qs = "" if terrain else "?terrain=off"
-    url = f"http://127.0.0.1:{port}/{qs}"
+    # Loaded WITHOUT ?terrain=off on purpose: the polar-geometry phase has to
+    # run against the terrain state a real user gets. The deterministic sweep
+    # turns terrain off itself, afterwards.
+    url = f"http://127.0.0.1:{port}/"
     print(f"globe visual test -> {url}"
           + ("   [UPDATING GOLDENS]" if update else "")
           + ("   [SELFTEST: defect injected]" if selftest else ""), flush=True)
@@ -308,6 +362,37 @@ async def run(port, update, selftest, terrain):
             "() => window.__graticule_viewer && window.__graticule_viewer.scene",
             timeout=90_000)
         await asyncio.sleep(25)          # boot: imagery, terrain, first feeds
+
+        # ---- Phase 0: does the planet have a surface at the poles? ----------
+        await pg.evaluate("() => { settings.lockNorthAmerica = false; "
+                          "applyNorthAmericaLock(false); }")
+        for label, lat in (("north", 89.9), ("south", -89.9)):
+            state = await pg.evaluate(POLAR_GEOMETRY, lat)
+            await pg.evaluate(SETTLE, 30_000)
+            await asyncio.sleep(3)
+            hit = await pg.evaluate(POLAR_PICK)
+            check(f"{label} pole has surface", hit is not None,
+                  f"globe.pick={hit}, terrainReal={state['terrainReal']} "
+                  f"at {state['altKm']}km")
+
+        if selftest:
+            # The control for the check above: force real terrain while looking
+            # at a pole, which is the state the app shipped in, and require the
+            # hole to be detected. Without this the check could be passing for
+            # the trivial reason that a globe always has a surface.
+            # Camera FIRST, then terrain. Moving it afterwards re-arms the gate.
+            await pg.evaluate(POLAR_GEOMETRY, 89.9)
+            await pg.evaluate(SETTLE, 20_000)
+            real = await pg.evaluate(FORCE_TERRAIN)
+            await pg.evaluate(SETTLE, 30_000)
+            await asyncio.sleep(6)
+            hole = await pg.evaluate(POLAR_PICK)
+            check("selftest: forced terrain DOES open a polar hole",
+                  hole is None,
+                  f"terrainReal={real}, globe.pick={hole} "
+                  f"(expected None, i.e. no surface)")
+            await pg.evaluate("() => { settings.terrain = true; applyTerrain(false); }")
+            await asyncio.sleep(2)
 
         det = await pg.evaluate(DETERMINISTIC)
         print(f"  deterministic: {det['off']} data layers off, clock frozen at "
@@ -432,10 +517,9 @@ def main():
                     help="rewrite the committed reference frames")
     ap.add_argument("--selftest", action="store_true",
                     help="inject the polar gap and require the suite to catch it")
-    ap.add_argument("--terrain", action="store_true",
-                    help="render with real elevation (slower under SwiftShader)")
+
     a = ap.parse_args()
-    sys.exit(asyncio.run(run(a.port, a.update, a.selftest, a.terrain)))
+    sys.exit(asyncio.run(run(a.port, a.update, a.selftest)))
 
 
 if __name__ == "__main__":

@@ -77,8 +77,31 @@ async def main() -> None:
         IS_ELLIPSOID = ("()=>window.__graticule_viewer.terrainProvider instanceof "
                         "Cesium.EllipsoidTerrainProvider")
 
+        # Terrain is no longer attached at boot, and that is deliberate. The
+        # app opens on North America from ~9,000 km, where a 4 km mountain is
+        # under a pixel and real terrain is pure cost -- it was the single
+        # biggest frame-time item measured (6137 ms -> 569 ms median with the
+        # camera moving). It is also what punched a hole through the poles,
+        # because the elevation service is Web Mercator and a terrain provider's
+        # tiling scheme defines the whole globe quadtree.
+        #
+        # So the check is no longer "is a provider set at boot". It is "does
+        # descending to where relief is visible actually attach real elevation",
+        # which is the thing a user gets.
+        chk(await pg.evaluate(IS_ELLIPSOID),
+            "boot is on the ellipsoid: no terrain paid for at orbital altitude")
+
+        await pg.evaluate("""()=>{
+          const v = window.__graticule_viewer;
+          settings.lockNorthAmerica = false; applyNorthAmericaLock(false);
+          v.camera.lookAt(Cesium.Cartesian3.fromDegrees(-106.5, 39.1, 0),
+            new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-40), 260_000));
+          v.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+          v.camera.moveEnd.raiseEvent();
+        }""")
+        await asyncio.sleep(12)
         chk(await pg.evaluate(IS_ARCGIS),
-            "real elevation is attached with no ion token "
+            "real elevation attaches on descent with no ion token "
             "-- the globe was a smooth ellipsoid before this")
 
         # Both directions: turning it off must genuinely go back to the sphere,
@@ -92,14 +115,27 @@ async def main() -> None:
         has_toggle = await pg.evaluate("()=>typeof applyTerrain === 'function'")
         chk(has_toggle, "the terrain toggle exists")
         if has_toggle:
-            await pg.evaluate("()=>applyTerrain(false)")
-            await asyncio.sleep(1.5)
+            # Drive the SWITCH, not applyTerrain() directly. applyTerrain is now
+            # the internal mechanism and the view owns it: calling it directly
+            # while settings.terrain is still true just gets overridden on the
+            # next camera event, which is what this check started reporting.
+            # Unchecking the box is what a user actually does.
+            TOGGLE = """(on)=>{
+              const cb = document.getElementById('show-terrain');
+              if (!cb) return false;
+              if (cb.checked !== on) { cb.checked = on;
+                cb.dispatchEvent(new Event('change', {bubbles:true})); }
+              return true;
+            }"""
+            chk(await pg.evaluate(TOGGLE, False), "the terrain switch is wired up")
+            await asyncio.sleep(2.0)
             chk(await pg.evaluate(IS_ELLIPSOID),
                 "CONTROL: switching terrain off returns to the ellipsoid")
-            await pg.evaluate("()=>applyTerrain(true)")
-            await asyncio.sleep(3.0)
+            await pg.evaluate(TOGGLE, True)
+            await asyncio.sleep(6.0)
             chk(await pg.evaluate(IS_ARCGIS), "and back on again")
         else:
+            chk(False, "the terrain switch is wired up (no toggle)")
             chk(False, "CONTROL: switching terrain off returns to the ellipsoid (no toggle)")
             chk(False, "and back on again (no toggle)")
 
