@@ -895,3 +895,68 @@ settled it. Raising saturation to "pull it toward teal" **crushed** the green
 channel, which was the one that had to rise. The first hue shift went the
 wrong way and made it worse in all twelve cells it was tried in. Neither
 mistake was visible without measuring across the boundary.
+
+---
+
+## 40. The white disc at the north pole was a hole through the planet (**FIXED**)
+
+Reported as "still a black area at north pole". Rendered, it is a hard **white**
+disc, and it is a different defect from #35/#37 despite sitting in the same
+place.
+
+It survived every globe-level toggle: caps hidden, base hidden, `baseColor`
+set to magenta, lighting off, ground atmosphere off, skirts off. It vanished
+only when **terrain** was switched off.
+
+**Cause.** The keyless elevation service is Web Mercator, so it stops at
+±85.0511°. For an imagery layer that means "nothing painted there". For a
+**terrain** provider it means far more, because the provider's tiling scheme
+defines the globe's entire quadtree: above 85.05° Cesium creates no surface
+tiles at all. There is no geometry, nothing for the polar caps to paint on,
+and what shows through the planet is the sky atmosphere on the far side.
+Measured: `scene.globe.pick` straight down the pole returns `null` with real
+terrain and a surface point without it.
+
+No free elevation source is geographic — every one is Mercator — so no
+provider swap fixes this. What does: real elevation buys nothing in a view
+that can see a pole, so the ellipsoid takes over past ±84°.
+
+**Why no test saw it.** `globe_visual_test.py` ran all eight views with
+`?terrain=off`. The suite written to catch exactly this class was configured
+into the one state where the defect cannot appear. It now loads with terrain
+in its default state and asks the globe whether it has a surface at each pole.
+
+## 41. Terrain and ground-clamped borders cost 10x the frame rate (**FIXED**)
+
+"Super laggy." Measured with the camera moving, same instrument each time,
+median frame:
+
+| state | median |
+|---|---|
+| terrain on, borders on (**shipped**) | 6137 ms |
+| terrain on, borders off | 2570 ms |
+| terrain off, borders on | 1106 ms |
+| terrain off, borders off | 964 ms |
+
+Software rendering, so the ratios are the signal, not the milliseconds.
+
+Two causes, and they multiply each other. Terrain dominates, and above
+~1,500 km a 4 km mountain is under a pixel, so at the default orbital view it
+is paid for nothing. And all **13,098** country and state boundary lines were
+`clampToGround: true`, which drapes geometry against terrain tiles — note they
+cost 3.5 s *with* terrain and 142 ms without. The draping bought nothing
+visible either, because `depthTestAgainstTerrain` is false by deliberate
+design, so a plain polyline at height 0 draws on top in exactly the same way.
+
+Now: terrain loads on descent (hysteresis at 1,000 km so it does not re-tile
+the globe while zooming), borders are not draped. Default view **6137 ms →
+569 ms**, and real relief still appears on the way down, verified by eye over
+the Rockies and the Alps.
+
+## 42. applyTerrain could switch terrain back on by itself (**FIXED**)
+
+`applyTerrain(true)` awaits its provider load. A load in flight would land
+*after* a later `applyTerrain(false)` and re-attach terrain on its own. Latent
+before, constant now that the view swaps terrain automatically. Each call takes
+a generation ticket and a stale one discards its result. Found by the keyless
+suite failing, not by reading the code.
