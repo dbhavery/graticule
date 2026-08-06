@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graticule handoff, 2026-08-05</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#11161e; --line:#1e2733;
+    --ink:#e6edf5; --dim:#93a2b5; --accent:#ff5e00; --ok:#4ade80; --bad:#f87171;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:48px 24px 96px; background:var(--bg); color:var(--ink);
+    font:16px/1.65 "Inter",system-ui,-apple-system,Segoe UI,sans-serif;
+  }
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:30px;line-height:1.2;margin:0 0 4px;letter-spacing:-.02em}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--dim);margin:0 0 40px;font-size:15px}
+  h2{
+    font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+    margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);font-weight:600;
+  }
+  h3{font-size:17px;margin:26px 0 8px;font-weight:600}
+  p{margin:0 0 14px}
+  ul,ol{margin:0 0 16px;padding-left:22px}
+  li{margin:0 0 8px}
+  code{
+    background:#0e141c;border:1px solid var(--line);border-radius:4px;
+    padding:1px 6px;font:13px/1.4 ui-monospace,Consolas,monospace;color:#cfe3ff;
+  }
+  pre{
+    background:#0e141c;border:1px solid var(--line);border-radius:8px;
+    padding:16px 18px;overflow-x:auto;margin:0 0 18px;
+    font:13px/1.65 ui-monospace,Consolas,monospace;color:#cfe3ff;
+  }
+  pre code{background:none;border:0;padding:0}
+  table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px;margin:0 0 18px}
+  .flag{border-left:3px solid var(--accent)}
+  .good{color:var(--ok)} .warn{color:var(--bad)}
+  .lead{font-size:17px;color:var(--ink)}
+  .meta{color:var(--dim);font-size:13.5px}
+  a{color:#6ab7ff}
+  .num{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Graticule handoff <span>2026-08-05</span></h1>
+<p class="sub">Branch <code>dev</code>, synced with origin, working tree clean, HEAD <code>d54c3cd</code>.</p>
+
+<div class="card flag">
+  <p class="lead" style="margin:0 0 10px"><strong>One thing you have to do:</strong> restart your server on port 8731.</p>
+  <p class="meta" style="margin:0">It serves the current front end (files are read per request) but it is running the Python from before this session. So it still polls OpenSky, still uses the keyed wildfire path, and returns 404 for the PWA routes. Everything below was verified on a separate instance.</p>
+</div>
+
+<h2>What shipped</h2>
+
+<h3>1. Every layer now runs with no API key <span class="meta">(70fa7b2)</span></h3>
+<p>The app needed five signups before the map filled in. Anyone who cloned it got dark layers. I probed 17 candidate endpoints with real requests before designing anything, and that step is the reason it worked: OSM Buildings returns 403 now, my first NASA URL was wrong on two counts, and anonymous OpenSky answered 429 outright. The feed being replaced was already broken.</p>
+
+<table>
+  <tr><th>Layer</th><th>Keyless source</th><th>Measured with no keys</th></tr>
+  <tr><td>Aircraft</td><td>adsb.fi, then airplanes.live, then adsb.lol</td><td class="num">4,106 tracked, with registration and airframe type</td></tr>
+  <tr><td>Wildfires</td><td>NASA FIRMS public archive</td><td class="num">174,628 detections</td></tr>
+  <tr><td>Terrain</td><td>Esri world elevation</td><td>new capability. Everest samples at 8,341 m</td></tr>
+  <tr><td>Ships</td><td>Digitraffic</td><td class="num">1,377 vessels, <strong>Baltic only</strong></td></tr>
+</table>
+
+<p>Aircraft now read <code>DAL428 &middot; AIRBUS A-321neo &middot; N511DE</code> instead of a hex code. Terrain is genuinely new: the globe was a smooth ellipsoid with the Rockies painted on it.</p>
+
+<h3>2. The black spot at the pole, and the globe that felt stuck <span class="meta">(d54c3cd)</span></h3>
+<p>You found both by looking at the screen. <strong>Nothing in any suite could see either one</strong>, because every check in this repo reads state and both defects are pixels.</p>
+<p><strong>The pole.</strong> Web Mercator is undefined at the poles, so every basemap stops dead at 85.05 degrees. Above that nothing was drawn and you were seeing the background colour through the planet. Both caps now use a flat ice tone clipped to the polar rectangles. Three of my four diagnoses were wrong first, and each died to a measurement rather than an argument.</p>
+<p><strong>The rotation.</strong> It always rotated. But the North America lock reset its idle timer on click, wheel, key and touch, and <strong>not on mouse movement</strong>. So "idle" meant "sent no click", which is exactly what you do while reading. A moving cursor now counts as a person, and the grace period is 90 seconds instead of 12.</p>
+
+<h2>Verified</h2>
+<pre><code>keyless        23 passed, 0 failed
+mobile         62 passed, 0 failed
+scroll         27 passed, 0 failed
+world          17 passed, 0 failed
+UI audit       0 of 468 contrast failures, 0 small targets
+
+control run    18 of 21 checks FAIL on the old code
+               (0 aircraft, 0 fires, 0 ships)</code></pre>
+<p class="meta">The control run is the part that matters. A check that cannot fail proves nothing.</p>
+
+<h2>Open, highest value first</h2>
+<ol>
+  <li><strong>There is no visual regression check.</strong> This is the real gap. Both of today's defects were found by you looking at pixels while every automated check passed. Next step is a harness that renders the globe from fixed angles and compares images.</li>
+  <li><strong class="warn">/api/rivers takes 31 seconds.</strong> 11,602 gauges. No store reviewer gets past that. The fix is a cache or a bounding-box filter, and which one is your call.</li>
+  <li><strong class="warn">Your AISStream key returns nothing at all.</strong> Connected, subscribed, not one message in 25 seconds. Reproduced outside the app. The ships layer has been empty for as long as anyone has looked. It now falls back to the keyless feed after 180 seconds, but whether the key is expired, over quota, or the service is down is unresolved.</li>
+  <li>Wildfires push about 175,000 points over the socket. Pre-existing, not made worse.</li>
+  <li>The solar wind field in the telemetry bar has been dead: NOAA moved the endpoint.</li>
+  <li>The south polar cap is slightly bright in polar night. A soft disc, not a hole, at a pole the app never opens on.</li>
+  <li>It is an installable web app, not a store listing. iOS and Android both need a native shell plus a developer account and review. That is a decision, not a task.</li>
+</ol>
+
+<h2>What still needs a key</h2>
+<table>
+  <tr><th>Key</th><th>Buys</th><th>Why there is no free version</th></tr>
+  <tr><td>AISStream</td><td>worldwide ships</td><td>No free live ship feed has global coverage. Every worldwide one gates the stream, and the US publishes nothing live.</td></tr>
+  <tr><td>Cesium ion</td><td>3D buildings</td><td>OSM Buildings closed its open tile service in April 2024.</td></tr>
+  <tr><td>Google</td><td>photorealistic 3D</td><td>no free equivalent</td></tr>
+  <tr><td>FIRMS</td><td>fires slightly sooner</td><td>latency only, the coverage is identical</td></tr>
+</table>
+<p>OpenSky is no longer used at all.</p>
+
+<h2>Is this a top 100 app</h2>
+<p>No. Not with what you found in one glance.</p>
+<p>The gap is not features. It is that the app was not being looked at. You caught a hole in the planet by tilting the camera, while 62 mobile checks, 27 scroll checks and 23 keyless checks all passed with it sitting there. That is the actual problem, and it is mine. Closing it is the next piece of work.</p>
+
+<p class="meta" style="margin-top:40px">Full engineering detail, including the twelve things that were measured and turned out to be false, is in the repo alongside this file.</p>
+
+</div>
+</body>
+</html>
