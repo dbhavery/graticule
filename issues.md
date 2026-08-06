@@ -839,3 +839,59 @@ seconds later the camera flew back to North America on its own.
 
 Now: a moving cursor counts as a person, and the grace period is 90 s rather
 than 12 — long enough to mean "walked away" instead of "paused to look".
+
+---
+
+## 37. The polar cap fix from #35 never installed (**FIXED**)
+
+`initPolarBackstop()` shipped referencing `POLAR_MAX_LEVEL`, a constant that
+is declared **nowhere in the file**. Both caps threw
+`ReferenceError: POLAR_MAX_LEVEL is not defined`, the function's own
+`try { } catch { console.warn }` turned that into a console warning, and the
+app ran a full session with no polar backstop at all — while a handoff, a
+memory file and issue #35 above all said it had one.
+
+What actually filled the caps was Cesium upsampling the texels at the
+Mercator edge: a **teal pinwheel** radiating from the north pole and a hard
+**white ellipse** over Antarctica. Both were on screen the whole time.
+
+Nothing could see it. Every check in the repo reads state, and there was no
+state to read — `polarBackstopLayers.length` was 0 and nothing asserted on it.
+Found by rendering the globe and looking at the picture.
+
+**Fix.** Natural Earth II, the geographic raster Cesium already serves beside
+its own build. Its `tilemapresource.xml` was read, not assumed: EPSG:4326,
+bounds ±90, levels 0-2 at 0.703/0.352/0.176 °/px — a true power-of-two
+pyramid, which is exactly what GIBS EPSG:4326 is not. Falls back to the flat
+ice tone if unreachable, logs a `console.error` rather than a warning when a
+cap is missing, and publishes the installed count on
+`window.__graticule_scenery` so a test can assert on it. `#35`'s residual
+south-cap complaint is gone with it: the cap is real imagery now.
+
+## 38. The lens flare fired with the sun behind the camera (**FIXED**)
+
+Cesium's lens-flare stage never asks where the sun is. Once attached it
+mirrors the brightest pixels in frame back through screen centre every frame,
+in frame or not. At the full-globe view on the solstice — sun almost directly
+**behind** the camera, no part of it on screen — it wrapped the planet in a
+rainbow halo and turned the Pacific neon cyan. It was the worst-looking frame
+in the app and it was one zoom-out away.
+
+Gated on the two conditions the Settings label already claimed: the sun is
+inside the frustum, and the Earth is not in the way (`EllipsoidalOccluder`).
+Re-evaluated on `camera.changed` and `camera.moveEnd`, plus the 30 s celestial
+tick so a stationary camera still watches the sun set. Verified in both
+directions — the halo is gone, and the flare still fires correctly when the
+star is genuinely in frame.
+
+## 39. The polar cap read as a disc pasted on the pole (**FIXED**)
+
+Natural Earth II's Arctic ocean is brighter and bluer than the Esri imagery it
+meets at 85.05°. Summed channel error across the seam: **130** ungraded,
+**8.3** now, from a measured 24-cell brightness/hue sweep.
+
+Worth recording because the reasoning was wrong twice before the measurement
+settled it. Raising saturation to "pull it toward teal" **crushed** the green
+channel, which was the one that had to rise. The first hue shift went the
+wrong way and made it worse in all twelve cells it was tried in. Neither
+mistake was visible without measuring across the boundary.
