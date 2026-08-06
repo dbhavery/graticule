@@ -16,6 +16,14 @@ a true 15°/hour and matches real UTC:
 - VIIRS city lights composited onto the night hemisphere only
 - Moon at its true ephemeris position and phase; stars; HDR tone mapping;
   sun glow
+- **Real elevation.** The globe used to be a smooth ellipsoid with the Rockies
+  painted on it. Terrain comes from Esri's world elevation service, which needs
+  no key — Cesium's own world terrain is an ion asset, and gating the biggest
+  realism win in the app behind a signup was the wrong trade. It attaches after
+  first paint, so the map is on screen while the mountains arrive underneath
+  it, and `?terrain=off` drops back to the ellipsoid for a weak machine.
+  Depth-testing against terrain is deliberately left off: a ridge occluding the
+  warning pin in the valley behind it is realistic and useless.
 - **Stay centred on North America** — the camera holds the continent while the
   sunlight rotates around it. Re-centres only after 12 s idle, above 3 Mm, and
   past 12° of drift, so panning and zooming stay free.
@@ -65,8 +73,9 @@ feeds behind them. It collapses with `\`.
 - *Mapping* — base imagery, reference lines, parcels, subsea cables, and the
   area-darkening scope that limits the frame to a set of counties
 - *Earth* — quakes (USGS), volcanoes (GVP), wildfires (FIRMS), ships
-  (AISStream), river gauges, tide stations, marine buoys
-- *Sky* — planes (OpenSky), airports, TFRs, airspace, satellites (Celestrak
+  (AISStream worldwide, or keyless Digitraffic in the Baltic), river gauges,
+  tide stations, marine buoys
+- *Sky* — planes (community ADS-B), airports, TFRs, airspace, satellites (Celestrak
   TLE propagated client-side), launches, and the celestial realism switches
 - *World* — live world-population telemetry: running total, today's
   births/deaths/growth, per-continent and top-15 country ranks, next-milestone
@@ -122,9 +131,8 @@ presets and a settings modal.
 ```bash
 git clone https://github.com/<you>/graticule.git
 cd graticule
-cp .env.example .env       # see "API keys" below — most are optional
 uv sync
-uv run python main.py
+uv run python main.py      # no .env, no keys, no signups — see below
 ```
 
 **Requirements**
@@ -136,20 +144,46 @@ uv run python main.py
 The window opens within ~30s. Layers default to off — toggle the ones you
 want from the left rail.
 
-## API keys (all optional, all free)
+## API keys — you don't need any
 
-Copy `.env.example` to `.env` and fill in whichever you want:
+Graticule runs on keyless public sources. A fresh clone with no `.env` gets a
+fully populated globe: no accounts, no tokens, no signup wall.
 
-| Key | What it unlocks | Where |
+Verify it yourself — this boots with every key forcibly blanked and refuses to
+start if one leaks back in from a `.env`:
+
+```bash
+uv run python scripts/run_keyless.py 8743   # server with zero keys
+uv run python scripts/keyless_test.py 8743  # 21 checks against it
+```
+
+What that covers, measured on 2026-08-05 with no keys present:
+
+| Layer | Keyless source | Measured |
 |---|---|---|
-| `AISSTREAM_KEY` | Live ship positions (~6000 vessels) | https://aisstream.io |
-| `FIRMS_MAP_KEY` | Wildfire detections (NASA FIRMS, ~80k/day) | https://firms.modaps.eosdis.nasa.gov/api/ |
-| `CESIUM_ION_TOKEN` | High-res Bing-backed imagery + OSM Buildings 3D | https://ion.cesium.com |
-| `GOOGLE_MAPS_API_KEY` | Google's Photorealistic 3D Tiles (full Earth mesh) | https://developers.google.com/maps/documentation/tile/3d-tiles-overview |
-| `OPENSKY_USER` / `OPENSKY_PASS` | Smooth ADS-B polling (anon tier rate-limits hard) | https://opensky-network.org/ |
+| Aircraft | adsb.fi → airplanes.live → adsb.lol | 4,106 tracked, with registration + airframe type |
+| Wildfires | NASA FIRMS public archive | 174,628 detections |
+| Terrain | Esri world elevation (LERC) | real elevation; Everest sampled at 8,341 m |
+| Imagery | Esri World Imagery, OSM, OpenTopoMap, NASA GIBS | 4 basemaps |
+| Ships | Digitraffic | 1,377 vessels — **Baltic and Finnish waters only** |
 
-Without any keys, the globe still launches with quakes, satellites, volcanoes,
-weather, alerts, and parcels working out of the box.
+plus radar, NWS alerts, quakes, volcanoes, hurricanes, tsunamis, satellites,
+TFRs, airports, space weather, aurora, launches and submarine cables, none of
+which ever needed a key.
+
+### The two things a key still buys
+
+| Key | What it adds | Why there is no keyless option |
+|---|---|---|
+| `AISSTREAM_KEY` | Worldwide ships instead of the Baltic | No free live AIS has global coverage. MarineTraffic, VesselFinder, AISHub and BarentsWatch all gate the stream; the US publishes no live public feed at all. |
+| `CESIUM_ION_TOKEN` | OSM Buildings 3D | OSM Buildings closed its anonymous tile service in April 2024 (`403 requires a registration`). |
+| `GOOGLE_MAPS_API_KEY` | Photorealistic 3D Tiles | Google's mesh has no free equivalent. |
+| `FIRMS_MAP_KEY` | Fire detections a little sooner | Latency only. Coverage is the same: 174,637 keyless rows against 179,107 keyed. |
+
+`OPENSKY_*` is no longer read at all. Its anonymous tier returned `429 Too many
+requests` on a plain state query, and its OAuth2 flow needed an account, so
+aircraft come from the community ADS-B networks instead — more aircraft, no
+key, and registration plus airframe type that OpenSky never carried.
 
 ## Architecture
 
@@ -161,7 +195,7 @@ pywebview window
        └── async feed loops → in-memory StateStore → WS fan-out
 ```
 
-- 16 async feed loops (OpenSky polling, AISStream WebSocket, USGS, NOAA, NASA, etc.)
+- 16 async feed loops (ADS-B grid polling, AIS, USGS, NOAA, NASA, etc.)
 - Generic StateStore — `replace_layer(name, dict)` triggers `<name>:reset` over WS
 - Frontend renders entities via `CustomDataSource`, with per-layer LOD via
   Cesium clustering and per-entity DistanceDisplayCondition
@@ -199,4 +233,4 @@ and parallels drawn on a globe — apt for a situational-awareness Earth.
 
 Cesium World Imagery © Cesium / Microsoft. Parcel data © Regrid (US tiles)
 and Washington State DOR (vector). Other feeds credited per their public
-APIs (OpenSky, USGS, NASA, NOAA, NHC, FAA, Smithsonian GVP, etc.).
+APIs (adsb.fi, USGS, NASA, NOAA, NHC, FAA, Esri, Smithsonian GVP, etc.).

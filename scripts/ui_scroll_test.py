@@ -5,6 +5,16 @@ the cue, or never shows it, fails here.
 import asyncio, sys
 from playwright.async_api import async_playwright
 
+# The port was hardcoded to 8731 here, so passing one on the command line did
+# nothing and the suite quietly measured whatever server happened to be running
+# -- not the one under test.
+#
+# ?terrain=off because this measures RAIL LAYOUT, not the globe. Under
+# SwiftShader the displaced terrain mesh costs enough that page.screenshot()
+# could not complete inside its 60 s timeout.
+PORT = sys.argv[1] if len(sys.argv) > 1 else "8731"
+URL = f"http://127.0.0.1:{PORT}/?terrain=off"
+
 ok, bad = [], []
 def chk(c, msg):
     (ok if c else bad).append(msg)
@@ -16,7 +26,7 @@ async def main():
         br = await p.chromium.launch(args=["--use-gl=angle", "--use-angle=swiftshader",
                                            "--enable-unsafe-swiftshader", "--disable-dev-shm-usage"])
         pg = await br.new_page(viewport={"width": 1600, "height": 950})
-        await pg.goto("http://127.0.0.1:8731/", wait_until="load")
+        await pg.goto(URL, wait_until="load")
         await pg.wait_for_function("()=>typeof viewer!=='undefined'&&viewer&&viewer.scene", timeout=60000)
         await asyncio.sleep(25)
 

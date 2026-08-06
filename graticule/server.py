@@ -93,12 +93,26 @@ async def snapshot() -> JSONResponse:
 
 @app.get("/api/config")
 async def config() -> JSONResponse:
-    """Public-safe runtime config the front-end needs (e.g., Cesium token)."""
+    """Public-safe runtime config the front-end needs (e.g., Cesium token).
+
+    `fires_enabled` is now unconditionally true: FIRMS publishes the same
+    detections as a keyless static archive, so the layer no longer depends on
+    anyone holding a MAP_KEY. It stays in the payload because the front-end
+    reads it, and because a future source outage is a real reason to switch a
+    layer off centrally.
+
+    `ships_enabled` still tracks a key, and honestly so — see feeds/ais.py.
+    There is no keyless live AIS with global coverage; the free feeds are
+    national. Claiming otherwise would put an empty layer in the UI.
+    """
     return JSONResponse({
         "cesium_ion_token":    os.environ.get("CESIUM_ION_TOKEN") or "",
         "google_maps_api_key": os.environ.get("GOOGLE_MAPS_API_KEY") or "",
-        "fires_enabled":       bool(os.environ.get("FIRMS_MAP_KEY", "").strip()),
-        "ships_enabled":       bool(os.environ.get("AISSTREAM_KEY", "").strip()),
+        "fires_enabled":       True,
+        # True either way now: with a key it is global AISStream, without one it
+        # is Digitraffic. The layer is live in both cases, so the toggle is live.
+        "ships_enabled":       True,
+        "ships_global":        bool(os.environ.get("AISSTREAM_KEY", "").strip()),
     })
 
 

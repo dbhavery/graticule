@@ -63,6 +63,17 @@ const SPC_RISK_LABEL = {
 };
 
 // EPA AQI category bands.
+/* What to call an aircraft under its callsign.
+   The old ADS-B source carried the operator's country and nothing else, so
+   that was the subtitle by default rather than by merit. The community feeds
+   carry the airframe -- "AIRBUS A-321neo · N511DE" -- which is what someone
+   looking at a dot on a map actually wants to know. Country is still read when
+   it is there, so a source that supplies it does not lose it. */
+function planeSubtitle(p) {
+  const bits = [p.desc || p.type || null, p.registration].filter(Boolean);
+  return bits.length ? bits.join(' · ') : (p.country || 'Aircraft');
+}
+
 function aqiCategory(v) {
   if (v == null) return 'Unknown';
   if (v <= 50)  return 'Good';
@@ -268,6 +279,7 @@ const settings = Object.assign({
   showMoon: true,                   // real-time lunar position + phase
   showStars: true,                  // celestial sphere
   hdr: false,                       // ACES tone curve; washes out terrain, see initRealisticEarth
+  terrain: true,                    // real elevation, keyless — see attachTerrain
   lensFlare: true,                  // sun glow when the star is in frame
   lockNorthAmerica: true,           // hold NA centred; let the sun sweep across
   atmosIntensity: 5,
@@ -612,6 +624,18 @@ async function initViewer() {
   // Allow the camera to descend into the surface band where 3D buildings live
   viewer.scene.screenSpaceCameraController.minimumZoomDistance = 50;
 
+  /* Terrain is deliberately NOT awaited: see the Terrain section. The globe is
+     on screen the moment imagery lands and the elevation arrives underneath it.
+
+     `?terrain=off` overrides the setting for one page load without touching
+     what the user saved. Two real uses: a machine too weak to rasterise the
+     extra geometry, and the UI test suites, which measure layout and should
+     not be paying for a displaced globe. Under SwiftShader (software WebGL,
+     which is what CI and Playwright use) terrain costs enough that a full
+     page screenshot could not complete inside 60 s. */
+  const terrainParam = new URLSearchParams(location.search).get('terrain');
+  if (terrainParam !== 'off' && settings.terrain) applyTerrain(true);
+
   // Click → panel + ripple + history push
   const click = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   click.setInputAction((c) => {
@@ -889,10 +913,47 @@ function initFeedChips() {
   });
 }
 
+/* Both of these used to be switched off unless the operator had signed up for
+   a key. Neither needs one now: FIRMS publishes the same detections as a
+   keyless archive, and AIS falls back to a keyless national feed. What is left
+   is a coverage note, not a gate -- a live layer with a smaller footprint is
+   worth having as long as the UI does not imply it covers more than it does. */
 async function applyServerCapabilities() {
   const cfg = window.__graticule_cfg || {};
-  if (!cfg.ships_enabled) disableLayer('ships', 'no AISSTREAM_KEY');
-  if (!cfg.fires_enabled) disableLayer('fires', 'no FIRMS_MAP_KEY');
+  if (!cfg.ships_enabled) disableLayer('ships', 'ship feed unavailable');
+  if (!cfg.fires_enabled) disableLayer('fires', 'fire feed unavailable');
+  if (cfg.ships_enabled && cfg.ships_global === false) {
+    noteLayerCoverage('ships',
+      'Baltic & Finnish waters only (keyless Digitraffic feed). '
+      + 'A free aisstream.io key extends this worldwide.');
+  }
+}
+
+/* Which feed is actually behind the ships layer, announced by the feed itself.
+   /api/config can only report whether a KEY exists, and a key is not a
+   guarantee of data: aisstream.io was measured accepting the key, accepting
+   the subscription and then sending nothing at all, after which the server
+   falls back to the keyless regional feed. A label that still read "worldwide"
+   at that point would be a lie the user has no way to check. */
+function applyShipsSource(src) {
+  if (!src) return;
+  noteLayerCoverage('ships', src.global ? '' : (src.note || ''));
+}
+
+/* A coverage caveat is not a failure, so it must not read like one: the
+   checkbox stays live and enabled, and the note rides on the label. */
+function noteLayerCoverage(layer, note) {
+  const cb = document.querySelector(`input[data-layer="${layer}"]`);
+  if (!cb) return;
+  // An empty note CLEARS the caveat. The boot-time note is set from
+  // /api/config, which only knows whether a key exists; if the feed then
+  // announces worldwide coverage, that stale caveat has to come off.
+  cb.title = note || '';
+  const lbl = cb.closest('label');
+  if (lbl) {
+    lbl.title = note || '';
+    lbl.classList.toggle('has-coverage-note', !!note);
+  }
 }
 
 function disableLayer(layer, reason) {
@@ -1273,7 +1334,7 @@ function summarizeEntity(p) {
     return { title: `AQI ${p.value}`, subtitle: aqiCategory(p.value), meta: '' };
   }
   if (k === 'planes') {
-    const sub = p.country ? p.country : 'Aircraft';
+    const sub = planeSubtitle(p);
     const bits = [];
     if (typeof p.alt === 'number')   bits.push(`${Math.round(p.alt)} m`);
     if (typeof p.speed === 'number') bits.push(`${Math.round(p.speed * 1.94384)} kt`);
@@ -1713,6 +1774,7 @@ function handleMessage(msg) {
     if (meta.aurora)        { auroraMeta = meta.aurora; noteFeed('aurora'); if (isLayerOn('aurora')) toggleAurora(true); }
     if (meta.space_weather) { applySpaceWeather(meta.space_weather); noteFeed('space_weather'); }
     if (meta.cables)        { cablesGeoJson = meta.cables.geojson; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
+    if (meta.ships_source)  { applyShipsSource(meta.ships_source); }
   } else if (msg.type === 'planes' || msg.type === 'ships') {
     upsertEntity(msg.type, msg.id, msg.data);
     noteFeed(msg.type);
@@ -1725,6 +1787,7 @@ function handleMessage(msg) {
     else if (msg.key === 'aurora')        { auroraMeta = msg.data; noteFeed('aurora'); if (isLayerOn('aurora')) toggleAurora(true); }
     else if (msg.key === 'space_weather') { applySpaceWeather(msg.data); noteFeed('space_weather'); }
     else if (msg.key === 'cables')        { cablesGeoJson = msg.data.geojson; cablesBuilt = false; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
+    else if (msg.key === 'ships_source')  { applyShipsSource(msg.data); }
   }
   updateCategoryCounts();
   refreshAlerts();
@@ -1965,7 +2028,8 @@ function upsertEntity(layer, id, data, draw) {
     setCount(layer, map.size);
     // Live: stream new planes/ships into the ticker as they appear
     if (layer === 'planes' && data.callsign) {
-      pushEvent('FLIGHT', `${data.callsign} ${data.country ? '· ' + data.country : ''}`, Date.now());
+      const tail = data.desc || data.type || data.country;
+      pushEvent('FLIGHT', `${data.callsign}${tail ? ' · ' + tail : ''}`, Date.now());
     } else if (layer === 'ships' && data.name) {
       pushEvent('VESSEL', `${data.name} ${data.destination ? '→ ' + data.destination : ''}`, Date.now());
     }
@@ -2407,6 +2471,64 @@ function setStatus(klass, text) {
   document.getElementById('status-dot').className = klass;
   document.getElementById('status-text').textContent = text.toUpperCase();
 }
+
+// ---------- Terrain ----------------------------------------------------------
+
+/* Real elevation, with no key of any kind.
+ *
+ * Until now the globe was a smooth ellipsoid: the Rockies, the Appalachians and
+ * the Grand Canyon were all painted onto a sphere. Cesium's own world terrain
+ * is an ion asset, so it needs a token, and gating the single biggest realism
+ * win in the app behind a signup is the wrong trade for something that ships.
+ *
+ * Esri publishes global terrain as a plain ArcGIS elevation ImageServer with no
+ * key and no referrer check. Cesium ships a provider that reads exactly that
+ * format -- the tiles come back as LERC (`CntZImage`), which is what
+ * ArcGISTiledElevationTerrainProvider decodes -- so this is a first-class path,
+ * not a workaround. Verified against the live service before it was written:
+ * the root returns a service descriptor and 5/8/12 returns a 47KB LERC tile.
+ *
+ * Attached AFTER first paint, deliberately. Terrain is a network dependency
+ * with a long tail, and boot already competes with imagery plus a dozen feeds;
+ * making the first frame wait on Colorado is how an app feels slow. The
+ * ellipsoid renders immediately and the mountains arrive underneath it.
+ */
+const TERRAIN_URL =
+  'https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer';
+
+let terrainProvider = null;       // cached; built once, reused across toggles
+let terrainPending = null;        // in-flight promise, so a double-toggle is one fetch
+
+async function loadTerrainProvider() {
+  if (terrainProvider) return terrainProvider;
+  if (terrainPending) return terrainPending;
+  terrainPending = Cesium.ArcGISTiledElevationTerrainProvider.fromUrl(TERRAIN_URL)
+    .then((p) => { terrainProvider = p; return p; })
+    .finally(() => { terrainPending = null; });
+  return terrainPending;
+}
+
+async function applyTerrain(on) {
+  if (!viewer) return;
+  if (!on) {
+    viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+    return;
+  }
+  try {
+    viewer.terrainProvider = await loadTerrainProvider();
+  } catch (e) {
+    // A dead terrain service must not cost the user their map. The ellipsoid is
+    // a genuinely usable globe; it is what the app shipped on until now.
+    console.warn('Terrain unavailable, staying on the ellipsoid:', e);
+    viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+  }
+}
+
+/* Note on depth testing: `scene.globe.depthTestAgainstTerrain` is left at its
+   default of false on purpose. Turning it on would let a ridge occlude a storm
+   marker sitting in the valley behind it, which is realistic and useless -- the
+   entire point of a warning pin is that you can see it. Everything the app
+   draws is an operational symbol, not scenery, so symbols stay on top. */
 
 // ---------- 3D buildings / 3D tiles -----------------------------------------
 
@@ -3173,7 +3295,7 @@ function showPanel(entity) {
   const kind = props.kind;
 
   let title, subtitle;
-  if      (kind === 'planes')     { title = props.callsign || props.id; subtitle = props.country || 'Aircraft'; }
+  if      (kind === 'planes')     { title = props.callsign || props.registration || props.id; subtitle = planeSubtitle(props); }
   else if (kind === 'ships')      { title = props.name || `MMSI ${props.id}`; subtitle = props.destination ? `→ ${props.destination}` : 'Vessel'; }
   else if (kind === 'satellites') { title = props.name; subtitle = props.group_label || 'Satellite'; }
   else if (kind === 'quakes')     { title = (props.mag != null) ? `M${props.mag}` : 'Quake'; subtitle = props.place || 'Earthquake'; }
@@ -3247,6 +3369,11 @@ const FIELD_META = {
   lon:            { label: 'Longitude',   fmt: (v) => `${(+v).toFixed(4)}°` },
   name:           { label: 'Name' },
   country:        { label: 'Country' },
+  // Carried by the community ADS-B feeds, not by the old state-vector source.
+  registration:   { label: 'Registration' },
+  desc:           { label: 'Aircraft' },
+  squawk:         { label: 'Squawk',      chip: true },
+  emergency:      { label: 'Emergency',   chip: true },
   region:         { label: 'Region' },
   status:         { label: 'Status',      chip: true },
   url:            { label: 'Source',      link: 'Open' },
@@ -3977,6 +4104,7 @@ function initSettings() {
   checkbox('show-moon',       'showMoon',       applyMoon);
   checkbox('show-stars',      'showStars',      applyStars);
   checkbox('hdr',             'hdr',            applyHdr);
+  checkbox('show-terrain',    'terrain',        applyTerrain);
   checkbox('lens-flare',      'lensFlare',      syncLensFlare);
   checkbox('lock-na',         'lockNorthAmerica', applyNorthAmericaLock);
   checkbox('diagnostics',     'diagnostics',    applyDiagnostics);

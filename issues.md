@@ -682,3 +682,99 @@ directly against the server, not through the worker:
 
 11,602 gauges. Not touched, since it is outside the mobile task and the fix is
 likely a server-side cache or a bbox filter — Don's call on which.
+
+---
+
+## 30. SWPC solar-wind plasma endpoint 404s (**OPEN — pre-existing**)
+
+Seen in the boot log on every start, unrelated to the keyless work:
+
+```
+SWPC plasma failed: Client error '404 Not Found' for url
+'https://services.swpc.noaa.gov/products/solar-wind/plasma-2-hour.json'
+```
+
+The consequence is visible, not silent: the telemetry line prints
+`solar_wind=? km/s` while Kp and X-ray next to it are fine, so one field of the
+space-weather readout has been dead. NOAA appears to have moved or retired the
+2-hour plasma product. Not fixed here — finding its replacement is its own
+task, and this run was about API keys.
+
+---
+
+## 31. The fires layer ships ~175,000 points over the WebSocket (**OPEN — pre-existing**)
+
+Not caused by the keyless swap, and not made worse by it — the keyed feed it
+replaced pushed 179,107 rows where the keyless archive pushes 174,628. Both are
+about 15 MB of CSV becoming a very large snapshot payload.
+
+Left alone deliberately: cutting it would have meant changing coverage at the
+same time as changing the source, and then neither change could be measured
+against the other. The obvious fixes are a confidence floor (`low` is ~5% of
+rows), a viewport filter, or serving fires over their own paged endpoint rather
+than the snapshot. Don's call.
+
+---
+
+## 32. Two test suites ignored the port they were given (**FIXED**)
+
+`ui_scroll_test.py`, `world_consistency_test.py` and `ui_audit.py` hardcoded
+`http://127.0.0.1:8731/`, so passing a port did nothing and they silently
+measured whichever server happened to already be running — usually Don's, not
+the one under test. All three now take a port argument.
+
+This is the same failure as #33 below and they happened within minutes of each
+other: **a test that quietly measures the wrong process reports a pass that
+means nothing.**
+
+---
+
+## 33. A second server bound nothing and its tests passed anyway (**FIXED**)
+
+Launching a keyless server while an older one still held the port produced:
+
+```
+ERROR: [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8743)
+```
+
+three lines deep in the log — and uvicorn carried on running the process's
+FEED tasks. So two processes were polling live data while the OLD one answered
+HTTP. Nineteen checks then passed against code that no longer existed on disk;
+the discrepancy only surfaced because one control assertion ("`emergency` is
+rare") disagreed with the source I had just written.
+
+`scripts/run_keyless.py` now probes the port and refuses to start if it is
+taken. Verified by running it twice: the second exits with
+`REFUSING TO START: something is already listening on 8743.`
+
+---
+
+## 34. AISStream accepts the key and then sends nothing (**WORKED AROUND**)
+
+Found while checking the keyed path still worked. Not caused by the keyless
+change — Don's already-running instance, on the original `ais.py`, showed the
+same thing.
+
+```
+AIS: connected                 <- 18:20:25
+(no messages, ever)
+ships in state: 0
+```
+
+Reproduced outside the app with a bare websocket client and the key from
+`.env`: connected, subscribed, **not one message in 25 s**. Worldwide AIS is
+thousands of messages a minute, so this is not a quiet ocean.
+
+The old loop could not detect it: `async for raw in ws` waits forever, so a
+silent socket and a working one look identical, and the ships layer had been
+empty for as long as anyone had looked at it.
+
+Now: 90 s of silence ends the connection, and two consecutive silent
+connections retire the key and switch to keyless Digitraffic. Verified end to
+end on the keyed server — after 180 s it logged the handover and the layer went
+from **0 to 1,374 vessels**. The layer also stops claiming worldwide coverage,
+because the feed itself now announces its source instead of the UI inferring
+it from whether a key exists.
+
+Still open for Don: whether the aisstream.io key is expired, over quota, or the
+service is down. Worth checking before paying it any more attention.

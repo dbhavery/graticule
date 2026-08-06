@@ -7,6 +7,14 @@ a counter that is merely self-consistent can still be self-consistently wrong.
 import asyncio, sys
 from playwright.async_api import async_playwright
 
+# Port was hardcoded to 8731, so a port passed on the command line was
+# silently ignored and this measured whatever server was already up.
+# ?terrain=off: this suite measures world population numbers, not the globe, and under
+# SwiftShader the displaced terrain mesh is expensive enough to stall a
+# full-page screenshot.
+PORT = sys.argv[1] if len(sys.argv) > 1 else "8731"
+URL = f"http://127.0.0.1:{PORT}/?terrain=off"
+
 ok, bad = [], []
 def chk(c, msg):
     (ok if c else bad).append(msg)
@@ -20,7 +28,7 @@ async def main():
         br = await p.chromium.launch(args=["--use-gl=angle", "--use-angle=swiftshader",
                                            "--enable-unsafe-swiftshader", "--disable-dev-shm-usage"])
         pg = await br.new_page(viewport={"width": 1600, "height": 950})
-        await pg.goto("http://127.0.0.1:8731/", wait_until="load")
+        await pg.goto(URL, wait_until="load")
         await pg.wait_for_function("()=>typeof viewer!=='undefined'&&viewer&&viewer.scene", timeout=60000)
         await asyncio.sleep(25)
 
