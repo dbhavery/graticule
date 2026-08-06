@@ -9,15 +9,22 @@ This suite renders the globe from the angles a person reaches in the first
 minute and inspects the resulting image. Two independent detectors, because
 one clever trick that happens to work is not a test suite:
 
-  1. SENTINEL. Set globe.baseColor to magenta. That colour is what shows
-     through wherever no imagery is drawn, and nothing else in the app is
-     magenta. When the app is correct the sentinel is invisible, so it costs
-     nothing; when imagery is missing it is a screaming pink hole. This is
-     the detector that would have caught the polar gap on the day it shipped.
+  1. SENTINEL. Set globe.baseColor to magenta. That colour shows through
+     wherever no imagery is drawn and nothing else in the app is magenta, so
+     when the app is correct the sentinel is invisible and costs nothing.
 
-  2. GOLDEN FRAME. Compare against a committed reference image. Catches
-     everything the sentinel cannot: a smear, a wrong colour grade, a cap
-     pasted on at the wrong brightness, terrain gone flat, atmosphere gone.
+     It is the WEAKER of the two, and the numbers say so. Run --selftest and
+     it finds 320 magenta pixels at the north pole and ZERO from directly
+     overhead, because Cesium does not leave an uncovered cap empty -- it
+     fills it by upsampling the texels at the Mercator edge, which is a
+     drawn pinwheel, not a hole. The sentinel only catches what nothing
+     covers at all.
+
+  2. GOLDEN FRAME. Compare against a committed reference image. This is what
+     actually catches the polar defect (1.188% of pixels in --selftest,
+     against a 0.500% bar) along with the whole class the sentinel misses:
+     smears, a wrong colour grade, a cap at the wrong brightness, terrain
+     gone flat, atmosphere gone.
 
 The render is forced deterministic first (clock frozen at the solstice, every
 data layer off), or the frames would differ run to run with the sun and the
@@ -40,7 +47,7 @@ import io
 import pathlib
 import sys
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageFilter
 from playwright.async_api import async_playwright
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -104,7 +111,15 @@ SENTINEL_MAX_FRAC = 0.0002
 # Golden comparison. SwiftShader is not bit-exact across driver updates, so a
 # per-pixel delta under 12/255 is treated as the same picture.
 GOLDEN_TOL = 12
-GOLDEN_MAX_FRAC = 0.015
+# 0.5%, not the 1.5% this started at. At 1.5% the selftest's polar pinwheel
+# came in at 1.188% and passed -- the suite drew the defect and called it fine.
+# Views reproduce at 0.000% once the capture waits for the picture to stop
+# moving, so the bar can sit close to zero.
+GOLDEN_MAX_FRAC = 0.005
+
+# A frame is finished when two consecutive captures agree this closely.
+STABLE_QUIET_FRAC = 0.002
+STABLE_ROUNDS = 10
 
 results = []
 
@@ -238,9 +253,19 @@ def sentinel_fraction(img):
 
 
 def golden_fraction(img, ref):
-    """Fraction of pixels differing from the reference by more than GOLDEN_TOL."""
-    a = img.convert("RGB")
-    b = ref.convert("RGB")
+    """Fraction of pixels differing from the reference by more than GOLDEN_TOL.
+
+    Both sides are blurred first. Seven of the eight views reproduce bit-exact,
+    but the widest one does not: at 22,000 km the globe is small on screen and
+    Cesium may still be holding high-detail tiles loaded for the PREVIOUS view,
+    so coastlines land a pixel either way depending on what has been evicted.
+    That showed up as 3.5% of pixels differing, every one of them on an edge.
+    A 1.2px blur drops single-pixel edge jitter without touching anything at
+    the scale this suite exists to catch -- a hole at the pole is ~65px across
+    at comparison size, and survives the blur intact.
+    """
+    a = img.convert("RGB").filter(ImageFilter.GaussianBlur(1.2))
+    b = ref.convert("RGB").filter(ImageFilter.GaussianBlur(1.2))
     if a.size != b.size:
         return 1.0, None
     diff = ImageChops.difference(a, b)
@@ -300,11 +325,31 @@ async def run(port, update, selftest, terrain):
             print(f"  selftest: hid {hidden} polar backstop layers", flush=True)
 
         async def capture(tag):
-            settle = await pg.evaluate(SETTLE, 45_000)
-            data = await pg.evaluate(GRAB)
-            raw = base64.b64decode(data.split(",", 1)[1])
+            """Shoot until the picture stops changing, not until a flag flips.
+
+            globe.tilesLoaded is not "done". After a big camera jump Cesium
+            reports the currently-requested set loaded, then keeps refining, so
+            a capture gated on the flag caught the regional view at a coarse
+            LOD one run and a sharp one the next -- 14% of pixels apart. The
+            frame itself is the only honest signal that the frame is finished.
+            """
+            prev = None
+            raw = b""
+            for round_no in range(1, STABLE_ROUNDS + 1):
+                settle = await pg.evaluate(SETTLE, 12_000)
+                data = await pg.evaluate(GRAB)
+                raw = base64.b64decode(data.split(",", 1)[1])
+                img = Image.open(io.BytesIO(raw)).convert("RGB").resize(CMP)
+                if prev is not None:
+                    moved, _ = golden_fraction(img, prev)
+                    if moved <= STABLE_QUIET_FRAC:
+                        (OUTDIR / f"{tag}.png").write_bytes(raw)
+                        return img, round_no, moved
+                prev = img
             (OUTDIR / f"{tag}.png").write_bytes(raw)
-            return Image.open(io.BytesIO(raw)).convert("RGB").resize(CMP), settle
+            print(f"  WARNING {tag}: never went quiet in {STABLE_ROUNDS} rounds",
+                  flush=True)
+            return prev, STABLE_ROUNDS, None
 
         plan = [(n, LOOK_AT, [lon, lat, hd, pt, rng])
                 for n, lon, lat, hd, pt, rng in VIEWS]
@@ -319,9 +364,10 @@ async def run(port, update, selftest, terrain):
 
             # Pass A: flat light, magenta base. Is any imagery missing?
             await pg.evaluate(SENTINEL_PASS)
-            probe, settle = await capture(f"{name}.sentinel")
-            print(f"\n[{name}] tiles settled={settle['settled']} "
-                  f"in {settle['ms']}ms", flush=True)
+            probe, rounds, moved = await capture(f"{name}.sentinel")
+            print(f"\n[{name}] steady after {rounds} capture(s)"
+                  + (f", last move {moved * 100:.3f}%" if moved is not None else ""),
+                  flush=True)
             frac, hits = sentinel_fraction(probe)
             check(f"{name}: no imagery gap", frac <= SENTINEL_MAX_FRAC,
                   f"{hits} base-colour px ({frac * 100:.4f}%, "
@@ -329,7 +375,7 @@ async def run(port, update, selftest, terrain):
 
             # Pass B: lit like the product. Does it still look like itself?
             await pg.evaluate(APPEARANCE_PASS)
-            img, _ = await capture(name)
+            img, _, _ = await capture(name)
 
             v = variety(img)
             check(f"{name}: frame has content", v >= 12, f"{v} distinct tones")
@@ -360,14 +406,20 @@ async def run(port, update, selftest, terrain):
     print(f"frames: {OUTDIR}", flush=True)
 
     if selftest:
-        # Inverted: with the defect injected the polar views MUST fail.
-        polar = [ok for n, ok, _ in results
-                 if n.startswith(("north_pole", "south_pole")) and "gap" in n]
-        if polar and not all(polar):
-            print("SELFTEST OK: the injected polar gap was detected.", flush=True)
+        # Inverted, and deliberately strict about WHERE. An earlier version
+        # accepted a failure from any polar check and passed on a single weak
+        # signal while north_pole_overhead -- the view aimed straight down at
+        # the defect -- reported everything fine. Requiring that view to notice
+        # is the whole point of pointing it there.
+        aimed = [(n, ok) for n, ok, _ in results
+                 if n.startswith("north_pole_overhead")]
+        caught = [n for n, ok in aimed if not ok]
+        if caught:
+            print(f"SELFTEST OK: the view aimed at the defect caught it "
+                  f"({', '.join(caught)}).", flush=True)
             return 0
-        print("SELFTEST FAILED: the suite did not notice a hole in the "
-              "planet. It cannot be trusted.", flush=True)
+        print("SELFTEST FAILED: the suite rendered a hole in the planet and "
+              "reported it as fine. It cannot be trusted.", flush=True)
         return 1
 
     return 1 if failed else 0
