@@ -45,3 +45,23 @@ web/data/ne_*.full.geojson
 # Visual test output. The committed reference frames live in
 # scripts/visual_reference/; this is the per-run capture and diff scratch.
 scripts/_visual_out/
+
+# ---- Native Android shell ---------------------------------------------------
+# The staging bundle and everything Capacitor or Gradle regenerates from it.
+# `py -V:3.13 scripts/android_build.py --api-base <url>` rebuilds all of it, so
+# committing 168 MB of copies of web/ would be storing the same bytes three
+# times: web/, dist/, and android/app/src/main/assets/public/.
+dist/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/build/
+android/build/
+android/.gradle/
+android/capacitor-cordova-android-plugins/
+# Machine-specific SDK path.
+android/local.properties
+node_modules/
+
+# Per-run phone captures. Nothing here is a reference frame.
+scripts/_phone_out/

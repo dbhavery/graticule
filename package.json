@@ -1,0 +1,20 @@
+{
+  "name": "graticule",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Native shell for Graticule. The app itself is web/; this exists only to wrap it.",
+  "scripts": {
+    "android": "py -V:3.13 scripts/android_build.py",
+    "sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/geolocation": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  }
+}

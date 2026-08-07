@@ -1000,3 +1000,36 @@ a permanently `disabled` Lightning switch, six inert product buttons, and a raw
 `0.70`. All true, none of it the operator's business. See the commit for the
 research this was judged against; the short version is that restraint is the
 premium signal in this category and a control has to earn its space.
+
+## 45. Two screen-capture paths both lied about the Android WebView (RESOLVED, instrument)
+`adb exec-out screencap` returns the globe region PURE BLACK (mean luma 0.64);
+DevTools `Page.captureScreenshot` returns a WHITE ELLIPSE OF HORIZONTAL
+SCANLINES. Neither is what the app draws. SurfaceFlinger cannot read back the
+WebView's hardware WebGL layer and the DevTools compositor resamples it into
+garbage. `gl.readPixels` on Cesium's own context straight after `scene.render()`
+shows the correct globe: Earth at night, coastlines, radar, city lights.
+Nearly three hours went into bisecting a shader that was never broken.
+Instrument: `scripts/apk_frame.py`, which carries a `--control` that hides the
+globe and requires the numbers to collapse.
+
+## 46. Playwright cannot drive an Android WebView (WORKAROUND)
+`connect_over_cdp` fails with `Browser.setDownloadBehavior: Browser context
+management is not supported` -- a WebView has no browser-level context.
+`scripts/apk_probe.py` speaks raw DevTools protocol to the page target instead.
+
+## 47. Capacitor 7 needs JDK 21; the JDK on PATH is 17 (RESOLVED)
+Gradle fails with `error: invalid source release: 21`, which names neither
+Capacitor nor the requirement. Android Studio's bundled JBR is 21;
+`scripts/android_build.py` finds it and sets JAVA_HOME.
+
+## 48. ANDROID_HOME on this machine is the literal string ':LOCALAPPDATA\Android\Sdk'
+An unexpanded variable that points nowhere. `android/local.properties` carries
+the real path and the build script drops the broken env var rather than let
+Gradle prefer it. Not fixed globally -- that is Don's environment, not this repo.
+
+## 49. A release APK must never point at a plain-http backend (GUARDED)
+`https://localhost` cannot call `http://...`: mixed content is decided by the
+PAGE's scheme before any socket opens, and no network-security-config can
+change it. capacitor.config.js drops the page to `http://localhost` when the
+backend is http, which is a DEVELOPMENT affordance only.
+`android_build.py --release` refuses any base that is not https.
