@@ -960,3 +960,43 @@ the Rockies and the Alps.
 before, constant now that the view swaps terrain automatically. Each call takes
 a generation ticket and a stale one discards its result. Found by the keyless
 suite failing, not by reading the code.
+
+---
+
+## 43. Every reload was running the previous build (**FIXED**)
+
+**This is why the pole was "still" broken.** Three sessions of fixes never
+reached the browser.
+
+`web/sw.js` routed every same-origin request, `app.js` included, through
+`staleWhileRevalidate`: serve the cached copy **now**, fetch the new one into
+the cache for next time. So a reload ran the **previous** build. Ship a fix,
+reload, watch the old code run, see the defect still on screen.
+
+Two things kept it hidden:
+
+* The file's own header comment claimed the shell was versioned cache-first and
+  "replaced wholesale on deploy". The fetch handler never implemented that, and
+  `VERSION` had not moved off `v3`, so the cache simply persisted.
+* `server.py` already sends `Cache-Control: no-store` on `/static/*`, which
+  makes it look handled. **It is not. Cache Storage ignores HTTP cache
+  headers** — a service worker sits above the HTTP cache, so nothing the server
+  sends can reach it.
+
+Code is now network-first with a 2.5 s timeout and cache fallback: current
+whenever the server answers, still working offline. `VERSION` → `v4`.
+
+`scripts/freshness_test.py` covers it: install the worker, change a file on
+disk, reload once, ask the page what it **ran**. Two wrong instruments on the
+way — a probe that re-fetched the file (passed even with the defect restored,
+because the background revalidate had already replaced the cache entry), and a
+control that hand-wrote a stale cache entry (unreachable under code-first).
+
+## 44. The radar pane showed the operator our engineering problems (**FIXED**)
+
+Two paragraphs explaining that the keyless NEXRAD service returns 503 above
+the lowest cut and that lightning needs a commercial Vaisala/Blitzortung feed,
+a permanently `disabled` Lightning switch, six inert product buttons, and a raw
+`0.70`. All true, none of it the operator's business. See the commit for the
+research this was judged against; the short version is that restraint is the
+premium signal in this category and a control has to earn its space.
