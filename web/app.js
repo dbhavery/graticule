@@ -302,6 +302,141 @@ const SETTINGS_KEY = 'graticule.settings.v1';
 // These must be declared ABOVE `settings` — loadSettings() runs inside its
 // initializer, so a const declared below would still be in its temporal dead
 // zone and throw before `let viewer` is ever reached.
+/* Are the border lines draped over the terrain, or drawn on the ellipsoid?
+ *
+ * They were draped. I unclamped them for performance and wrote down that it
+ * cost nothing to look at, because `depthTestAgainstTerrain` is false and a
+ * flat line therefore draws on top exactly the way a draped one does.
+ *
+ * That is true about OCCLUSION and false about POSITION, and Don found it:
+ * "why are the state and country borders not accurate when zoomed in".
+ *
+ * A line at ellipsoid height 0 under ground that is displaced upward by h
+ * projects to a different pixel than the ground beneath it as soon as the
+ * camera is off nadir. Measured at Four Corners, 1,477 m of terrain:
+ *
+ *     pitch -90   0.0 px      pitch -45   13.2 px
+ *     pitch -60   9.4 px      pitch -30   16.1 px
+ *
+ * Sixteen pixels of state line lying in the wrong valley. Overhead it is
+ * perfect, which is exactly why it survived every check.
+ *
+ * ---- And it follows the terrain gate, because that is what the A/B says ----
+ *
+ * Measured in one run, same viewport, same camera, 1200x800 under SwiftShader:
+ *
+ *                  orbit (terrain off)    zoomed to 39 km (terrain on)
+ *     clamped          1517 ms                    4367 ms
+ *     flat              617 ms                    4517 ms
+ *
+ * Draping costs 2.5x at orbit and NOTHING when zoomed in -- if anything it is
+ * marginally cheaper there, which is inside the noise. That is the opposite of
+ * the shape I assumed twice now.
+ *
+ * The reason is that a GroundPolylinePrimitive is built whether or not the
+ * terrain is real, and at orbit all 13,098 lines are on screen at once. Zoomed
+ * in, a handful are.
+ *
+ * And the error follows exactly the same curve inverted: at orbit the camera
+ * is near-nadir over an ellipsoid, so the offset is 0 px and draping buys
+ * nothing at all. So the lines are drawn flat while terrain is off and rebuilt
+ * draped when terrain attaches. The rebuild is a few hundred milliseconds on a
+ * transition that happens when you cross 1 Mm, against 900 ms per frame for
+ * the whole time you are above it.
+ *
+ * `?clamp=off` pins them flat for one load. Same pattern as `?terrain=off`:
+ * this trade has now been argued in both directions from bad measurements, so
+ * the next person gets to A/B it in one run instead of comparing numbers from
+ * two different sessions.
+ */
+const BORDER_CLAMP = new URLSearchParams(location.search).get('clamp') !== 'off';
+
+// The parsed GeoJSON, kept so a terrain transition re-drapes from memory
+// rather than re-fetching 9 MB. The download was always the expensive half.
+const borderGeo = { countries: null, states: null };
+// How the entities currently on screen were actually built, which is not the
+// same question as what is currently wanted.
+let bordersDrapedNow = false;
+
+function borderDrapeWanted() {
+  return BORDER_CLAMP && terrainIsReal;
+}
+
+/* Re-draping is a rebuild, because clampToGround is fixed at construction.
+ *
+ * Only the border LINES are touched. The labels are billboards positioned by
+ * lat/lon and never had this problem, and rebuilding them would make the
+ * country names flicker on every terrain transition for no reason. */
+function redrapeBorderLines(ds, geo, material, kind, ddc) {
+  if (!ds || !geo) return 0;
+  const clamp = borderDrapeWanted();
+  let n = 0;
+  ds.entities.suspendEvents();
+  try {
+    // Remove only what this function made, so labels and anything else that
+    // shares the data source survive.
+    for (const e of ds.entities.values.slice()) {
+      if (e.properties?.kind?.getValue?.() === kind) ds.entities.remove(e);
+    }
+    for (const f of (geo.features || [])) {
+      const coords = f.geometry?.coordinates;
+      if (!coords || coords.length < 2) continue;
+      const positions = coords
+        .filter((c) => typeof c[0] === 'number' && typeof c[1] === 'number')
+        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
+      if (positions.length < 2) continue;
+      ds.entities.add({
+        polyline: Object.assign(
+          { positions, width: 1.0, material, clampToGround: clamp },
+          ddc ? { distanceDisplayCondition: ddc } : {},
+        ),
+        properties: { kind, ...f.properties },
+      });
+      n++;
+    }
+  } finally {
+    ds.entities.resumeEvents();
+  }
+  return n;
+}
+
+const BORDER_LINE_STYLE = {
+  countries: { alpha: 0.45, kind: 'country_border', ddc: null },
+  states:    { alpha: 0.30, kind: 'state_border',
+               ddc: () => new Cesium.DistanceDisplayCondition(0, 8e6) },
+};
+
+let _redrapeTimer = null;
+
+function syncBorderDrape() {
+  if (!BORDER_CLAMP) return;
+  const want = borderDrapeWanted();
+  if (want === bordersDrapedNow) return;
+
+  // Debounced, and for the same reason the terrain gate is: crossing the
+  // altitude threshold while flying produces a burst of transitions, and
+  // rebuilding 13,098 polylines on each one would stall the frame that the
+  // rebuild exists to improve.
+  clearTimeout(_redrapeTimer);
+  _redrapeTimer = setTimeout(() => {
+    if (borderDrapeWanted() === bordersDrapedNow) return;
+    bordersDrapedNow = borderDrapeWanted();
+    let total = 0;
+    for (const [key, ds] of [['countries', countriesDS], ['states', statesDS]]) {
+      const style = BORDER_LINE_STYLE[key];
+      const material = new Cesium.ColorMaterialProperty(
+        Cesium.Color.fromCssColorString('#cbd5e1').withAlpha(style.alpha));
+      total += redrapeBorderLines(ds, borderGeo[key], material, style.kind,
+                                  style.ddc ? style.ddc() : null);
+    }
+    if (total) {
+      console.log(`Borders re-drawn ${bordersDrapedNow ? 'draped over terrain' : 'flat'}`
+                  + ` (${total} lines)`);
+    }
+    window.__graticule_borders = { draped: bordersDrapedNow, lines: total };
+  }, 300);
+}
+
 const RENDER_EPOCH = 2;
 const EPOCH_KEYS = ['hdr', 'atmosIntensity'];
 
@@ -326,6 +461,10 @@ const settings = Object.assign({
   terrain: true,                    // real elevation, keyless — see attachTerrain
   lensFlare: true,                  // sun glow when the star is in frame
   lockNorthAmerica: true,           // hold NA centred; let the sun sweep across
+  // Open where the user is standing, not where the developer lives.
+  // North America framing stays the FALLBACK, for a denied permission, a
+  // desktop with no fix, or a first paint that beats the GPS to it.
+  startAtLocation: true,
   atmosIntensity: 5,
   vignetteIntensity: 0.5,
   idleRotateSec: 0,                 // 0 = disabled (NA lock owns the camera)
@@ -2581,6 +2720,7 @@ async function applyTerrain(on) {
   if (!on) {
     viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
     terrainIsReal = false;
+    syncBorderDrape();
     return;
   }
   try {
@@ -2588,6 +2728,7 @@ async function applyTerrain(on) {
     if (gen !== _terrainGen) return;          // superseded while loading
     viewer.terrainProvider = provider;
     terrainIsReal = true;
+    syncBorderDrape();
   } catch (e) {
     if (gen !== _terrainGen) return;
     // A dead terrain service must not cost the user their map. The ellipsoid is
@@ -2595,6 +2736,7 @@ async function applyTerrain(on) {
     console.warn('Terrain unavailable, staying on the ellipsoid:', e);
     viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
     terrainIsReal = false;
+    syncBorderDrape();
   }
 }
 
@@ -2981,6 +3123,7 @@ async function buildCountries() {
     ]);
     const borders = await bordersRes.json();
     const labels  = await labelsRes.json();
+    borderGeo.countries = borders;
 
     // Lighter slate at moderate alpha — visible over satellite imagery without
     // shouting. Tuned by eye against ESRI World Imagery + Cesium ion Bing.
@@ -2996,19 +3139,9 @@ async function buildCountries() {
       if (positions.length < 2) continue;
       countriesDS.entities.add({
         polyline: {
-          /* NOT clampToGround. Ground-clamping builds draped geometry that has
-             to be recomputed against terrain tiles, and there are 8,037 of
-             these plus 5,061 state lines. Measured with the camera moving, the
-             median frame went 6137 ms with terrain and borders on against
-             2570 ms with borders off -- while WITHOUT terrain the same borders
-             cost only 1106 vs 964. Borders are nearly free on their own; it is
-             the draping that is expensive.
-
-             And it bought nothing to look at: `depthTestAgainstTerrain` is
-             false by deliberate design a few hundred lines up, so an operational
-             symbol is never occluded by a ridge. A plain polyline at height 0
-             therefore draws on top exactly the same way a draped one does. */
-          positions, width: 1.0, material: lineMaterial, clampToGround: false,
+          /* clampToGround, and the reasoning that removed it was half right.
+             See BORDER_CLAMP for the whole argument. */
+          positions, width: 1.0, material: lineMaterial, clampToGround: borderDrapeWanted(),
         },
         properties: { kind: 'country_border', ...f.properties },
       });
@@ -3079,6 +3212,7 @@ async function buildStates() {
     ]);
     const borders = await bordersRes.json();
     const labels  = await labelsRes.json();
+    borderGeo.states = borders;
 
     // Quieter than country borders — half the alpha so they don't compete.
     const lineColor    = Cesium.Color.fromCssColorString('#cbd5e1').withAlpha(0.30);
@@ -3093,8 +3227,8 @@ async function buildStates() {
       if (positions.length < 2) continue;
       statesDS.entities.add({
         polyline: {
-          // Not ground-clamped, same reason as the country borders above.
-          positions, width: 1.0, material: lineMaterial, clampToGround: false,
+          // Ground-clamped, same reason as the country borders above.
+          positions, width: 1.0, material: lineMaterial, clampToGround: borderDrapeWanted(),
           // States only readable at regional zoom — hide when very far
           distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 8e6),
         },
@@ -12327,6 +12461,257 @@ function sheetGo(i) {
   syncRailScrollEdges();
 }
 
+/* A transient line of text, bottom centre, gone in a few seconds.
+ *
+ * The app already has two ways to say something: `setStatus` for the feed
+ * health dot, and `pushEvent` for the timeline. Neither fits "press back again
+ * to leave" -- one is a permanent indicator and the other is a log of things
+ * that happened in the world, not in the UI. */
+let _toastTimer = null;
+
+function toast(text, ms = 2400) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add('is-on');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('is-on'), ms);
+}
+
+/* ---------- Android's back button --------------------------------------- *
+ *
+ * On Android, back is the universal "undo the last thing that appeared". An
+ * app that exits instead is the single loudest tell that it is a web page in a
+ * box, and it is the first thing a store reviewer does.
+ *
+ * Everything dismissable is listed here in the order it stacks, most modal
+ * first, and one press closes exactly one layer. Only when nothing is open
+ * does back mean leave, and even then it asks once: this app is what somebody
+ * has open while they watch a storm, so dropping out on a stray thumb is a
+ * real cost.
+ *
+ * The list is deliberately explicit rather than "close whatever is not
+ * .hidden". A generic sweep would also close the alert banner and the rail,
+ * which are not layers a user opened.
+ */
+const BACK_LAYERS = [
+  // id of the element whose .hidden says whether it is open, and how to close it
+  { id: 'palette',      close: () => palClose() },
+  { id: 'worlddash',    close: () => closeWorldDash() },
+  { id: 'dashboard',    close: (el) => el.classList.add('hidden') },
+  { id: 'panel',        close: (el) => el.classList.add('hidden') },
+  { id: 'alerts-panel', close: (el) => el.classList.add('hidden') },
+];
+
+function dismissTopLayer() {
+  for (const layer of BACK_LAYERS) {
+    const el = document.getElementById(layer.id);
+    if (!el || el.classList.contains('hidden')) continue;
+    try { layer.close(el); } catch { el.classList.add('hidden'); }
+    return true;
+  }
+  if (settings.presenting) { applyPresenting(false); return true; }
+  // The sheet is a layer too: opened to full, back should step it down rather
+  // than leave the app from a screen that is mostly panel.
+  if (isPhone() && SHEET.at > 0) { sheetGo(SHEET.at - 1); return true; }
+  return false;
+}
+
+let _backExitArmed = 0;
+
+function initHardwareBack() {
+  const App = window.Capacitor?.Plugins?.App;
+  if (!App?.addListener) return;      // web build: the browser's own back is right
+
+  App.addListener('backButton', () => {
+    if (dismissTopLayer()) return;
+
+    // Nothing left to close. Ask once rather than drop out of a radar loop.
+    const now = performance.now();
+    if (now - _backExitArmed < 2500) {
+      App.exitApp();
+      return;
+    }
+    _backExitArmed = now;
+    toast('Press back again to leave Graticule');
+  });
+
+  window.__graticule_back = { dismissTopLayer, layers: BACK_LAYERS.map((l) => l.id) };
+}
+
+/* ---------- Where am I --------------------------------------------------- *
+ *
+ * The first thing anybody does with a weather app on a phone is find out what
+ * is happening where they are standing, and until now there was no way to ask.
+ * Search existed, which means typing a place name into an app that is running
+ * on a device that knows the answer.
+ *
+ * navigator.geolocation rather than the Capacitor plugin: the plugin exists to
+ * paper over browsers that lack it, and this WebView does not. Using the
+ * standard API means this same code is what runs on the web, so there is one
+ * path to get wrong instead of two. The plugin stays a dependency only because
+ * it is what puts ACCESS_FINE_LOCATION into the merged manifest.
+ */
+const LOCATE_ALTITUDE_M = 140_000;   // county-scale: a storm and its neighbours
+
+let _locating = false;
+
+function locateMe() {
+  if (_locating || !viewer) return;
+  if (!navigator.geolocation) {
+    toast('This device cannot report a location');
+    return;
+  }
+  const btn = document.getElementById('locate-btn');
+  _locating = true;
+  btn?.classList.add('is-busy');
+  btn?.setAttribute('aria-busy', 'true');
+
+  const done = () => {
+    _locating = false;
+    btn?.classList.remove('is-busy');
+    btn?.removeAttribute('aria-busy');
+  };
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      done();
+      const { latitude, longitude } = pos.coords;
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, LOCATE_ALTITUDE_M),
+        duration: 1.6,
+      });
+      showHere(latitude, longitude, pos.coords.accuracy);
+      // On a phone the sheet is usually covering the map you just flew to.
+      if (isPhone() && SHEET.at > 0) sheetGo(0);
+    },
+    (err) => {
+      done();
+      // PERMISSION_DENIED is a decision, not a fault: say what it means for
+      // the app and stop, rather than repeating the browser's error text.
+      toast(err.code === err.PERMISSION_DENIED
+        ? 'Location is off for Graticule. Turn it on in Settings to jump to where you are.'
+        : 'Could not get a location fix. Try again with a clearer view of the sky.');
+    },
+    { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 },
+  );
+}
+
+let hereEntity = null;
+
+function showHere(lat, lon, accuracyM) {
+  if (!viewer) return;
+  if (hereEntity) viewer.entities.remove(hereEntity);
+  hereEntity = viewer.entities.add({
+    name: 'Your location',
+    position: Cesium.Cartesian3.fromDegrees(lon, lat),
+    point: {
+      pixelSize: 12,
+      color: Cesium.Color.fromCssColorString('#4dd2ff'),
+      outlineColor: Cesium.Color.WHITE,
+      outlineWidth: 2,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+    // The accuracy circle is the honest part. A single dot claims a precision
+    // a phone does not have, and on a weather map the difference between
+    // "this county" and "somewhere within 3 km" changes what you do.
+    ellipse: Number.isFinite(accuracyM) && accuracyM > 50 ? {
+      semiMajorAxis: accuracyM,
+      semiMinorAxis: accuracyM,
+      material: Cesium.Color.fromCssColorString('#4dd2ff').withAlpha(0.12),
+      outline: true,
+      outlineColor: Cesium.Color.fromCssColorString('#4dd2ff').withAlpha(0.5),
+    } : undefined,
+  });
+}
+
+function initLocate() {
+  const btn = document.getElementById('locate-btn');
+  if (btn) btn.addEventListener('click', locateMe);
+}
+
+/* ---------- Open where the user is standing ------------------------------- *
+ *
+ * The app framed North America on every launch, which is the right answer for
+ * exactly one continent and reads as a demo everywhere else. On a phone it is
+ * worse than wrong: the device knows the answer and the app was asking the
+ * user to type it.
+ *
+ * The North America frame is still what gets drawn first. It is instant, it
+ * needs no permission, and it means the globe is never empty while a GPS warms
+ * up. The location moves the camera when and if it arrives.
+ *
+ * Ordering matters. The permission is queried before it is requested, so:
+ *   granted  -> move the camera silently, no dialog, no interruption
+ *   prompt   -> ask, because a weather app asking for location at launch is
+ *               the expected moment and any later one is worse
+ *   denied   -> do nothing at all. Never re-ask; the button is still there.
+ */
+const START_LOCATION_ALT_M = 900_000;   // the region, not the street
+
+// A cold GPS fix on a real phone takes 15-30 s, and the first draft gave it 9.
+// The cost of waiting is nothing -- North America is already on screen and the
+// user can pan away at any moment, which cancels this outright.
+const START_LOCATION_TIMEOUT_MS = 30_000;
+
+/* Did the user take the wheel?
+ *
+ * The first version compared `camera.positionWC` against its value at boot.
+ * That is wrong here for a reason specific to this app: `lockNorthAmerica`
+ * holds the frame while the earth turns underneath, so the camera moves on its
+ * own and the guard would read every launch as "the user moved it" and never
+ * fly anywhere.
+ *
+ * A real interaction is an input event on the canvas. Nothing else sets this. */
+let _userMovedCamera = false;
+
+function watchForUserCameraInput() {
+  const canvas = viewer?.canvas;
+  if (!canvas) return;
+  const seen = () => { _userMovedCamera = true; };
+  for (const ev of ['pointerdown', 'wheel', 'touchstart', 'keydown']) {
+    canvas.addEventListener(ev, seen, { once: true, passive: true });
+  }
+}
+
+async function initStartAtLocation() {
+  if (!settings.startAtLocation || !navigator.geolocation || !viewer) return;
+
+  watchForUserCameraInput();
+
+  try {
+    const st = await navigator.permissions?.query({ name: 'geolocation' });
+    if (st && st.state === 'denied') return;
+  } catch {
+    // Permissions API missing or geolocation not queryable. Fall through and
+    // let getCurrentPosition be the thing that asks.
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      if (!viewer || _userMovedCamera) return;   // they took the wheel while we waited
+      const { latitude, longitude } = pos.coords;
+      // The North America lock owns the camera when it is on, and would drag
+      // the view straight back off the user's location.
+      settings.lockNorthAmerica = false;
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, START_LOCATION_ALT_M),
+        duration: 2.2,
+      });
+      showHere(latitude, longitude, pos.coords.accuracy);
+      window.__graticule_started_at_location = true;
+    },
+    () => { /* denied, timed out, or no fix. The North America frame stands. */ },
+    { enableHighAccuracy: false, timeout: START_LOCATION_TIMEOUT_MS, maximumAge: 300_000 },
+  );
+}
+
 function initSheet() {
   const head = document.getElementById('rail-head');
   if (!head) return;
@@ -12632,5 +13017,8 @@ function initWeatherfrontShell() {
   initRailScrollEdges();
   initSheet();
   initCommandPalette();
+  initLocate();
+  initHardwareBack();
+  initStartAtLocation();
   syncRailTitle();
 }

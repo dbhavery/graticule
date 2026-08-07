@@ -4837,3 +4837,82 @@ div[data-requires].is-off .wf-item.is-active {
    The translate stays: arriving 8px low is cosmetic. */
 #alerts-panel { transition: transform 200ms cubic-bezier(.17,.84,.44,1); }
 #alerts-panel.hidden { visibility: hidden; opacity: 0; }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   PHONE: the two things a native app has and this one did not
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* ---- Where am I ----
+   Bottom right, clear of the sheet at its peek detent, clear of the home
+   indicator. 48px because Material's floor is 48dp and this is the one control
+   somebody presses while walking. */
+#locate-btn {
+  position: fixed;
+  right: 12px;
+  bottom: calc(var(--sheet-peek, 96px) + 16px + env(safe-area-inset-bottom, 0px));
+  z-index: 35;
+  width: 48px; height: 48px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--ctl-border);
+  background: rgba(11, 14, 19, 0.86);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+#locate-btn svg { width: 22px; height: 22px; }
+#locate-btn:active { background: rgba(30, 39, 51, 0.94); }
+
+/* Busy is a colour change, not a spin. A CSS animation here would be the
+   fifth thing in this app to stall behind Cesium's main-thread rendering and
+   sit frozen mid-turn, which reads as broken rather than as working. */
+#locate-btn.is-busy { color: var(--accent, #4dd2ff); border-color: var(--accent, #4dd2ff); }
+
+/* On a desktop the sheet does not exist, so the token above resolves to
+   nothing useful and the button would sit on the bottom edge. */
+@media (min-width: 781px) and (min-height: 501px) {
+  #locate-btn { bottom: 20px; right: 20px; }
+}
+
+/* ---- Transient message ----
+   Above the sheet, never over the alert banner, and it cannot be interacted
+   with: a toast that can take a tap is a toast that eats one. */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--sheet-peek, 96px) + 72px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(88vw, 420px);
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--ctl-border);
+  background: rgba(11, 14, 19, 0.94);
+  color: var(--text);
+  font-size: var(--fs-base);
+  line-height: 1.4;
+  text-align: center;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+}
+#toast.is-on { visibility: visible; opacity: 1; }
+
+/* ---- The rail's last row was printed over ----
+   `#hud-fade-bot` is a 34px gradient pinned to the bottom of the scroll box to
+   say "there is more below". It is an overlay, so whatever the content ends on
+   sits UNDER it permanently: in World that put the word MORE straight through
+   the live population counter, which is the same defect as a name overprinted
+   by a role line. The content now ends above it. */
+#hud-panes { padding-bottom: 38px; }
+
+@media (max-width: 780px), (max-height: 500px) {
+  /* Two and four maps side by side on a 412px screen gives each one 206px or
+     103px. That is not a smaller version of the desktop feature, it is a
+     control that cannot produce a usable result, and it was taking a row of
+     the sheet to say so. One map is the only honest option here, so the
+     choice does not appear. `Present` stays: hiding the chrome to get the
+     whole screen back is MORE useful on a phone, not less. */
+  #panebar { display: none; }
+}

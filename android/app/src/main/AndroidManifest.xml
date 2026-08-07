@@ -39,4 +39,21 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Location. Declared here rather than left to the plugin's manifest
+         merge, because a store listing has to justify every permission and an
+         invisible one is a permission nobody reviewed.
+
+         COARSE is what this app actually needs: it opens on your region and
+         tells you what the weather is doing around you, and a county is the
+         smallest unit any of that data has. FINE is requested too because the
+         accuracy circle on the map is honest only if the fix is, and a 3 km
+         circle over a tornado warning is the difference between "us" and
+         "not us".
+
+         Neither is required to launch: `android:required="false"` on the
+         feature keeps the app installable on a device with no GPS at all. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 </manifest>

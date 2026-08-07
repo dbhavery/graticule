@@ -48,6 +48,22 @@
 <body>
   <div id="cesiumContainer"></div>
 
+  <!-- Where am I.
+       The first thing anyone does with a weather app on a phone is find out
+       what is happening where they are standing, and until now the only way to
+       ask was to type a place name into an app running on a device that
+       already knows. Bottom right, above the sheet, thumb-reachable: the
+       position every mapping app converges on because it is the one a right
+       thumb reaches without regripping. -->
+  <button id="locate-btn" aria-label="Show my location" title="Show my location">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+      <circle cx="12" cy="12" r="1.6" fill="currentColor"/>
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </button>
+
   <!-- Pane grid. Cell 0 is deliberately empty so the live globe shows through
        it; cells 1..n hold snapshot canvases. -->
   <div id="panegrid" class="hidden"></div>

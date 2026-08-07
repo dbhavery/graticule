@@ -8,13 +8,33 @@ that follows stalled the main thread for 5-9 s at boot. That is the whole
 reason the reference lines could not be defaulted on, which in turn is why
 radar drew over an unlabelled globe.
 
-Two lossless-at-render reductions:
-  * Douglas-Peucker at 0.002 degrees. 220 m at the equator -- sub-pixel until
-    the camera is below roughly 200 km, and these layers already stop drawing
-    at 8 Mm.
-  * Coordinates rounded to 5 decimals. 1.1 m, well under the source data's own
-    accuracy, and it is where most of the bytes are: 40.9 bytes per coordinate
-    before, because float64 repr writes 15 significant digits.
+One reduction, not two. Coordinates are rounded to 5 decimals: 1.1 m, well
+under the source data's own accuracy, and it is where nearly all of the bytes
+were -- 40.9 bytes per coordinate before, because float64 repr writes 15
+significant digits.
+
+---- The Douglas-Peucker pass is gone, and it should never have been here ----
+
+It ran at 0.002 degrees and the docstring justified that as "sub-pixel until
+the camera is below roughly 200 km". True, and irrelevant: people zoom in.
+Below 200 km it is not sub-pixel, and at city zoom a 223 m displacement is tens
+of pixels of border sitting in the wrong place. Don reported exactly that.
+
+What made it a bad trade was never measured until now:
+
+    tolerance   max error   country verts   state verts   total MB
+      0.002        223 m       74.4%          82.6%          6.8
+      0.0                       100%           100%          8.3
+
+The whole pass was buying 1.5 MB and charging 223 m of accuracy for it, on a
+map whose entire job is showing you where things are. Those megabytes are also
+bundled inside the APK now, where they are paid once at install rather than on
+every load.
+
+The real cost was never the vertex count anyway: it was `clampToGround: true`
+on 13,098 polylines, which compiled ground geometry against live terrain tiles
+and cost 10x the frame rate. That is fixed at the source, and terrain is now
+gated by altitude, so vertices are cheap again.
 
 Run from the repo root:  py -V:3.13 scripts/slim_boundaries.py
 Writes <name>.geojson in place after saving <name>.full.geojson beside it.
@@ -27,7 +47,10 @@ from pathlib import Path
 
 DATA = Path(__file__).resolve().parents[1] / "web" / "data"
 FILES = ["ne_country_borders", "ne_state_borders"]
-TOLERANCE = 0.002   # degrees
+# 0 disables the simplify pass entirely. Kept as a knob rather than deleted,
+# because the measurement above is what justifies the value and a future
+# payload problem should have to re-argue it against these numbers.
+TOLERANCE = 0.0   # degrees; see the note above before raising this
 DECIMALS = 5
 
 
@@ -48,6 +71,12 @@ def simplify(points, tol):
     of these lines run tens of thousands of points and Python's stack is not
     that deep."""
     if len(points) < 3:
+        return points
+    # tol 0 means "keep every vertex". Falling through would still drop points
+    # that are EXACTLY collinear, and on data that is mostly meridians and
+    # parallels -- which is most of the western United States -- that is a
+    # large and silent fraction.
+    if tol <= 0:
         return points
     tol2 = tol * tol
     keep = [False] * len(points)
