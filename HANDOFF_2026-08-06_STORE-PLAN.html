@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graticule store plan, 2026-08-06</title>
+<style>
+  :root{--bg:#0b0e13;--panel:#11161e;--line:#1e2733;--ink:#e6edf5;--dim:#93a2b5;
+        --accent:#ff5e00;--ok:#4ade80;--bad:#f87171;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:48px 24px 96px;background:var(--bg);color:var(--ink);
+       font:16px/1.65 "Inter",system-ui,-apple-system,Segoe UI,sans-serif;}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:30px;line-height:1.2;margin:0 0 4px;letter-spacing:-.02em}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--dim);margin:0 0 36px;font-size:15px}
+  h2{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+     margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);font-weight:600;}
+  h3{font-size:17px;margin:24px 0 8px;font-weight:600}
+  p{margin:0 0 14px}
+  ul,ol{margin:0 0 16px;padding-left:22px} li{margin:0 0 8px}
+  code{background:#0e141c;border:1px solid var(--line);border-radius:4px;padding:1px 6px;
+       font:13px/1.4 ui-monospace,Consolas,monospace;color:#cfe3ff;}
+  table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:18px 22px;margin:0 0 18px}
+  .flag{border-left:3px solid var(--accent)}
+  .warn{color:var(--bad)} .good{color:var(--ok)}
+  .lead{font-size:17px}.meta{color:var(--dim);font-size:13.5px}
+  .num{font-variant-numeric:tabular-nums}
+  .you{background:#1a1206;border-left:3px solid var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Graticule store plan <span>2026-08-06</span></h1>
+<p class="sub">Branch <code>dev</code>, synced, tree clean, HEAD <code>a27c723</code>. Answer to "is it ready for the stores": no, and here is exactly what it takes.</p>
+
+<div class="card flag">
+  <p class="lead" style="margin:0 0 10px"><strong>Hard-refresh the app once (Ctrl+Shift+R).</strong></p>
+  <p class="meta" style="margin:0">Until you do, you are still running the build from before today. The service worker was serving cached JavaScript on every reload, which is why the pole looked unfixed for two days.</p>
+</div>
+
+<h2>What is actually blocking a store listing</h2>
+<p>Four things. Two of them are yours, not mine.</p>
+
+<table>
+  <tr><th>Blocker</th><th>Status</th><th>Whose call</th></tr>
+  <tr><td>The backend lives on your PC</td><td class="warn">Blocking everything</td><td><strong>Yours</strong>, recurring cost</td></tr>
+  <tr><td>Airspace data is non-commercial licensed</td><td class="warn">Legal, must resolve first</td><td>Mine to fix</td></tr>
+  <tr><td>No native shell exists</td><td>Real work, unblocked once hosted</td><td>Mine</td></tr>
+  <tr><td>Developer accounts</td><td class="warn">$99/yr Apple, $25 Google</td><td><strong>Yours</strong>, your identity</td></tr>
+</table>
+
+<h2>The one decision I need from you</h2>
+<div class="card you">
+  <p style="margin:0 0 10px"><strong>Where does the backend live, and who pays for it?</strong></p>
+  <p class="meta" style="margin:0 0 12px">A phone app pointed at 127.0.0.1 shows a blank screen. The app makes 11 different calls to your desktop server for radar, alerts, ships, aircraft, fires and rivers. Nothing else can start until this is answered.</p>
+  <table style="margin:0">
+    <tr><th>Option</th><th>Monthly</th><th>Notes</th></tr>
+    <tr><td>Fly.io or Railway</td><td class="num">$5 to $15</td><td>Simplest. The Python server runs as-is.</td></tr>
+    <tr><td>A small VPS (Hetzner, DigitalOcean)</td><td class="num">$6 to $12</td><td>More control, more upkeep.</td></tr>
+    <tr><td>Serverless</td><td>varies</td><td>Poor fit. The feeds are long-running loops.</td></tr>
+  </table>
+</div>
+<p class="meta">I have not signed up for anything or entered a card. Tell me which one and I will do the port, the CORS, and the rate discipline properly.</p>
+
+<h2>The licensing problem, which I would look at hardest</h2>
+<p>The airspace and airport data is OpenAIP, licensed <strong>CC-BY-NC-SA</strong>. Non-commercial, share-alike. Your own <code>.gitignore</code> already says "redistribution restricted" next to it.</p>
+<p>A store listing is distribution, and the non-commercial clause applies whether or not the app is free. This has to be resolved before submission, not after a rejection.</p>
+<p><strong>The fix is free and public domain:</strong> the FAA publishes airports, navaids and airspace on a 28-day cycle with no restrictions. It is real work because the format is fixed-width government data rather than GeoJSON, but it removes the problem permanently. I can do this without needing anything from you.</p>
+
+<h2>What I will do while waiting on your answer</h2>
+<ol>
+  <li><strong class="warn">The 31-second rivers call.</strong> 11,602 gauges fetched in one go. No store reviewer waits 31 seconds. Cache or filter by view.</li>
+  <li><strong class="warn">The 175,000-point wildfire payload</strong> pushed over the socket in one message.</li>
+  <li><strong>Replace the OpenAIP data with FAA sources</strong>, clearing the legal blocker.</li>
+  <li><strong>Write the privacy policy and support page.</strong> Both are mandatory listing fields and neither exists. The honest answer is close to "we collect nothing" and that is worth saying plainly.</li>
+</ol>
+
+<h2>One thing you should know about the Apple side</h2>
+<p>Submitting to the App Store <strong>requires a Mac</strong> to build and sign. You do not have one. That is not a small footnote, it is a purchase or a rented build service before anything reaches iOS. Google Play has no such requirement, so Android can ship first and probably should.</p>
+
+<h2>What got fixed today</h2>
+<p>Four commits, and the first explains the rest.</p>
+<h3>Your browser was running two-day-old code</h3>
+<p>The service worker served cached JavaScript first and fetched the update for next time, so every reload ran the previous build. Three rounds of verified fixes never reached you. The server was already sending no-cache headers, which made it look handled, but a service worker sits above the HTTP cache and ignores them entirely.</p>
+<h3>The white disc was a hole through the planet</h3>
+<p>Not a missing map layer. The free elevation service stops at 85 degrees, and terrain defines the globe's whole surface structure, so above that latitude there was no ground at all and you were seeing the sky on the far side. The poles now use a smooth sphere past 84 degrees.</p>
+<h3>Terrain was costing 10x the frame rate</h3>
+<p>Measured with the camera moving: 6137 ms per frame with terrain and borders on, 964 ms with neither. Terrain now loads on the way down, and 13,098 border lines stopped being draped over terrain for no visible benefit. <strong>Default view: 6137 ms to 569 ms.</strong></p>
+<h3>The radar panel was showing you our engineering problems</h3>
+<p>Two paragraphs about HTTP 503 responses and commercial lightning feeds, a switch that could never be turned on, and six buttons that did nothing. All gone.</p>
+
+<h2>Honest verdict</h2>
+<p>The app is in good shape as an app. It is not in any shape as a product you can list, and the gap is not the globe: it is hosting, licensing, a native shell, two developer accounts and a Mac.</p>
+<p>Android first is the cheaper, faster path and I would take it.</p>
+
+<p class="meta" style="margin-top:40px">Full engineering detail, the verification commands, and the list of traps that are measured rather than assumed, are in the file beside this one in the repo.</p>
+
+</div>
+</body>
+</html>
