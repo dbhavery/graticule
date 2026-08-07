@@ -1033,3 +1033,27 @@ PAGE's scheme before any socket opens, and no network-security-config can
 change it. capacitor.config.js drops the page to `http://localhost` when the
 backend is http, which is a DEVELOPMENT affordance only.
 `android_build.py --release` refuses any base that is not https.
+
+## 50. Hardware back still exits the app on the emulator (OPEN, store blocker)
+`initHardwareBack` now retries for the Capacitor App plugin instead of testing
+once and silently returning, but a single back press with the command palette
+open still exits. Not yet root-caused. Prime suspect is issue 51: the DevTools
+probe times out during the same window, so the JS thread is blocked and the
+listener may not be attached when the key arrives.
+Reproduce: install, launch, wait 60 s, open the palette, `adb shell input
+keyevent KEYCODE_BACK`, then check `adb shell dumpsys window | grep mCurrentFocus`.
+
+## 51. Boot blocks the main thread for ~8 seconds building borders (OPEN, "fast")
+Measured at 412x915 with a longtask PerformanceObserver: 16-18 long tasks,
+8.0-8.8 s total blocking, worst single task 4.0-4.2 s. Identical with
+`?clamp=off`, so it is the 395,238 vertices, not the draping. Removing the
+0.002-degree decimation (issue: borders were 223 m out) raised the vertex count
+17-26%, so this got worse rather than being introduced.
+The fix is not to put the decimation back. Candidates: build the entities in
+chunks across frames, build in a worker, or ship the borders as a tiled vector
+source so only what is on screen is ever turned into entities.
+
+## 52. The desktop-Chromium suites cannot see either of the above
+All five suites pass (109 checks) with both defects present. They measure
+layout, state and pixels on a machine with no back button, and none of them
+watches main-thread blocking. A phone-shaped viewport is not a phone.

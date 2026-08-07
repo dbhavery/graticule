@@ -12525,9 +12525,38 @@ function dismissTopLayer() {
 
 let _backExitArmed = 0;
 
-function initHardwareBack() {
+/* The registration has to WAIT for the plugin, not test for it once.
+ *
+ * The first version read window.Capacitor.Plugins.App at shell-init time and
+ * returned silently when it was not there yet. On a real device it was not
+ * there yet: the bridge populates the plugin registry asynchronously, so the
+ * check ran too early, no listener was ever attached, and Capacitor's default
+ * back behaviour -- exit -- was what actually ran. Pressing back once closed
+ * the whole app with a dialog open.
+ *
+ * Silently returning is what made it survive: on the web build that early
+ * return is CORRECT, so "no listener" looks like the intended path in both
+ * cases. It now retries, and says so when it gives up.
+ */
+const BACK_PLUGIN_TRIES = 40;      // 40 x 150 ms = 6 s, far past bridge startup
+const BACK_PLUGIN_INTERVAL_MS = 150;
+
+function initHardwareBack(attempt = 0) {
+  // Not a native shell at all. window.Capacitor is injected by the bridge
+  // before any page script runs, so its ABSENCE is decidable immediately even
+  // though the plugin registry is not.
+  if (!window.Capacitor?.isNativePlatform?.()) return;
+
   const App = window.Capacitor?.Plugins?.App;
-  if (!App?.addListener) return;      // web build: the browser's own back is right
+  if (!App?.addListener) {
+    if (attempt < BACK_PLUGIN_TRIES) {
+      setTimeout(() => initHardwareBack(attempt + 1), BACK_PLUGIN_INTERVAL_MS);
+    } else {
+      console.error('Capacitor App plugin never appeared: the hardware back '
+                    + 'button will exit the app instead of closing what is open.');
+    }
+    return;
+  }
 
   App.addListener('backButton', () => {
     if (dismissTopLayer()) return;
