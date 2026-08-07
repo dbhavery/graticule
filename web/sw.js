@@ -8,8 +8,11 @@
  *
  * Three strategies, chosen per request by what the thing actually is:
  *
- *   shell      cache-first, precached at install. app.js, style.css, the
- *              document, icons. Versioned, so a deploy replaces it wholesale.
+ *   code       NETWORK-FIRST with a short timeout. app.js, style.css, the
+ *              document, the manifest. See the long note on CODE_TIMEOUT_MS:
+ *              this used to be stale-while-revalidate, which meant every load
+ *              ran the PREVIOUS build.
+ *   shell      cache-first for the rest. Icons, fonts, prebuilt geojson.
  *   tiles      stale-while-revalidate with a cap. Map tiles are immutable for
  *              a given z/x/y and expensive to fetch twice.
  *   live data  network-first with a short timeout, falling back to cache and
@@ -19,13 +22,64 @@
  * from /api/ that came back an error.
  */
 
-const VERSION = 'graticule-v3';
+// v4: v3 shipped the app's own JavaScript through stale-while-revalidate, so
+// every browser that had ever loaded the app ran the PREVIOUS build until it
+// was reloaded a second time. Bumped so those caches are dropped on activate.
+const VERSION = 'graticule-v4';
 const SHELL = `${VERSION}-shell`;
 const TILES = `${VERSION}-tiles`;
 const DATA  = `${VERSION}-data`;
 
 const TILE_CAP = 600;          // roughly a few full screens at two zoom levels
 const DATA_TIMEOUT_MS = 4500;  // past this, whatever we have beats a spinner
+
+/* ---- Why the app's own code is network-first -------------------------------
+ *
+ * This is the bug that made three sessions of fixes invisible. Every
+ * same-origin request, app.js included, went through staleWhileRevalidate:
+ * serve the cached copy NOW, fetch the new one into the cache for next time.
+ * So every load ran the previous build. A fix shipped, the page was reloaded,
+ * the old code ran, the defect was still on screen, and the only evidence was
+ * that it had "not been fixed".
+ *
+ * Two things hid it:
+ *   * The header comment above claimed the shell was versioned cache-first and
+ *     replaced wholesale on deploy. The fetch handler never implemented that,
+ *     and VERSION had not changed since v3, so the cache simply persisted.
+ *   * The server already sends `Cache-Control: no-store` on /static/*, which
+ *     looks like the problem is handled. It is not: **Cache Storage ignores
+ *     HTTP cache headers.** caches.put stores what it is given and caches.match
+ *     hands it back. A service worker sits ABOVE the HTTP cache, so no header
+ *     the server sends can reach it.
+ *
+ * Code is now fetched first and only falls back to cache when the network does
+ * not answer, which keeps the offline guarantee without ever running a build
+ * the server has replaced. 2.5s, because on a working connection this costs
+ * nothing and on a dead one the cached build is the right answer.
+ */
+const CODE_TIMEOUT_MS = 2500;
+
+function isCode(url) {
+  const p = url.pathname;
+  return p === '/' || p.endsWith('.js') || p.endsWith('.css')
+      || p.endsWith('.html') || p.endsWith('.webmanifest');
+}
+
+async function codeFirst(req) {
+  const cache = await caches.open(SHELL);
+  try {
+    const res = await Promise.race([
+      fetch(new Request(req.url, { cache: 'no-store', credentials: 'same-origin' })),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), CODE_TIMEOUT_MS)),
+    ]);
+    if (res && res.ok) cache.put(req, res.clone());
+    return res;
+  } catch {
+    const hit = await cache.match(req);
+    if (hit) return hit;
+    return new Response('', { status: 504 });
+  }
+}
 
 const SHELL_URLS = [
   '/',
@@ -170,6 +224,11 @@ self.addEventListener('fetch', (e) => {
 
   if (isTile(url)) {
     e.respondWith(staleWhileRevalidate(req, TILES, TILE_CAP));
+    return;
+  }
+
+  if (url.origin === self.location.origin && isCode(url)) {
+    e.respondWith(codeFirst(req));
     return;
   }
 
