@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -84,6 +85,41 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 # 4096 bytes is above every small JSON response we emit, so the CPU cost lands
 # only on payloads where it buys something.
 app.add_middleware(GZipMiddleware, minimum_size=4096)
+
+# The native builds are not same-origin with this server and never can be.
+# Android's WebView serves the app from https://localhost and iOS from
+# capacitor://localhost -- real origins with real schemes, so every /api call
+# and the WebSocket handshake are cross-origin and the browser blocks them
+# without these headers.
+#
+# The allow-list is explicit rather than `*`. It is not a security boundary
+# here (every endpoint is public, read-only, unauthenticated data), but `*` and
+# allow_credentials cannot legally coexist, and writing the real origins down
+# means the day this server does grow a credential the default is already
+# closed. GRATICULE_ALLOWED_ORIGINS adds deployment origins without a code
+# change.
+_NATIVE_ORIGINS = [
+    "https://localhost",       # Capacitor, Android
+    "capacitor://localhost",   # Capacitor, iOS
+    "ionic://localhost",       # older Capacitor/Ionic shells
+    "http://localhost",        # `npx cap run` dev server
+]
+_EXTRA_ORIGINS = [
+    o.strip() for o in os.getenv("GRATICULE_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_NATIVE_ORIGINS + _EXTRA_ORIGINS,
+    # A phone on a home network hits the desktop by LAN IP, and the emulator
+    # reaches its host at the fixed alias 10.0.2.2. Neither is knowable in
+    # advance, and both are private address space that no hostile page on the
+    # public internet can be served from.
+    allow_origin_regex=r"^https?://(10\.0\.2\.2|127\.0\.0\.1|localhost|"
+                       r"10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|"
+                       r"172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$",
+    allow_methods=["GET", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/api/snapshot")
@@ -901,5 +937,19 @@ async def no_cache_static(request, call_next):
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
-def run_server(port: int) -> None:
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
+def run_server(port: int, host: str | None = None) -> None:
+    """Serve the app.
+
+    Default binding stays 127.0.0.1: the desktop build is a pywebview window
+    talking to itself, and a weather server that listens on every interface by
+    accident is a service nobody asked to run.
+
+    A phone cannot reach 127.0.0.1 on another machine, so the Android build
+    needs 0.0.0.0. That is opt-in through GRATICULE_HOST or the `host`
+    argument, so turning it on is a decision somebody made rather than a
+    default somebody inherited.
+    """
+    bind = host or os.getenv("GRATICULE_HOST", "127.0.0.1")
+    if bind not in ("127.0.0.1", "localhost"):
+        logger.warning(f"Serving on {bind}:{port} -- reachable from the network")
+    uvicorn.run(app, host=bind, port=port, log_level="warning", access_log=False)

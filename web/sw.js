@@ -84,6 +84,7 @@ async function codeFirst(req) {
 const SHELL_URLS = [
   '/',
   '/static/app.js',
+  '/static/api-config.js',
   '/static/style.css',
   '/manifest.webmanifest',
   '/static/icons/icon-192.png',
@@ -119,6 +120,27 @@ async function trim(cacheName, cap) {
   const c = await caches.open(cacheName);
   const keys = await c.keys();
   for (let i = 0; i < keys.length - cap; i++) await c.delete(keys[i]);
+}
+
+/* Which origin the backend is on.
+ *
+ * On the web build it is this one. In a native shell the app is served from
+ * https://localhost and the API is a deployment somewhere else, so testing
+ * `url.origin === self.location.origin` would send every data request down the
+ * "some other site's asset" path: no timeout, no fallback copy, no age stamp.
+ * app.js registers this worker as /sw.js?api=<base> so the two can never
+ * disagree about where the backend is. */
+const API_ORIGIN = (() => {
+  try {
+    const raw = new URL(self.location.href).searchParams.get('api');
+    return raw ? new URL(raw).origin : self.location.origin;
+  } catch {
+    return self.location.origin;
+  }
+})();
+
+function isApi(url) {
+  return url.origin === API_ORIGIN && url.pathname.startsWith('/api/');
 }
 
 function isTile(url) {
@@ -215,7 +237,7 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) {
+  if (isApi(url)) {
     e.respondWith(networkFirst(req).catch(() =>
       new Response(JSON.stringify({ error: 'offline', offline: true }),
                    { status: 503, headers: { 'Content-Type': 'application/json' } })));

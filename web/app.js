@@ -5,6 +5,50 @@
  *                            Kp index, solar wind speed, X-ray flare class.
  */
 
+/* ---------- Where the backend lives ---------------------------------------
+   On the web build the backend is whatever origin served this file, so a bare
+   `/api/rivers` is correct and always has been.
+
+   Inside a native shell it is not. Capacitor serves the app to the WebView
+   from `https://localhost` on Android, which is a real origin with a real
+   scheme and nothing behind it: every same-origin `/api/...` resolves against
+   the APK's own asset server and returns nothing. Same for the WebSocket,
+   which was building its URL from `location.host`.
+
+   Resolution order, most specific first:
+     1. `?api=https://host` on the URL. This is what makes the native path
+        TESTABLE before anyone decides where the backend is hosted -- point
+        the emulator at 10.0.2.2 and the whole stack is exercised for real.
+     2. `window.GRATICULE_API_BASE`, set by web/api-config.js. The Android
+        build rewrites that one file and index.html stays byte-identical
+        between the two builds.
+     3. Empty, meaning same origin, which is the web build.
+
+   Nothing may call fetch(apiUrl('/api/...')) directly any more. `apiUrl()` is the only
+   door, so there is exactly one place to be wrong. */
+const API_BASE = (() => {
+  const q = new URLSearchParams(location.search).get('api');
+  const raw = q || window.GRATICULE_API_BASE || '';
+  return String(raw).trim().replace(/\/+$/, '');
+})();
+
+function apiUrl(path) {
+  return API_BASE ? API_BASE + path : path;
+}
+
+function wsUrl(path) {
+  if (!API_BASE) {
+    return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${path}`;
+  }
+  // new URL() rather than string surgery: the base can carry a port, a path
+  // prefix behind a reverse proxy, or neither, and only the parser knows.
+  const u = new URL(API_BASE + path);
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+  return u.href;
+}
+
+window.__graticule_api_base = API_BASE;
+
 const COLORS = {
   planes:     Cesium.Color.fromCssColorString('#ffd14a'),
   ships:      Cesium.Color.fromCssColorString('#4dd2ff'),
@@ -461,7 +505,15 @@ const TICKER_MAX = 6;
 function initServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+    // The worker's /api/ branch used to test `url.origin === self.location.origin`,
+    // which is exactly false in a native shell: the app is served from
+    // https://localhost and the API lives somewhere else entirely. Left alone,
+    // every data request would fall past the branch that stamps and caches it
+    // and the app would lose its offline story on the one platform that needs
+    // it most. The worker cannot read window, so the base is handed to it on
+    // its own URL -- which also re-registers it when the base changes.
+    navigator.serviceWorker.register(
+      API_BASE ? `/sw.js?api=${encodeURIComponent(API_BASE)}` : '/sw.js', { scope: '/' })
       .then((reg) => {
         // A new worker takes over on the next navigation, which for an app
         // nobody reloads means never. Tell the operator instead of swapping
@@ -541,7 +593,7 @@ function applyInitialLayerState() {
 }
 
 async function initViewer() {
-  const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
+  const cfg = await fetch(apiUrl('/api/config')).then(r => r.json()).catch(() => ({}));
   Cesium.Ion.defaultAccessToken = cfg.cesium_ion_token || '';
   window.__graticule_cfg = cfg;
 
@@ -1761,8 +1813,7 @@ function updateCategoryCounts() {
 // ---------- WebSocket -------------------------------------------------------
 
 function connectWebSocket() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  const ws = new WebSocket(wsUrl('/ws'));
   ws.onopen    = () => setStatus('ok', 'live');
   ws.onclose   = () => { setStatus('bad', 'offline'); setTimeout(connectWebSocket, 2000); };
   ws.onerror   = () => setStatus('bad', 'error');
@@ -6586,7 +6637,7 @@ async function rebuildSpcOutlook() {
   spcDS.entities.removeAll();
   let gj;
   try {
-    const r = await fetch(`/api/spc/outlook?day=${encodeURIComponent(day)}`);
+    const r = await fetch(apiUrl(`/api/spc/outlook?day=${encodeURIComponent(day)}`));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -7145,7 +7196,7 @@ function toggleMetar(on) {
 async function refreshMetar() {
   if (!metarDS || !metarDS.show) return;
   try {
-    const r = await fetch('/api/metar');
+    const r = await fetch(apiUrl('/api/metar'));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     metarRaw = await r.json();
     if (!Array.isArray(metarRaw)) metarRaw = [];
@@ -7428,7 +7479,7 @@ function toggleWarnings(on) {
    a side effect of drawing. Returns whether it succeeded. */
 async function fetchWarnFeatures() {
   try {
-    const r = await fetch('/api/nws/alerts');
+    const r = await fetch(apiUrl('/api/nws/alerts'));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const gj = await r.json();
     // Keep every active alert for the card list. Most NWS alerts are issued
@@ -7604,7 +7655,7 @@ async function refreshLsr() {
   const hours = Number(valueOf('lsr-hours', '12'));
   let gj;
   try {
-    const r = await fetch(`/api/lsr?hours=${hours}`);
+    const r = await fetch(apiUrl(`/api/lsr?hours=${hours}`));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -8603,7 +8654,7 @@ async function refreshCameras() {
   if (!camerasDS || !camerasDS.show) return;
   let gj;
   try {
-    const r = await fetch('/api/cameras');
+    const r = await fetch(apiUrl('/api/cameras'));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -8675,7 +8726,7 @@ async function refreshSpotters() {
   if (!spottersDS || !spottersDS.show) return;
   let gj;
   try {
-    const r = await fetch('/api/spotters');
+    const r = await fetch(apiUrl('/api/spotters'));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -9268,7 +9319,7 @@ async function refreshRivers() {
   let gj;
   try {
     // The first uncached call walks four NWPS tiles and takes ~19 s.
-    const r = await fetch('/api/rivers');
+    const r = await fetch(apiUrl('/api/rivers'));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -9355,7 +9406,7 @@ async function refreshTides() {
   if (!tidesDS || !tidesDS.show) return;
   let gj;
   try {
-    const r = await fetch('/api/tides');
+    const r = await fetch(apiUrl('/api/tides'));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -9431,7 +9482,7 @@ async function refreshBuoys() {
   if (!buoysDS || !buoysDS.show) return;
   let gj;
   try {
-    const r = await fetch('/api/buoys');
+    const r = await fetch(apiUrl('/api/buoys'));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -9482,7 +9533,7 @@ async function refreshBuoys() {
 async function loadTideDetail(stationId, slot) {
   let d;
   try {
-    const r = await fetch(`/api/tide/${encodeURIComponent(stationId)}`);
+    const r = await fetch(apiUrl(`/api/tide/${encodeURIComponent(stationId)}`));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     d = await r.json();
   } catch (err) {
@@ -11523,7 +11574,7 @@ const _dbCache = new Map();
 async function dbFetch(url, ttlMs = 25_000) {
   const hit = _dbCache.get(url);
   if (hit && Date.now() - hit.at < ttlMs) return hit.data;
-  const r = await fetch(url);
+  const r = await fetch(apiUrl(url));
   if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
   const data = await r.json();
   _dbCache.set(url, { at: Date.now(), data });
