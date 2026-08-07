@@ -6528,21 +6528,24 @@ function initWeatherControls() {
 
   // Opacity sliders in the weather tab mirror the ones in Settings; both write
   // the same setting so the two panels can never disagree.
+  // An opacity reads as a percentage. "0.70" is the stored normalised value,
+  // not a thing anyone says out loud, and it was the only raw float on screen.
+  const pct = (v) => `${Math.round(Number(v) * 100)}%`;
   const mirror = (id, key, twinId, apply) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.value = String(settings[key]);
     const out = document.getElementById(`${id}-val`);
-    if (out) out.textContent = Number(settings[key]).toFixed(2);
+    if (out) out.textContent = pct(settings[key]);
     el.addEventListener('input', () => {
       settings[key] = Number(el.value);
       saveSettings();
-      if (out) out.textContent = Number(el.value).toFixed(2);
+      if (out) out.textContent = pct(el.value);
       const twin = document.getElementById(twinId);
       if (twin) {
         twin.value = el.value;
         const tOut = document.getElementById(`${twinId}-val`);
-        if (tOut) tOut.textContent = Number(el.value).toFixed(2);
+        if (tOut) tOut.textContent = pct(el.value);
       }
       apply();
     });

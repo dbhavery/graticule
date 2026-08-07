@@ -58,6 +58,15 @@ async def main():
 
         print("== Scrolled to the bottom of a division that does not tick ==")
         await pg.click('#wx-modes .chip[data-mode="radar"]'); await asyncio.sleep(1.5)
+        # Shorten the window rather than relying on Radar being long enough.
+        # It used to overflow by a few hundred pixels because it carried six
+        # inert product buttons and two paragraphs of engineering apology; when
+        # those came out, this fixture stopped overflowing and three checks
+        # failed on a pane that had got BETTER. What is under test is the
+        # scroll affordance, not how much content a pane happens to hold, so
+        # the fixture now guarantees overflow by making the viewport short.
+        await pg.set_viewport_size({"width": 1600, "height": 620})
+        await asyncio.sleep(1.0)
         s = await pg.evaluate(state)
         chk(s["hidden"] > 20, f"radar overflows too (hidden={s['hidden']}px)")
         chk(s["down"] and not s["up"], "at the top: 'more below' only")
@@ -67,6 +76,11 @@ async def main():
         chk(s["up"], "'more above' turns on")
         chk(not s["down"], "'more below' turns OFF at the end (the control)")
         chk(not s["botPainted"], "and stops being painted")
+
+        # Back to full height, or the next section's "this one FITS" fixture is
+        # measured in a window deliberately made too short for anything to fit.
+        await pg.set_viewport_size({"width": 1600, "height": 950})
+        await asyncio.sleep(1.0)
 
         print("== A division that fits ==")
         await pg.click('#wx-modes .chip[data-mode="satellite"]'); await asyncio.sleep(1.5)

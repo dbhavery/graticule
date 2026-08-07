@@ -252,7 +252,9 @@
         <div class="wf-row" data-requires="radar">
           <span class="wf-row-l">Opacity</span>
           <input type="range" id="op-radar-2" min="0" max="1" step="0.05" value="0.70">
-          <span class="ctl-v mono" id="op-radar-2-val">0.70</span>
+          <!-- "70%", not "0.70". A raw normalised float is how the value is
+               stored, not how anyone reads an opacity. -->
+          <span class="ctl-v mono" id="op-radar-2-val">70%</span>
         </div>
 
         <!-- The list writes through to this select, which stays the single
@@ -266,7 +268,12 @@
           <option value="echotops">Echo Tops</option>
         </select>
 
-        <div data-requires="radar_site">
+        <!-- data-collapse-off: these six products belong to the Local Hi-Res
+             Site switch above and can do nothing until it is on. Dimmed in
+             place they were still six control-sized rectangles filling most of
+             the pane, which reads as an unfinished screen rather than as an
+             inactive section. The switch directly above is the scent. -->
+        <div data-requires="radar_site" data-collapse-off>
           <div class="wf-grp">STANDARD</div>
           <button class="wf-item is-active" data-product="reflectivity">Super-Res Reflectivity</button>
           <button class="wf-item" data-product="reflectivity_legacy">Base Reflectivity</button>
@@ -278,13 +285,17 @@
           <button class="wf-item" data-product="echotops">Echo Tops</button>
         </div>
 
-        <label class="sw"><input type="checkbox" data-layer="lightning" disabled><span class="sw-t"></span><span class="sw-l">Lightning</span></label>
-        <p class="pane-note">No tilt selector: the keyless NEXRAD tile service
-          publishes the lowest elevation cut only — every higher tilt returns
-          503, checked three times at three sites. Selecting 1.5° or 2.4° needs
-          a server-side Level II decoder.</p>
-        <p class="pane-note">Lightning needs a commercial feed (Vaisala /
-          Blitzortung); no keyless source exists.</p>
+        <!-- What used to sit here: a permanently `disabled` Lightning switch,
+             and two paragraphs explaining that the NEXRAD tile service returns
+             503 above the lowest elevation cut and that lightning needs a
+             commercial Vaisala/Blitzortung feed.
+             Both are true and neither belongs on screen. A switch that can
+             never move is a broken control, not a roadmap, and no operator
+             needs this app's HTTP status codes to read a radar. The reasons
+             are engineering facts, so they live in issues.md (#7) and in the
+             comments beside the code that hit them. -->
+        <p class="pane-note">Tilt is the lowest elevation cut. Higher tilts are
+          not available from this source.</p>
       </div>
 
       <!-- ---- SATELLITE ---- -->
@@ -400,7 +411,7 @@
              their live frames with no key, so the row works now. -->
         <label class="sw" title="Live public cameras. Click one for its current frame."><input type="checkbox" data-layer="cameras"><span class="sw-t"></span><span class="sw-l">Live Cameras</span><span class="count" id="count-cameras">—</span></label>
         <label class="sw" title="Live storm-spotter ground truth from Spotter Network."><input type="checkbox" data-layer="spotters"><span class="sw-t"></span><span class="sw-l">Spotter Reports</span><span class="count" id="count-spotters">—</span></label>
-        <p class="pane-note">Cameras: <span style="color:var(--c-hurricanes)">■</span> ALERTCalifornia wildfire · <span style="color:var(--c-photoreal3d)">■</span> Caltrans highway · <span style="color:var(--c-airspace)">■</span> NYC DOT. Spotters: Spotter Network. All keyless.</p>
+        <p class="pane-note">Cameras: <span style="color:var(--c-hurricanes)">■</span> ALERTCalifornia wildfire · <span style="color:var(--c-photoreal3d)">■</span> Caltrans highway · <span style="color:var(--c-airspace)">■</span> NYC DOT. Spotters: Spotter Network.</p>
       </div>
 
       <!-- ---- OUTLOOKS ---- -->

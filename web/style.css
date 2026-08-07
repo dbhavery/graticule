@@ -4462,6 +4462,12 @@ div[data-requires].is-off .wf-item.is-active {
   color: var(--text-mute);
   box-shadow: none;
 }
+/* Sections that collapse rather than dim when their switch is off. Opt-in per
+   element, not blanket on [data-requires]: most dependent rows are single
+   controls whose label is the only clue they exist, and hiding those would
+   remove the feature from the app rather than defer it. */
+[data-collapse-off].is-off { display: none; }
+
 .wf-item:disabled { cursor: default; }
 .wf-item:disabled:hover { background: transparent; color: var(--text-mute); }
 
