@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graticule · Play Console answers</title>
+<meta name="color-scheme" content="dark">
+<style>
+  :root{--bg:#05070a;--panel:rgba(255,255,255,.028);--border:rgba(255,255,255,.09);
+        --text:#e6ecf3;--dim:#a8b3c2;--mute:#8892a3;--accent:#5cd6ff;--warn:#f59e0b;--good:#4ade80}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);padding:0 24px 80px;
+       font:400 16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+  .wrap{max-width:900px;margin:0 auto}
+  header{padding:52px 0 24px;border-bottom:1px solid var(--border);margin-bottom:32px}
+  .eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);
+           margin:0 0 12px;font-weight:600}
+  h1{font-size:30px;margin:0 0 10px;font-weight:700;letter-spacing:-.015em}
+  h2{font-size:20px;margin:38px 0 10px;font-weight:650}
+  h3{font-size:16px;margin:22px 0 6px;font-weight:650}
+  p,li{color:var(--dim)} p{margin:0 0 12px} ul{margin:0 0 12px;padding-left:22px} li{margin-bottom:6px}
+  strong{color:var(--text);font-weight:600}
+  code{font:500 13px ui-monospace,Consolas,monospace;background:rgba(255,255,255,.06);
+       padding:1px 6px;border-radius:4px;color:var(--text)}
+  table{width:100%;border-collapse:collapse;margin:14px 0 22px;font-size:14.5px}
+  th,td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--border)}
+  th{color:var(--text);font-weight:600;font-size:12.5px;letter-spacing:.05em;text-transform:uppercase}
+  td{color:var(--dim)} td:first-child{color:var(--text);width:34%}
+  .no{color:var(--good);font-weight:600}
+  .yes{color:var(--warn);font-weight:600}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+        padding:16px 18px;margin:18px 0}
+  .card p:last-child{margin-bottom:0}
+  .blocked{border-color:rgba(245,158,11,.42);background:rgba(245,158,11,.07)}
+  .quote{border-left:2px solid var(--accent);padding:2px 0 2px 16px;margin:0 0 14px;color:var(--text)}
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--border);color:var(--mute);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Graticule · internal</p>
+  <h1>Play Console answers</h1>
+  <p style="color:var(--mute);margin:0">Prepared 9 August 2026 from a read of the
+  source, not from memory. Every "no" below is a claim about the code.</p>
+</header>
+
+<p class="quote">Answer the Data Safety form from this page rather than from
+impression. A declaration that does not match app behaviour is one of the
+faster ways to get an app suspended, and it is checked against the binary.</p>
+
+<div class="card blocked">
+  <p><strong>One answer depends on a decision that is still open.</strong>
+  "Is all user data encrypted in transit" is <strong>Yes only if the backend is
+  served over https</strong>. The release build already refuses to build against
+  a plain-http backend, so this holds as long as the hosting decision produces
+  an https origin. If it somehow does not, this answer changes and so does the
+  privacy policy.</p>
+</div>
+
+<h2>1. Data Safety</h2>
+
+<h3>Top-level questions</h3>
+<table>
+  <tr><th>Question</th><th>Answer</th></tr>
+  <tr><td>Does your app collect or share any of the required user data types?</td>
+      <td><span class="yes">Yes</span>, one: approximate location. See below for why
+          it is approximate and not precise.</td></tr>
+  <tr><td>Is all of the user data collected by your app encrypted in transit?</td>
+      <td><span class="yes">Yes</span>, conditional on https hosting. See the note above.</td></tr>
+  <tr><td>Do you provide a way for users to request that their data is deleted?</td>
+      <td><span class="no">No</span>, and the reason is that nothing is retained to
+          delete. There is no account and no server-side record of a user. Settings
+          live in the device's local storage and are removed by clearing app storage
+          or uninstalling.</td></tr>
+</table>
+
+<h3>Location</h3>
+<table>
+  <tr><th>Data type</th><th>Declaration</th></tr>
+  <tr><td>Precise location</td>
+      <td><span class="no">Not collected.</span> The app requests location permission
+          and uses the fix entirely on device: it moves the map camera and draws the
+          accuracy circle. It is never transmitted and never stored. Google defines
+          collection as transmission off the device, and this is not transmitted.</td></tr>
+  <tr><td>Approximate location</td>
+      <td><span class="yes">Collected and shared.</span><br>
+          <strong>Collected:</strong> Yes · <strong>Shared:</strong> Yes, with Open-Meteo<br>
+          <strong>Purpose:</strong> App functionality<br>
+          <strong>Required or optional:</strong> Optional<br>
+          <strong>Linked to identity:</strong> No, there is no identifier to link to<br>
+          <strong>Used for tracking:</strong> No<br>
+          <strong>Processed ephemerally:</strong> Yes</td></tr>
+</table>
+
+<div class="card">
+  <p><strong>Why approximate and not precise, and why declared at all.</strong>
+  What leaves the device is the latitude and longitude of the <em>map area on
+  screen</em>, sent to Open-Meteo to get a forecast for it. That is a viewport,
+  not a device fix, which is why approximate is the honest box. But if the user
+  pressed the locate button, the map is centred on them, so the region being
+  requested is their region. Declaring nothing would be defensible on a strict
+  reading and wrong in spirit, and the spirit is what gets audited.</p>
+</div>
+
+<h3>Everything else: not collected</h3>
+<p>Each of these is a <span class="no">No</span> in both the collected and shared
+columns. There is no analytics SDK, no crash reporting, no advertising library
+and no advertising ID read anywhere in the bundle, which
+<code>scripts/static_checks.py</code> now asserts on every push.</p>
+<table>
+  <tr><td>Personal info (name, email, address, phone, race, religion, orientation)</td><td><span class="no">No</span></td></tr>
+  <tr><td>Financial info</td><td><span class="no">No</span></td></tr>
+  <tr><td>Health and fitness</td><td><span class="no">No</span></td></tr>
+  <tr><td>Messages, photos, videos, audio, files, calendar, contacts</td><td><span class="no">No</span></td></tr>
+  <tr><td>App activity (interactions, search history, installed apps)</td><td><span class="no">No</span></td></tr>
+  <tr><td>Web browsing history</td><td><span class="no">No</span></td></tr>
+  <tr><td>App info and performance (crash logs, diagnostics)</td><td><span class="no">No</span></td></tr>
+  <tr><td>Device or other IDs</td><td><span class="no">No</span></td></tr>
+</table>
+
+<h2>2. Permissions</h2>
+<p>Three are declared, and a store listing has to justify each one.</p>
+<table>
+  <tr><th>Permission</th><th>Justification to give</th></tr>
+  <tr><td><code>INTERNET</code></td>
+      <td>The app is a live map. Radar, alerts, observations and imagery are all fetched.</td></tr>
+  <tr><td><code>ACCESS_COARSE_LOCATION</code></td>
+      <td>To move the map to the user's region on request and show what the weather is
+          doing around them. A county is the smallest unit most of this data has.</td></tr>
+  <tr><td><code>ACCESS_FINE_LOCATION</code></td>
+      <td>The accuracy circle drawn on the map is only honest if the fix is. A 3 km
+          circle over a tornado warning is the difference between "us" and "not us".</td></tr>
+</table>
+<p>Neither location permission is required to launch, and
+<code>android:required="false"</code> on the GPS feature keeps the app installable
+on a device without one. There is no background location permission, so the
+prominent-disclosure and background-access review path does not apply.</p>
+
+<h2>3. Content rating questionnaire</h2>
+<p>Expected outcome: <strong>Everyone / PEGI 3</strong>. The answers are all "no"
+except where noted.</p>
+<table>
+  <tr><td>Violence, sexuality, profanity, controlled substances, gambling</td><td><span class="no">No</span></td></tr>
+  <tr><td>Does the app share the user's location with other users?</td><td><span class="no">No</span></td></tr>
+  <tr><td>Does the app allow users to interact or exchange content?</td><td><span class="no">No</span>. There is no account, no messaging and no user-generated content.</td></tr>
+  <tr><td>Does the app contain ads?</td><td><span class="no">No</span></td></tr>
+  <tr><td>Does the app offer purchases?</td><td><span class="no">No</span></td></tr>
+  <tr><td>Does the app display news or user-generated news content?</td>
+      <td><span class="yes">Worth flagging.</span> There is a news layer fed by GDELT.
+          It is third-party headlines, not user-generated. If the questionnaire asks
+          about news, answer yes rather than no.</td></tr>
+</table>
+
+<h2>4. Listing fields already done</h2>
+<ul>
+  <li><strong>Privacy policy URL</strong> <code>/privacy</code>, live, and its claims
+      are asserted by <code>scripts/legal_pages_test.py</code></li>
+  <li><strong>Support URL</strong> <code>/support</code>, live</li>
+  <li><strong>Contact email</strong> dbhavery@gmail.com</li>
+  <li>Both need the real hosting origin in front of them before they go in the console</li>
+</ul>
+
+<h2>5. Still to produce</h2>
+<ul>
+  <li>App icon at 512x512, feature graphic at 1024x500</li>
+  <li>Between two and eight phone screenshots</li>
+  <li>Short description (80 characters) and full description (4,000)</li>
+  <li>The hosting origin, which every URL above depends on</li>
+</ul>
+
+<footer>
+  Sources for every claim: <code>web/app.js</code> (locateMe, showHere, handleMessage),
+  <code>graticule/server.py</code> (access_log=False), <code>graticule/state.py</code>,
+  <code>android/app/src/main/AndroidManifest.xml</code>, and
+  <code>scripts/static_checks.py</code> which keeps them true.
+</footer>
+
+</div>
+</body>
+</html>
