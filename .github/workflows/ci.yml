@@ -1,5 +1,17 @@
 name: ci
 
+# This job used to be `pip install .` and `python -c "import graticule"`.
+#
+# It was green on every push and would have stayed green through every defect
+# this project has ever had: the back button that exited the app, nine seconds
+# of blocked main thread, a CC BY-NC-SA data file shipping uncredited inside
+# the APK. A check that cannot fail proves nothing, and a green badge that
+# proves nothing is worse than no badge, because it gets trusted.
+#
+# The five real suites need a live backend, a browser and the actual internet,
+# so they are not run here. scripts/static_checks.py is everything that a plain
+# file read can settle, and it carries its own controls.
+
 on:
   push:
     branches: [dev, master]
@@ -22,3 +34,11 @@ jobs:
 
       - name: Import check
         run: python -c "import graticule"
+
+      # Compiles every module rather than importing the package entry point,
+      # so a syntax error in a feed nobody imports at startup is still caught.
+      - name: Compile all sources
+        run: python -m compileall -q graticule scripts
+
+      - name: Static checks
+        run: python scripts/static_checks.py
