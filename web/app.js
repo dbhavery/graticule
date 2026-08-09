@@ -508,7 +508,48 @@ const BORDER_LINE_STYLE = {
   states:    { color: '#cbd5e1', kind: 'state_border', ddcFar: 8e6 },
 };
 
-const borderPrims = { countries: null, states: null };
+/* Several primitives per layer, not one.
+ *
+ * `asynchronous: true` moves createGeometry and combineGeometry into Cesium's
+ * workers, which is what took the border build off the main thread. What it
+ * does NOT move is Primitive.update: when the worker hands the combined
+ * geometry back, the main thread creates the vertex arrays and compiles the
+ * shader in ONE frame. For a single primitive holding 7,785 lines that is the
+ * 3,576 ms task the device profile named, with `bufferData`,
+ * `getDerivedShaderProgram` and `getProgramParameter` sitting in it.
+ *
+ * A primitive is the unit Cesium uploads atomically, so the only way to split
+ * that frame is to have more of them. Each batch below becomes its own
+ * primitive and is handed to the scene as soon as it is built, so the uploads
+ * land in separate frames instead of stacking into one. The shader is compiled
+ * once and reused: same appearance type, same vertex format.
+ *
+ * The cost is draw calls, which goes from 2 to about 12 for the whole world.
+ * That is not a number that matters here.
+ *
+ * DEFAULT OFF, behind `?borderprims=split`, because it is NOT PROVEN.
+ *
+ * Measured 2026-08-08 on the emulator, same session, back to back: the worst
+ * task fell 3,465 -> 1,968 ms, which is what the theory predicts, but total
+ * blocking ROSE 14,787 -> 16,877 ms and the long-task count went 72 -> 96.
+ * Then three boots of the UNCHANGED baseline read 14,787, 11,240 and 12,225 ms
+ * with worst tasks of 3,465, 2,464 and 1,842 ms. The 1,968 ms sits inside that
+ * range, so the improvement was never established at all, and the host was
+ * 50-74% busy with other work throughout.
+ *
+ * So the flag, rather than a guess in either direction: the code is written,
+ * reviewed and passing, and a quiet machine can settle it with
+ * `apk_longtasks.py --repeat 5` on one build and then the other. Shipping it
+ * on this evidence would be the same mistake as reverting it would be.
+ */
+const BORDER_PRIM_SPLIT =
+  new URLSearchParams(location.search).get('borderprims') === 'split';
+
+// Infinity means the batch never reaches the threshold, so flush() runs once
+// at the end and builds exactly one primitive: the shipped behaviour.
+const BORDER_PRIM_LINES = BORDER_PRIM_SPLIT ? 1000 : Infinity;
+
+const borderPrims = { countries: [], states: [] };
 const borderLineCounts = { countries: 0, states: 0 };
 const _borderPrimGen = { countries: 0, states: 0 };
 // Layer visibility for the lines, mirrored by the toggles. Starts true
@@ -532,9 +573,38 @@ async function buildBorderPrimitive(key) {
     ? new Cesium.DistanceDisplayConditionGeometryInstanceAttribute(0, style.ddcFar)
     : undefined;
 
-  const instances = new Array(lineCount);
+  const makeAppearance = () => new Cesium.PolylineMaterialAppearance({
+    material: Cesium.Material.fromType('Color', {
+      color: Cesium.Color.fromCssColorString(style.color).withAlpha(borderAlpha(key)),
+    }),
+    translucent: true,
+  });
+
+  const fresh = [];
+  let instances = [];
+
+  const flush = () => {
+    if (!instances.length) return;
+    const prim = clamp
+      ? new Cesium.GroundPolylinePrimitive({
+          geometryInstances: instances, appearance: makeAppearance(),
+          allowPicking: false, asynchronous: true,
+        })
+      : new Cesium.Primitive({
+          geometryInstances: instances, appearance: makeAppearance(),
+          allowPicking: false, asynchronous: true,
+        });
+    prim.show = borderShown[key];
+    viewer.scene.primitives.add(prim);
+    fresh.push(prim);
+    instances = [];
+  };
+
   for (let i = 0; i < lineCount; i += BORDER_CHUNK_LINES) {
-    if (gen !== _borderPrimGen[key]) return 0;      // superseded mid-build
+    if (gen !== _borderPrimGen[key]) {              // superseded mid-build
+      for (const p of fresh) if (!p.isDestroyed()) viewer.scene.primitives.remove(p);
+      return 0;
+    }
     const hi = Math.min(i + BORDER_CHUNK_LINES, lineCount);
     for (let li = i; li < hi; li++) {
       const start = offsets[li * 2], len = offsets[li * 2 + 1];
@@ -543,7 +613,7 @@ async function buildBorderPrimitive(key) {
         const o = (start + k) * 3;
         positions[k] = new Cesium.Cartesian3(buf[o], buf[o + 1], buf[o + 2]);
       }
-      instances[li] = new Cesium.GeometryInstance({
+      instances.push(new Cesium.GeometryInstance({
         geometry: clamp
           ? new Cesium.GroundPolylineGeometry({ positions, width: 1.0 })
           : new Cesium.PolylineGeometry({
@@ -551,41 +621,32 @@ async function buildBorderPrimitive(key) {
               vertexFormat: Cesium.PolylineMaterialAppearance.VERTEX_FORMAT,
             }),
         attributes: ddcAttr ? { distanceDisplayCondition: ddcAttr } : undefined,
-      });
+      }));
     }
+    // Hand each batch to the scene as it is built, so its worker starts now
+    // and its upload lands in its own frame rather than in a queue of one.
+    if (instances.length >= BORDER_PRIM_LINES) flush();
     await borderYield();
   }
-  if (gen !== _borderPrimGen[key]) return 0;
+  if (gen !== _borderPrimGen[key]) {
+    for (const p of fresh) if (!p.isDestroyed()) viewer.scene.primitives.remove(p);
+    return 0;
+  }
+  flush();
 
-  const appearance = new Cesium.PolylineMaterialAppearance({
-    material: Cesium.Material.fromType('Color', {
-      color: Cesium.Color.fromCssColorString(style.color).withAlpha(borderAlpha(key)),
-    }),
-    translucent: true,
-  });
-  const prim = clamp
-    ? new Cesium.GroundPolylinePrimitive({
-        geometryInstances: instances, appearance,
-        allowPicking: false, asynchronous: true,
-      })
-    : new Cesium.Primitive({
-        geometryInstances: instances, appearance,
-        allowPicking: false, asynchronous: true,
-      });
-  prim.show = borderShown[key];
-  viewer.scene.primitives.add(prim);
-
-  // The geometry combines in a worker; the old primitive (a terrain
-  // transition, an opacity rebuild) stays up until the new one can draw, so
+  // The geometry combines in a worker; the old primitives (a terrain
+  // transition, an opacity rebuild) stay up until every new one can draw, so
   // the borders never blink out mid-flight.
   const old = borderPrims[key];
-  borderPrims[key] = prim;
+  borderPrims[key] = fresh;
   const reap = setInterval(() => {
     const stale = gen !== _borderPrimGen[key];
-    if (prim.ready || stale) {
+    if (fresh.every((p) => p.isDestroyed() || p.ready) || stale) {
       clearInterval(reap);
-      if (old && !old.isDestroyed()) viewer.scene.primitives.remove(old);
-      if (stale && !prim.isDestroyed()) viewer.scene.primitives.remove(prim);
+      for (const p of old) if (!p.isDestroyed()) viewer.scene.primitives.remove(p);
+      if (stale) {
+        for (const p of fresh) if (!p.isDestroyed()) viewer.scene.primitives.remove(p);
+      }
       viewer.scene.requestRender();
     }
   }, 120);
@@ -618,16 +679,21 @@ function syncBorderCount(key) {
 
 function setBorderLinesShown(key, on) {
   borderShown[key] = on;
-  const p = borderPrims[key];
-  if (p) { p.show = on; viewer?.scene.requestRender(); }
+  for (const p of borderPrims[key]) if (!p.isDestroyed()) p.show = on;
+  viewer?.scene.requestRender();
 }
 
 function setBorderLinesAlpha(key) {
-  const p = borderPrims[key];
-  if (!p || !p.appearance) return;
-  const u = p.appearance.material.uniforms;
-  u.color = Cesium.Color.fromCssColorString(BORDER_LINE_STYLE[key].color)
+  const color = Cesium.Color.fromCssColorString(BORDER_LINE_STYLE[key].color)
     .withAlpha(borderAlpha(key));
+  // Each primitive carries its own appearance, so the opacity slider has to
+  // walk them. Sharing one Appearance object across primitives would make this
+  // a single assignment and is a documented Cesium pattern, but it also means
+  // one destroyed primitive can take the material with it.
+  for (const p of borderPrims[key]) {
+    if (p.isDestroyed() || !p.appearance) continue;
+    p.appearance.material.uniforms.color = color;
+  }
   viewer?.scene.requestRender();
 }
 
