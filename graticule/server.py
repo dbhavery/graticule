@@ -60,6 +60,7 @@ async def lifespan(app: FastAPI):
     ]
     tasks = [asyncio.create_task(fn(state), name=n) for n, fn in feeds]
     tasks.append(asyncio.create_task(_expire_loop(), name="expire"))
+    tasks.append(asyncio.create_task(_flush_loop(), name="flush"))
     logger.info(f"graticule server up — {len(feeds)} feeds running")
     try:
         yield
@@ -72,6 +73,28 @@ async def _expire_loop() -> None:
     while True:
         await asyncio.sleep(60)
         state.expire()
+
+
+# How often queued entity deltas go out as one frame per layer.
+#
+# 250 ms is chosen against what the client does with a frame, not against how
+# fresh the data is. Aircraft positions are seconds old by the time ADS-B
+# reaches us, so a quarter second changes nothing anybody can see. What it does
+# change is that a burst of 1,244 single-entity frames, each one running
+# updateCategoryCounts() and refreshAlerts() on a phone, becomes a handful of
+# batches. Going lower buys no freshness and gives back the win.
+FLUSH_INTERVAL_S = 0.25
+
+
+async def _flush_loop() -> None:
+    while True:
+        await asyncio.sleep(FLUSH_INTERVAL_S)
+        try:
+            state.flush()
+        except Exception:
+            # A flush that raises must not kill the loop, or the app goes
+            # silent while the server looks healthy.
+            logger.exception("flush failed")
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)

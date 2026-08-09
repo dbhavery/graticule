@@ -2408,7 +2408,17 @@ function handleMessage(msg) {
     if (meta.space_weather) { applySpaceWeather(meta.space_weather); noteFeed('space_weather'); }
     if (meta.cables)        { cablesGeoJson = meta.cables.geojson; noteFeed('cables'); if (isLayerOn('cables')) toggleCables(true); }
     if (meta.ships_source)  { applyShipsSource(meta.ships_source); }
+  } else if (msg.type && msg.type.endsWith(':batch')) {
+    // The server coalesces per-entity deltas into one frame per layer, keyed
+    // by entity id. This is the hot path: it used to be one frame per
+    // aircraft, and the two calls at the bottom of this function then ran
+    // 1,244 times at boot instead of a handful.
+    const layer = msg.type.slice(0, -':batch'.length);
+    const entries = msg.data || {};
+    for (const id in entries) upsertEntity(layer, id, entries[id]);
+    noteFeed(layer);
   } else if (msg.type === 'planes' || msg.type === 'ships') {
+    // Kept so a server that predates batching still works against this build.
     upsertEntity(msg.type, msg.id, msg.data);
     noteFeed(msg.type);
   } else if (msg.type && msg.type.endsWith(':reset')) {

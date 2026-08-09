@@ -59,15 +59,31 @@ class StateStore:
 
     subscribers: set[WebSocket] = field(default_factory=set)
 
+    # Deltas waiting for the next flush, as {layer: {entity_id: data}}.
+    _pending: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
+
     # ---------- generic upsert / clear ----------
 
     def upsert(self, layer: str, entity_id: str, data: dict[str, Any]) -> None:
-        """Insert or update one entity in a layer; broadcast a delta."""
+        """Insert or update one entity in a layer; queue a delta.
+
+        This used to broadcast immediately, one websocket frame per entity.
+        ADS-B hands us aircraft one at a time, so a normal boot sent about
+        1,244 frames in a burst, each one a separate json.dumps here and a
+        separate ws.onmessage on the phone. Every one of those ran
+        updateCategoryCounts() and refreshAlerts() on the client, which is
+        where the profile's 2.1 s of ws.onmessage came from.
+
+        Now it goes into a pending map that flush() drains on a timer. The map
+        is keyed by entity id, so an aircraft that reports three times inside
+        one window is sent once, with its latest position. Fewer frames AND
+        less data.
+        """
         if layer not in self.layers:
             self.layers[layer] = {}
         data["ts"] = time.time()
         self.layers[layer][entity_id] = data
-        self._broadcast({"type": layer, "id": entity_id, "data": data})
+        self._pending.setdefault(layer, {})[entity_id] = data
 
     def replace_layer(self, layer: str, entries: dict[str, dict[str, Any]]) -> None:
         """Atomic replacement — used by feeds that fetch a complete snapshot
@@ -76,7 +92,22 @@ class StateStore:
         for v in entries.values():
             v.setdefault("ts", now)
         self.layers[layer] = entries
+        # Drop anything queued for this layer. A reset is the whole truth about
+        # it, so flushing a delta afterwards would resurrect an entity the
+        # snapshot just removed.
+        self._pending.pop(layer, None)
         self._broadcast({"type": f"{layer}:reset", "data": entries})
+
+    def flush(self) -> None:
+        """Send one batch frame per layer that has pending deltas."""
+        if not self._pending:
+            return
+        pending, self._pending = self._pending, {}
+        if not self.subscribers:
+            return
+        for layer, entries in pending.items():
+            if entries:
+                self._broadcast({"type": f"{layer}:batch", "data": entries})
 
     def set_meta(self, key: str, value: Any) -> None:
         self.meta[key] = value
