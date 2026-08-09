@@ -74,3 +74,8 @@ node_modules/
 
 # Per-run phone captures. Nothing here is a reference frame.
 scripts/_phone_out/
+
+# Android upload signing key. The key itself and its passwords.
+# Passwords live in the KeePassXC vault, never here.
+android/*.jks
+android/keystore.properties

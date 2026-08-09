@@ -1,5 +1,26 @@
 apply plugin: 'com.android.application'
 
+/* Release signing.
+ *
+ * Play will not take an unsigned build, and it will not take a debug-signed
+ * one either. The key material lives in android/keystore.properties and the
+ * .jks it points at, both gitignored, because a signing key in a repository is
+ * a signing key that is published.
+ *
+ * Absent that file the release build is simply unsigned, exactly as before,
+ * so a checkout with no secrets still builds. It does NOT fall back to the
+ * debug key: a build that looks signed and is signed with the wrong key is the
+ * failure worth avoiding, because it is rejected at upload rather than here.
+ *
+ * See android/keystore.properties.example.
+ */
+def keystorePropsFile = rootProject.file("keystore.properties")
+def hasKeystore = keystorePropsFile.exists()
+def keystoreProps = new Properties()
+if (hasKeystore) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
     namespace "dev.dbhavery.graticule"
     compileSdk rootProject.ext.compileSdkVersion
@@ -16,8 +37,24 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasKeystore) {
+            release {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasKeystore) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.warn("keystore.properties missing -- release build will be UNSIGNED "
+                            + "and Play will reject it. See keystore.properties.example.")
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

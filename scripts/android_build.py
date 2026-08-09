@@ -136,7 +136,14 @@ def main() -> None:
     ap.add_argument("--stage-only", action="store_true")
     ap.add_argument("--release", action="store_true",
                     help="assembleRelease instead of assembleDebug")
+    # Play takes an App Bundle, not an APK. An APK is still what you install on
+    # a device by hand, so both exist rather than one replacing the other.
+    ap.add_argument("--aab", action="store_true",
+                    help="bundleRelease: the .aab Play actually wants (implies --release)")
     args = ap.parse_args()
+
+    if args.aab:
+        args.release = True
 
     # A release build may not talk to a plain-http backend. capacitor.config.js
     # would silently drop the page to http://localhost to keep mixed-content
@@ -157,15 +164,30 @@ def main() -> None:
     subprocess.run(["npx", "cap", "sync", "android"], cwd=ROOT, check=True,
                    shell=(sys.platform == "win32"), env=sync_env)
 
+    # A release build with no keystore.properties compiles happily and produces
+    # an UNSIGNED artifact that Play rejects at upload. Saying so here costs
+    # nothing and saves finding out at the end of a submission.
+    if args.release and not (ROOT / "android" / "keystore.properties").exists():
+        print("\n  ** android/keystore.properties is missing. This build will be")
+        print("     UNSIGNED and Play will reject it. See keystore.properties.example. **\n")
+
     gradle = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
-    task = "assembleRelease" if args.release else "assembleDebug"
+    if args.aab:
+        task = "bundleRelease"
+    elif args.release:
+        task = "assembleRelease"
+    else:
+        task = "assembleDebug"
     subprocess.run([gradle, task, "--console=plain"], cwd=ROOT / "android", check=True,
                    shell=(sys.platform == "win32"), env=gradle_env())
 
     kind = "release" if args.release else "debug"
-    apk = ROOT / "android" / "app" / "build" / "outputs" / "apk" / kind
-    for f in sorted(apk.glob("*.apk")):
+    out = ROOT / "android" / "app" / "build" / "outputs"
+    for f in sorted((out / "apk" / kind).glob("*.apk")):
         print(f"APK  {f}  ({f.stat().st_size / 1_048_576:.1f} MB)")
+    if args.aab:
+        for f in sorted((out / "bundle" / kind).glob("*.aab")):
+            print(f"AAB  {f}  ({f.stat().st_size / 1_048_576:.1f} MB)")
 
 
 if __name__ == "__main__":
