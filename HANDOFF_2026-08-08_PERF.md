@@ -1,4 +1,4 @@
-# Graticule — performance and the back button, 2026-08-08
+# Graticule: performance and the back button, 2026-08-08
 
 Branch `dev`, synced with `origin/dev`, tree clean, HEAD `3b4826e`.
 
@@ -40,9 +40,9 @@ of the same size cost 0-11 ms. SwiftShader initialises its canvas backend once
 and it costs more than everything the fix touches.
 
 So: **no performance claim about this app counts unless it was measured on the
-device.** `border_perf_test.py` survives because JS-only work (parse,
-allocation, DOM) it does measure honestly, and because it carries the ECEF
-correctness check. Its blocking numbers are not comparable to the device's.
+device.** `border_perf_test.py` survives because it does measure JS-only work
+honestly (parse, allocation, DOM) and because it carries the ECEF correctness
+check. Its blocking numbers are not comparable to the device's.
 
 Second: **profile, do not read the code and form an opinion.** The previous
 session reasoned its way to "it must be the borders" and shipped 485 lines
@@ -55,7 +55,7 @@ out of the profile and none of them is guessable:
 - `input[data-layer="x"]` ran 27 times per websocket message, and planes and
   ships arrive **one message per entity**. ~2.1 s of raw `querySelector`, gone.
 - `noteFeed` read `offsetWidth` right after a class change to restart a
-  keyframe, which forces a **synchronous layout** — one per aircraft update.
+  keyframe, which forces a **synchronous layout**, one per aircraft update.
   1,055 ms -> 79 ms.
 
 ---
@@ -75,7 +75,7 @@ on a build that carries no observer of its own. That is what makes a
 before/after across commits one instrument instead of two with the same name.
 
 `apk_back_test.py` reads the verdict from the window manager, not the page. If
-the app exits, the page is gone and a page probe just errors — it cannot
+the app exits, the page is gone and a page probe just errors. It cannot
 detect the failure it exists to catch. Its third case is the control: back
 again **must** leave, or the first two cases pass just as well against a back
 button that does nothing.
@@ -90,7 +90,7 @@ button that does nothing.
 **Issue 51, the remaining 13,590 ms.** The profile no longer names app code as
 the biggest cost. `ws.onmessage` is 2.1 s inclusive, `resetLayer` 943 ms,
 `pushDeltasToTicker` 857 ms, and the single 3,576 ms task looks like Cesium
-combining the border primitive and compiling its shaders —
+combining the border primitive and compiling its shaders:
 `getDerivedShaderProgram`, `bufferData` and `getProgramParameter` are all in
 the profile around it.
 
@@ -121,7 +121,7 @@ py -V:3.13 scripts/globe_visual_test.py 8744       # 29
 ```
 
 109 checks, all green at `3b4826e`. They were also all green with both defects
-present, which is the point of issue 52 — treat them as a regression net, not
+present, which is the point of issue 52. Treat them as a regression net, not
 as evidence that the app is fast or that its buttons work.
 
 Android: take a GPU lease before using `-gpu host`, and release it after.
