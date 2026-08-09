@@ -1151,3 +1151,49 @@ would 404 inside the APK, where Capacitor serves the page from
 **Still outstanding for the listing:** store graphics, the content rating
 questionnaire, and a Data Safety form, which must be filled in to match the
 policy above rather than from memory.
+
+## 55. A single device boot is not a measurement on this machine (INSTRUMENT)
+Issue 53 established that a desktop harness cannot rank main-thread costs for
+this app, and moved every perf claim onto the device. Today the device set the
+next trap: **one 90 s boot is a sample, not a measurement.**
+
+Three boots of the *same unchanged build*, minutes apart:
+
+| boot | blocking | worst task |
+|---|---|---|
+| 1 | 14,787 ms | 3,465 ms |
+| 2 | 11,240 ms | 2,464 ms |
+| 3 | 12,225 ms | 1,842 ms |
+
+A 1.9x spread on the worst task with nothing changed, which is larger than
+most fixes are worth making. The host sat at 50-74% CPU from other sessions
+throughout, and the emulator runs on what is left. Later sets were worse still,
+one reading 37,757 ms.
+
+This is what invalidated the border-primitive experiment (`c52d437`): its
+worst task of 1,968 ms looked like a 43% win against the 3,465 ms boot, and
+sits inside the unchanged baseline's own 1,842-3,465 ms range. There was no
+result to report in either direction, so the change went in behind
+`?borderprims=split`, default off, rather than being shipped or thrown away on
+a coin flip.
+
+`apk_longtasks.py --repeat N` is the fix. It boots N times, **gates on the
+median** instead of on whichever sample ran while the host was busy, prints the
+range, and prints a warning when the spread is wider than the effect being
+judged. Use `--repeat 5` for any build-to-build comparison, and believe nothing
+from a set whose spread warning fired.
+
+Corollary worth keeping: `adb forward` survives a force-stop, so a stale
+forward points at a dead PID's devtools socket and the run dies with
+`ConnectionClosedError` at attach. `adb forward --remove-all` first.
+
+## 56. keyless_test's terrain elevation checks are flaky (OPEN, low)
+Three checks in `keyless_test.py` (`and back on again`, real ground elevation,
+and the open-Atlantic control) failed once with `None m` for every sample, then
+passed on two immediate re-runs of the identical build. The samples come from
+`sampleTerrainMostDetailed` against the ArcGIS terrain service, so a slow or
+dropped tile fetch reads as `None` rather than as a retry.
+
+Not caused by the border-primitive work: it is terrain tile networking, and the
+failing run was the first of four suites launched back to back. It should retry
+the sample before failing, or the test will keep crying wolf.
