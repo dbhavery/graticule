@@ -1057,7 +1057,7 @@ On the device, measured by `scripts/apk_longtasks.py`:
   |------------------------|-------|-----------|----------|
   | 247d34f (before)       |  128  | 40,959 ms | 9,460 ms |
   | a0d4f69 borders        |  108  | 17,337 ms | 3,741 ms |
-  | 3ce2a89 hot paths      |   73  | 13,590 ms | 3,576 ms |
+  | e474d9a hot paths      |   73  | 13,590 ms | 3,576 ms |
 
 The app also settles now: blocking after the 60 s mark went 2,107 -> 717 ->
 192 ms. Still fails the gate, which is 1,000 ms single / 2,500 ms total,
