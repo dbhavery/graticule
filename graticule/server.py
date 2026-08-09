@@ -917,6 +917,32 @@ async def offline() -> FileResponse:
     return FileResponse(WEB_DIR / "offline.html", media_type="text/html")
 
 
+# ---------------------------------------------------------------------------
+# Store listing pages.
+#
+# Google Play requires a privacy policy URL and a support URL, and both have to
+# resolve for a reviewer who has never installed the app. They are served from
+# the ROOT rather than /static because the URL is typed into a store console by
+# a human and then quoted back to users: "/privacy" survives that, and
+# "/static/privacy.html" is a URL nobody would choose to publish.
+#
+# Both extensions are answered so a link written either way resolves, rather
+# than a 404 sitting behind a store listing field that is checked once.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/privacy")
+@app.get("/privacy.html")
+async def privacy() -> FileResponse:
+    return FileResponse(WEB_DIR / "privacy.html", media_type="text/html")
+
+
+@app.get("/support")
+@app.get("/support.html")
+async def support() -> FileResponse:
+    return FileResponse(WEB_DIR / "support.html", media_type="text/html")
+
+
 @app.get("/favicon.ico")
 async def favicon() -> FileResponse:
     return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-icon")

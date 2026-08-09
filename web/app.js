@@ -64,6 +64,28 @@ function wsUrl(path) {
 
 window.__graticule_api_base = API_BASE;
 
+/* The two links Settings > About carries.
+ *
+ * They are written here rather than left as the "/privacy" in the markup
+ * because in the APK this page is served by Capacitor from https://localhost,
+ * whose asset server knows only the files in web/. A root-relative link would
+ * 404 inside the app while working perfectly on the desktop build, which is
+ * the exact shape of bug native_origin_test.py exists to catch.
+ *
+ * When API_BASE is empty (web and desktop) these stay root-relative, which is
+ * what the FastAPI routes serve. */
+function wireAboutLinks() {
+  const p = document.getElementById('link-privacy');
+  const s = document.getElementById('link-support');
+  if (p) p.href = `${API_BASE}/privacy`;
+  if (s) s.href = `${API_BASE}/support`;
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', wireAboutLinks);
+} else {
+  wireAboutLinks();   // app.js is the last tag in the body, so this is the usual path
+}
+
 const COLORS = {
   planes:     Cesium.Color.fromCssColorString('#ffd14a'),
   ships:      Cesium.Color.fromCssColorString('#4dd2ff'),

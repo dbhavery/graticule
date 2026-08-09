@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Support · Graticule</title>
+<meta name="description" content="Help with Graticule: how to get in touch, answers to common problems, and where the weather data comes from.">
+<meta name="color-scheme" content="dark">
+<!-- Self contained on purpose. See the note in privacy.html. -->
+<style>
+  :root {
+    --bg: #05070a;
+    --panel: rgba(255, 255, 255, 0.028);
+    --border: rgba(255, 255, 255, 0.09);
+    --text: #e6ecf3;
+    --text-dim: #a8b3c2;
+    --text-mute: #8892a3;
+    --accent: #5cd6ff;
+    --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 400 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+    padding: 0 20px calc(72px + env(safe-area-inset-bottom));
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  header {
+    padding: 56px 0 28px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  .eyebrow {
+    font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; font-weight: 600;
+  }
+  h1 { font-size: 31px; line-height: 1.2; margin: 0 0 12px; font-weight: 700; letter-spacing: -0.015em; }
+  .dates { color: var(--text-mute); font-size: 14px; margin: 0; }
+  h2 { font-size: 20px; margin: 40px 0 12px; font-weight: 650; letter-spacing: -0.01em; }
+  h3 { font-size: 16.5px; margin: 24px 0 6px; font-weight: 650; color: var(--text); }
+  p, li { color: var(--text-dim); }
+  p { margin: 0 0 14px; }
+  ul { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--text-mute); }
+  strong { color: var(--text); font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(92, 214, 255, 0.32); }
+  a:hover { border-bottom-color: var(--accent); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 20px; margin: 20px 0;
+  }
+  .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+  .safety {
+    border-color: rgba(245, 158, 11, 0.42);
+    background: rgba(245, 158, 11, 0.07);
+  }
+  .safety h2 { margin-top: 0; color: var(--warn); font-size: 18px; }
+  .contact {
+    border-color: rgba(92, 214, 255, 0.35);
+    background: rgba(92, 214, 255, 0.06);
+  }
+  .contact .addr { font-size: 20px; font-weight: 650; margin: 0 0 6px; }
+  .contact .addr a { border-bottom-width: 2px; }
+  .sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 4px 22px; }
+  .sources p { margin: 0 0 4px; font-size: 14.5px; }
+  footer {
+    margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border);
+    color: var(--text-mute); font-size: 14px;
+  }
+  footer a { margin-right: 18px; }
+  @media (max-width: 560px) {
+    h1 { font-size: 26px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Graticule</p>
+  <h1>Support</h1>
+  <p class="dates">Last updated 8 August 2026.</p>
+</header>
+
+<p>Graticule is a live weather and situational map: a 3D globe carrying radar,
+National Weather Service alerts, surface observations, river gauges, tides,
+buoys, earthquakes, fires, storm reports and aircraft, updating as they update.</p>
+
+<div class="card safety">
+  <h2>Before anything else</h2>
+  <p><strong>Graticule is not an official source of warnings and must not be used
+  to make a life safety decision.</strong> It displays data published by the
+  National Weather Service and other agencies, and it can be delayed, incomplete,
+  or unavailable because of a network problem at either end.</p>
+  <p>For a warning that affects you, the authority is the National Weather Service
+  at weather.gov, your local emergency management agency, and NOAA Weather Radio.
+  Follow their instructions, not this map.</p>
+</div>
+
+<div class="card contact">
+  <p class="addr"><a href="mailto:dbhavery@gmail.com">dbhavery@gmail.com</a></p>
+  <p>Bug reports, questions, feature requests, privacy questions, and store or
+  billing issues all go to the same address, and it is read by the person who
+  builds the app. Expect a reply within a few days.</p>
+  <p>A report is far more useful with your device model, your Android version, and
+  what you were doing when it went wrong. A screenshot is better than all three.</p>
+</div>
+
+<h2>Common problems</h2>
+
+<h3>The locate button does nothing, or says location is off</h3>
+<p>Graticule needs location permission to move the map to where you are. Open your
+device Settings, then Apps, then Graticule, then Permissions, and allow Location.
+Nothing else in the app depends on it. If permission is already on and the fix
+still fails, the device may not have one yet: go somewhere with a clearer view of
+the sky and try again.</p>
+
+<h3>The app takes a while to open</h3>
+<p>It does, and we are working on it. The first launch builds a 3D globe and pulls
+live data for the whole world, which is heavy. Later launches are faster because
+the map assets are cached. If it never finishes, see the next item.</p>
+
+<h3>The globe is black, or no data appears</h3>
+<p>The map imagery and the live feeds both need a working connection. Check that
+you have one, then close the app fully and reopen it. If the globe draws but the
+layers stay empty, the data backend is unreachable, which is a problem on our end
+rather than yours. Please report it.</p>
+
+<h3>The back button does not close the app</h3>
+<p>That is deliberate. Back closes whatever panel, sheet or search you have open,
+one at a time. Once nothing is open, the app tells you that pressing back again
+will exit, and pressing it again does exit.</p>
+
+<h3>A layer is missing, or the map looks empty</h3>
+<p>Layers can be switched off individually. Open the layers panel and check that
+the one you want is enabled. Some layers only carry data over the United States,
+and some only show anything when there is something to show, for example
+hurricanes out of season.</p>
+
+<h3>My settings were lost</h3>
+<p>Settings live only on your device, so clearing the app's storage or
+reinstalling it resets them. There is no cloud copy to restore, by design. See the
+<a href="/privacy">privacy policy</a>.</p>
+
+<h2>Privacy</h2>
+
+<p>Graticule has no account, no advertising, no analytics and no tracking, and
+your location never leaves your device. The
+<a href="/privacy">privacy policy</a> lists specifically what is stored and which
+services receive a request.</p>
+
+<h2>Where the data comes from</h2>
+
+<p>Graticule displays public data produced by these organisations. It is not
+affiliated with, endorsed by, or operated by any of them.</p>
+
+<div class="sources">
+  <p>National Weather Service</p>
+  <p>NOAA National Hurricane Center</p>
+  <p>NOAA Storm Prediction Center</p>
+  <p>NOAA Space Weather Prediction Center</p>
+  <p>NOAA Tides and Currents</p>
+  <p>National Data Buoy Center</p>
+  <p>NOAA National Water Prediction Service</p>
+  <p>Aviation Weather Center</p>
+  <p>Federal Aviation Administration</p>
+  <p>US Geological Survey</p>
+  <p>NASA EOSDIS, GIBS and EONET</p>
+  <p>Smithsonian Global Volcanism Program</p>
+  <p>Iowa State University Mesonet</p>
+  <p>Open-Meteo</p>
+  <p>RainViewer</p>
+  <p>Celestrak</p>
+  <p>SpotterNetwork</p>
+  <p>OpenStreetMap contributors</p>
+  <p>Esri and its data partners</p>
+  <p>Natural Earth</p>
+  <p>Open ADS-B community feeds</p>
+  <p>Caltrans and NYCDOT camera feeds</p>
+</div>
+
+<footer>
+  <a href="/privacy">Privacy Policy</a>
+  <a href="/">Open Graticule</a>
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacy Policy · Graticule</title>
+<meta name="description" content="Graticule collects nothing. No account, no analytics, no advertising, no tracking. This page says exactly what the app sends and to whom.">
+<meta name="color-scheme" content="dark">
+<!--
+  Deliberately self contained: no webfont, no CDN, no script, no image.
+  A page that explains which third parties receive a request should not
+  itself hand your address to a third party in order to render.
+  scripts/legal_pages_test.py asserts that, so it stays true.
+-->
+<style>
+  :root {
+    --bg: #05070a;
+    --panel: rgba(255, 255, 255, 0.028);
+    --border: rgba(255, 255, 255, 0.09);
+    --text: #e6ecf3;
+    --text-dim: #a8b3c2;
+    --text-mute: #8892a3;
+    --accent: #5cd6ff;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 400 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+    padding: 0 20px calc(72px + env(safe-area-inset-bottom));
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  header {
+    padding: 56px 0 28px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 36px;
+  }
+  .eyebrow {
+    font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px;
+    font-weight: 600;
+  }
+  h1 { font-size: 31px; line-height: 1.2; margin: 0 0 12px; font-weight: 700; letter-spacing: -0.015em; }
+  .dates { color: var(--text-mute); font-size: 14px; margin: 0; }
+  h2 {
+    font-size: 20px; margin: 40px 0 12px; font-weight: 650; letter-spacing: -0.01em;
+  }
+  h3 { font-size: 16px; margin: 26px 0 8px; font-weight: 650; color: var(--text); }
+  p, li { color: var(--text-dim); }
+  p { margin: 0 0 14px; }
+  ul { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--text-mute); }
+  strong { color: var(--text); font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(92, 214, 255, 0.32); }
+  a:hover { border-bottom-color: var(--accent); }
+  code {
+    font: 500 13.5px/1.5 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1.5px 6px; border-radius: 4px; color: var(--text);
+  }
+  .lede {
+    font-size: 18.5px; line-height: 1.6; color: var(--text);
+    border-left: 2px solid var(--accent);
+    padding: 2px 0 2px 18px; margin: 0 0 8px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 20px; margin: 20px 0;
+  }
+  .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0 20px; font-size: 14.5px; }
+  th, td {
+    text-align: left; vertical-align: top; padding: 11px 12px 11px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  th { color: var(--text); font-weight: 600; font-size: 13px;
+       letter-spacing: 0.05em; text-transform: uppercase; }
+  td { color: var(--text-dim); }
+  td:first-child { color: var(--text); white-space: nowrap; padding-right: 20px; }
+  footer {
+    margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border);
+    color: var(--text-mute); font-size: 14px;
+  }
+  footer a { margin-right: 18px; }
+  @media (max-width: 560px) {
+    h1 { font-size: 26px; }
+    .lede { font-size: 17px; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    thead { display: none; }
+    tr { padding: 12px 0; border-bottom: 1px solid var(--border); }
+    td { border: 0; padding: 0 0 4px; }
+    /* The desktop first column is nowrap so a provider name never wraps mid
+       phrase. Stacked, that same rule made the widest cell set the page width
+       and the whole document scrolled sideways at 412px. */
+    td:first-child { font-weight: 600; padding-bottom: 6px; white-space: normal; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Graticule</p>
+  <h1>Privacy Policy</h1>
+  <p class="dates">Effective 8 August 2026. Last updated 8 August 2026.</p>
+</header>
+
+<p class="lede">Graticule has no account, no sign in, no advertising, no analytics,
+and no crash reporting. We do not collect, store, sell, or share personal
+information about you, because we never receive any.</p>
+
+<p>That is the whole policy in one sentence. The rest of this page exists because
+"we do not collect anything" is easy to write and hard to check, so below is the
+specific detail: what stays on your device, what the app sends over the network,
+and who receives it.</p>
+
+<h2>Location</h2>
+
+<p><strong>Location access is optional, and the app works without it.</strong>
+Graticule asks for it only when you press the locate button, or when you have
+turned on "start at my location" in Settings. If you decline, the locate button
+tells you it is off and every other feature behaves normally.</p>
+
+<p>When you grant it, the coordinate is used entirely on your device, for two
+things: moving the map camera to where you are, and drawing the blue accuracy
+circle around that point. The coordinate is <strong>not sent to our server, not
+written to storage, and not retained</strong>. It exists in memory until you
+close the app.</p>
+
+<div class="card">
+  <p>The one thing worth understanding: after the camera moves, forecast data for
+  the <em>map area you are now viewing</em> is requested from Open-Meteo, the same
+  as for any other place you navigate to. Open-Meteo receives the coordinates of
+  that map view. It does not receive your device's location fix, and it is not
+  told that the view is centred on you, but if you used the locate button then the
+  area being requested is your area. That is stated plainly here rather than
+  buried, because it is the only case where using this app puts anything near your
+  position onto the network.</p>
+</div>
+
+<h2>What is stored on your device</h2>
+
+<p>Graticule keeps your preferences in your browser's local storage, on the device
+only. Four keys:</p>
+
+<ul>
+  <li><code>graticule.settings.v1</code>, your Settings choices, such as units,
+      which layers are on, and the theme</li>
+  <li><code>graticule.tab</code>, the panel tab you had open</li>
+  <li><code>graticule.rail</code>, whether the side rail is collapsed</li>
+  <li><code>graticule.division</code>, your chosen map division</li>
+</ul>
+
+<p>None of it identifies you and none of it is transmitted. The app also caches
+map assets so it can open without a connection. Clearing the app's storage, or
+uninstalling it, removes all of it. There is no server side copy to delete.</p>
+
+<h2>What the app sends over the network</h2>
+
+<p>Every request made by any app or website reveals your IP address to whoever
+receives it. That is how the internet routes a reply, and no app can avoid it.
+What an app <em>can</em> control is how many parties receive one. Graticule routes
+almost all of its weather data through a single backend, which fetches from the
+National Weather Service, USGS, NOAA and the rest on your behalf, so those
+agencies never see your device at all.</p>
+
+<p>These are the parties your device contacts directly:</p>
+
+<table>
+  <thead>
+    <tr><th>Receives</th><th>What it gets, and why</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Graticule backend</td>
+      <td>Requests for shared feeds: alerts, observations, buoys, rivers, tides,
+          spotter reports, cameras. These are the same for every user and carry no
+          parameters about you. The live layer connection is receive only: the app
+          never sends a message on it. The server runs with its HTTP access log
+          switched off.</td>
+    </tr>
+    <tr>
+      <td>Open-Meteo</td>
+      <td>Latitude and longitude of the map area you are viewing, to return a
+          forecast for it. See the note under Location above.</td>
+    </tr>
+    <tr>
+      <td>Map and imagery providers<br>(Esri ArcGIS, OpenStreetMap, NASA GIBS,
+          Iowa State Mesonet)</td>
+      <td>The tile coordinates of what is on your screen, which is how any map
+          loads. No identifiers are attached.</td>
+    </tr>
+    <tr>
+      <td>Asset hosts<br>(Cesium, jsDelivr, flagcdn, GitHub)</td>
+      <td>Requests for the 3D globe engine, a satellite orbit library, country
+          flags and an aircraft model. Static files, identical for everyone.</td>
+    </tr>
+    <tr>
+      <td>Google Fonts</td>
+      <td>A request for the two typefaces the interface uses. This page and the
+          support page do not use it.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Two further services, Cesium ion and Google Photorealistic 3D Tiles, are
+contacted only if whoever runs the backend has configured optional API keys for
+them. The default build has neither and contacts neither.</p>
+
+<h2>What we do not do</h2>
+
+<ul>
+  <li>No advertising, and no advertising identifier is read</li>
+  <li>No analytics, telemetry or usage measurement of any kind</li>
+  <li>No crash or error reporting service</li>
+  <li>No third party tracking SDK is present in the app</li>
+  <li>No profile is built about you, because there is no identifier to build one against</li>
+  <li>Nothing is sold or shared, because nothing is collected</li>
+</ul>
+
+<h2>Children</h2>
+
+<p>Graticule is not directed at children under 13 and collects no personal
+information from anyone, of any age.</p>
+
+<h2>Your rights</h2>
+
+<p>Rights to access, correct, export or delete personal data all depend on a
+company holding some. We hold none about you. If you want everything Graticule has
+put on your device gone, clear the app's storage or uninstall it, and it is gone.
+If you believe otherwise, write to the address below and we will look into it.</p>
+
+<h2>Changes</h2>
+
+<p>If this policy changes in a way that affects what is collected or who receives
+it, the updated date at the top will change and the app will link to the new
+version. Material changes will be described in the app's release notes rather than
+applied silently.</p>
+
+<h2>Contact</h2>
+
+<p>Questions about this policy, or about privacy in Graticule:
+<a href="mailto:dbhavery@gmail.com">dbhavery@gmail.com</a>.</p>
+
+<footer>
+  <a href="/support">Support</a>
+  <a href="/">Open Graticule</a>
+</footer>
+
+</div>
+</body>
+</html>

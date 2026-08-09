@@ -1315,6 +1315,35 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 .sm-row .mono { color: var(--text); min-width: 64px; text-align: right; font-size: var(--fs-sm); }
 #hover-delay-val { color: var(--text); min-width: 60px; text-align: right; font-size: var(--fs-sm); }
 
+/* Settings > About. The safety line is the reason this block exists: a weather
+   map that looks official has to say once, where a user will actually meet it,
+   that it is not the thing you act on. Amber rather than red: red is the colour
+   of a live warning in this app and a permanent notice must not borrow it. */
+.sm-about { display: flex; flex-direction: column; gap: 10px; }
+.sm-about-warn {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  background: rgba(245, 158, 11, 0.07);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.sm-about-links { margin: 0; display: flex; gap: 18px; }
+.sm-about-links a {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(92, 214, 255, 0.35);
+  padding-bottom: 1px;
+}
+.sm-about-links a:hover { border-bottom-color: var(--accent); }
+/* .sm-hint is right-aligned on phones because everywhere else it is the value
+   at the end of a settings row. Here it is a standalone line, and inherited
+   right-alignment made it wrap into a ragged two-line block. */
+.sm-about .sm-hint { margin-left: 0; text-align: left; }
+
 .sm-section-danger { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .sm-danger-btn {
   background: rgba(239, 68, 68, 0.1);

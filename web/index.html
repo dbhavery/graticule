@@ -1212,6 +1212,24 @@
           <div id="presets-empty">No presets saved. Right-click the globe → "Save as preset" to capture the current camera.</div>
         </section>
 
+        <!-- Reachable from inside the app, not only from a store listing.
+             The two hrefs are filled in at runtime by app.js: in the APK this
+             page is served from https://localhost, where /privacy does not
+             exist, so they have to point at the backend origin instead. -->
+        <section class="sm-section">
+          <div class="sm-section-label">ABOUT</div>
+          <div class="sm-about">
+            <p class="sm-about-warn">Not an official source of warnings. For a warning that
+              affects you, follow the National Weather Service and your local
+              emergency management agency.</p>
+            <p class="sm-about-links">
+              <a id="link-privacy" href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+              <a id="link-support" href="/support" target="_blank" rel="noopener noreferrer">Support</a>
+            </p>
+            <p class="sm-hint">Graticule 1.0 · no account, no ads, no tracking</p>
+          </div>
+        </section>
+
         <section class="sm-section sm-section-danger">
           <button id="reset-settings" class="sm-danger-btn">Reset all settings</button>
           <span class="sm-hint">Clears localStorage and reloads. Camera presets and unit choice are wiped too.</span>
