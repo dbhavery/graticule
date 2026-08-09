@@ -1107,3 +1107,47 @@ for a WebGL app.** It can still measure JS-only work, which is why
 made on the device or it is not a claim.
 The same trap as issue 45, where two capture paths both lied about a frame
 that was correct the whole time: suspect the instrument first.
+
+## 54. The store listing had no privacy policy and no support page (FIXED)
+Both are mandatory fields in the Play Console, and neither existed. Fixed in
+`f2c08b3`: `web/privacy.html` and `web/support.html`, served from the root at
+`/privacy` and `/support` because those URLs get typed into a store console by
+a human and then quoted back at users.
+
+Writing the policy was mostly an audit, since a privacy policy is a set of
+factual claims about a program and this one had never been checked. What the
+code actually does:
+
+* The location fix never leaves the device. `locateMe` hands it to the camera
+  and to `showHere`, which draws the accuracy circle. Nothing else reads it.
+* The live socket is receive-only. There is no `ws.send` in `app.js` at all.
+* The backend fetches NWS, USGS, NOAA, FAA and the rest server-side, so those
+  agencies never see a user's device. That is a real privacy property.
+* `uvicorn` runs with `access_log=False`.
+* There is no analytics, crash-reporting or advertising SDK in the bundle.
+* One honest caveat, stated in the policy rather than omitted: the forecast
+  layer sends the coordinates of the **map view** to Open-Meteo, so after you
+  press locate, the area being requested is your area.
+
+`scripts/legal_pages_test.py` (34 checks) exists because privacy.html cites
+it, and after issue 53 a citation that has never been opened is a defect on
+its own. Two of the policy's claims are checked against the source instead of
+believed: the four `localStorage` keys the policy names must be **exactly**
+the keys `app.js` uses, so adding a fifth key fails the test at the moment the
+policy becomes false; and the tracker/SDK list is grepped out of the shipped
+bundle.
+
+The "these pages contact no third party" check carries the control, because
+zero external requests and a broken detector look identical. The same detector
+pointed at the app reads 876 requests across 7 hosts. It also caught a real
+defect: the stacked mobile table kept `white-space: nowrap` on its first
+column, so privacy.html scrolled sideways at 412px.
+
+Settings > About now carries both links and the not-an-official-warning-source
+line. The hrefs are written at runtime from `API_BASE`, because root-relative
+would 404 inside the APK, where Capacitor serves the page from
+`https://localhost` and the backend is elsewhere.
+
+**Still outstanding for the listing:** store graphics, the content rating
+questionnaire, and a Data Safety form, which must be filled in to match the
+policy above rather than from memory.
