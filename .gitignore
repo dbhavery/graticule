@@ -31,9 +31,18 @@ us_hot.geojson
 # We commit the derived GeoJSONs (~11 MB total) but keep the zips out.
 ne_*.zip
 
-# Airspace JSON — derived from OpenAIP us_asp.json, same CC-BY-NC-SA license
-# constraint as the upstream. Don't commit; build locally.
-web/data/airspace.json
+# web/data/airspace.json IS COMMITTED as of 2026-08-09.
+#
+# It used to be ignored because it was derived from OpenAIP's us_asp.json and
+# inherited its CC-BY-NC-SA constraint. It is now built from FAA Class
+# Airspace, a work of the US government under 17 U.S.C. 101, so there is no
+# licence reason to keep it out and a good reason to keep it in: the APK ships
+# it, and a build input that only exists on one machine is not reproducible.
+#     py -V:3.13 scripts/fetch_faa_airspace.py
+
+# The retired OpenAIP export, 127 MB. Kept on disk, never committed.
+_deprecated/
+
 graphify-out/
 .code-review-graph/
 

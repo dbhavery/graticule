@@ -237,36 +237,19 @@ def populated_places() -> dict | None:
     return {"type": "FeatureCollection", "features": feats}
 
 
-def airspace() -> list[dict] | None:
-    """Strip OpenAIP us_asp.json down to the fields the front-end uses.
-
-    Source format is OpenAIP's raw API JSON — a list of dicts with many
-    bookkeeping fields (createdBy, updatedAt, dataIngestion …). We keep just
-    geometry + name + icaoClass + type + upper/lower limits + hours.
-
-    Returns None if us_asp.json isn't present in the project root (i.e., the
-    user hasn't pulled the OpenAIP US export — the airspace toggle is then
-    inert client-side).
-    """
-    src = ROOT / "us_asp.json"
-    if not src.exists():
-        return None
-    raw = json.loads(src.read_text(encoding="utf-8"))
-    out = []
-    for a in raw:
-        geom = a.get("geometry") or {}
-        if geom.get("type") != "Polygon":
-            continue
-        out.append({
-            "name": a.get("name") or "",
-            "type": a.get("type"),
-            "icaoClass": a.get("icaoClass"),
-            "upperLimit": a.get("upperLimit"),
-            "lowerLimit": a.get("lowerLimit"),
-            "hoursOfOperation": a.get("hoursOfOperation"),
-            "geometry": geom,
-        })
-    return out
+# Airspace used to be built here, from an OpenAIP export named us_asp.json in
+# the project root. It is not any more, and this note is where the function
+# was, because a generator that quietly rewrites a file from a licence you
+# stopped using is worse than no generator at all.
+#
+# OpenAIP is CC BY-NC-SA 4.0: an attribution term the app never honoured, and a
+# NonCommercial clause that becomes a real question on a store listing. The
+# data is now FAA Class Airspace, a work of the US government with neither.
+#
+#     py -V:3.13 scripts/fetch_faa_airspace.py
+#
+# The OpenAIP source files were moved to _deprecated/2026-08-09/ rather than
+# deleted. If you restore one, do not point it at web/data/airspace.json.
 
 
 def write(name: str, data) -> int:
@@ -297,12 +280,7 @@ def main() -> None:
     else:
         print(f"  {len(pp['features'])} city features → {write('ne_populated_places.geojson', pp):,} bytes")
 
-    print("building airspace …")
-    asp = airspace()
-    if asp is None:
-        print("  us_asp.json not in project root — skipping airspace build")
-    else:
-        print(f"  {len(asp)} polygons → {write('airspace.json', asp):,} bytes")
+    print("airspace: not built here — run scripts/fetch_faa_airspace.py")
 
     print(f"\noutput dir: {OUT}")
 

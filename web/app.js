@@ -3677,18 +3677,27 @@ async function buildStates() {
   }
 }
 
-// ICAO airspace class → fill color (low alpha) + outline color (higher alpha).
-// OpenAIP icaoClass: 1=A, 2=B, 3=C, 4=D, 5=E, 6=F, 7=G, 8=other/unspecified.
+/* Airspace class → fill colour (low alpha) + outline (higher alpha).
+ *
+ * Keyed by the CLASS LETTER, which is what the FAA publishes. It used to be
+ * keyed by OpenAIP's icaoClass integers, and that mapping was the last thing
+ * in this file that could only have come from an OpenAIP extract. The data is
+ * now FAA Class Airspace: a work of the US government, no attribution term and
+ * no NonCommercial clause, unlike the CC BY-NC-SA file it replaced.
+ *
+ * See scripts/fetch_faa_airspace.py for what is kept and what is dropped. The
+ * short version: the Class E en-route blanket is not drawn, because a
+ * translucent wash over the whole country is not information.
+ */
 const AIRSPACE_CLASS_COLOR = {
-  1: '#f87171',  // A — red
-  2: '#fb923c',  // B — orange
-  3: '#fbbf24',  // C — amber
-  4: '#a3e635',  // D — lime
-  5: '#60a5fa',  // E — blue
-  6: '#a78bfa',  // F — violet
-  7: '#a78bfa',  // G — violet (rare in US)
-  8: '#94a3b8',  // other — slate
+  A: '#f87171',  // red
+  B: '#fb923c',  // orange
+  C: '#fbbf24',  // amber
+  D: '#a3e635',  // lime
+  E: '#60a5fa',  // blue (surface areas and extensions only)
+  G: '#a78bfa',  // violet (rare in the US)
 };
+const AIRSPACE_OTHER_COLOR = '#94a3b8';   // slate
 
 async function buildAirspace() {
   if (airspaceBuilt) return;
@@ -3709,8 +3718,8 @@ async function buildAirspace() {
         .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
       if (positions.length < 3) continue;
 
-      const cls = a.icaoClass ?? 8;
-      const css = AIRSPACE_CLASS_COLOR[cls] || AIRSPACE_CLASS_COLOR[8];
+      const cls = (a.class || '').toUpperCase();
+      const css = AIRSPACE_CLASS_COLOR[cls] || AIRSPACE_OTHER_COLOR;
       const fill = Cesium.Color.fromCssColorString(css).withAlpha(0.10);
       const outline = Cesium.Color.fromCssColorString(css).withAlpha(0.55);
 
@@ -3728,11 +3737,13 @@ async function buildAirspace() {
         properties: {
           kind: 'airspace',
           name: a.name || '',
-          icaoClass: cls,
+          airspaceClass: cls,
           type: a.type,
-          upperLimit: a.upperLimit,
-          lowerLimit: a.lowerLimit,
-          hoursOfOperation: a.hoursOfOperation,
+          upper: a.upper,
+          lower: a.lower,
+          hours: a.hours,
+          city: a.city,
+          state: a.state,
         },
       });
       added++;
