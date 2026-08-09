@@ -573,7 +573,25 @@ async function buildBorderPrimitive(key) {
     draped: clamp,
     lines: borderLineCounts.countries + borderLineCounts.states,
   };
+  syncBorderCount(key);
   return lineCount;
+}
+
+/* What the rail says this layer holds.
+ *
+ * It used to be the data source's entity count, which was right when every
+ * border line WAS an entity. Now the lines are a primitive and the labels
+ * arrive as the camera descends, so that number reads 0 for States at orbit
+ * with 3,593 state lines drawn on screen. A layer that shows 0 next to
+ * visible lines is the app telling the operator about its own internals,
+ * which is the thing issue 44 was about.
+ *
+ * Lines plus whichever labels currently exist is the same total the entity
+ * count used to give: 7,785 + 258 for countries, 3,593 + 1,468 for states.
+ */
+function syncBorderCount(key) {
+  const ds = key === 'countries' ? countriesDS : statesDS;
+  setCount(key, borderLineCounts[key] + (ds ? ds.entities.values.length : 0));
 }
 
 function setBorderLinesShown(key, on) {
@@ -665,7 +683,7 @@ async function syncLabelTiers() {
           ds.entities.resumeEvents();
           await borderYield();
         }
-        setCount(key, ds.entities.values.length);
+        syncBorderCount(key);
       }
     } while (_labelSyncAgain);
   } finally {
@@ -3454,7 +3472,7 @@ async function buildCountries() {
       }) });
     }
     stashLabelDefs('countries', labelDefs);
-    setCount('countries', countriesDS.entities.values.length);
+    syncBorderCount('countries');
     updateCategoryCounts();
     console.log(`Built ${built} country border lines + ${(labels.features||[]).length} labels`);
   } catch (e) {
@@ -3505,7 +3523,7 @@ async function buildStates() {
       }) });
     }
     stashLabelDefs('states', labelDefs);
-    setCount('states', statesDS.entities.values.length);
+    syncBorderCount('states');
     updateCategoryCounts();
     console.log(`Built ${built} state border lines + ${(labels.features||[]).length} labels`);
   } catch (e) {

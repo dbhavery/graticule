@@ -1034,26 +1034,62 @@ change it. capacitor.config.js drops the page to `http://localhost` when the
 backend is http, which is a DEVELOPMENT affordance only.
 `android_build.py --release` refuses any base that is not https.
 
-## 50. Hardware back still exits the app on the emulator (OPEN, store blocker)
-`initHardwareBack` now retries for the Capacitor App plugin instead of testing
-once and silently returning, but a single back press with the command palette
-open still exits. Not yet root-caused. Prime suspect is issue 51: the DevTools
-probe times out during the same window, so the JS thread is blocked and the
-listener may not be attached when the key arrives.
-Reproduce: install, launch, wait 60 s, open the palette, `adb shell input
-keyevent KEYCODE_BACK`, then check `adb shell dumpsys window | grep mCurrentFocus`.
+## 50. Hardware back exited the app instead of closing what was open (RESOLVED)
+Store blocker; a reviewer presses it first. The cause was issue 51, exactly as
+suspected here: `initHardwareBack` retries for the Capacitor App plugin, but on
+a main thread blocked for nine seconds the retry chain does not get to run, so
+no listener is attached when the key arrives and Capacitor's default -- exit --
+is what runs. Nothing was wrong with the handler.
+Fixed by the border work in `a0d4f69`, which cut the worst single task on the
+device from 9,460 ms to 3,741 ms. Verified on the emulator, three cases with a
+control, all passing: palette open -> back closes it and the app keeps focus;
+nothing open -> back warns and the app keeps focus; back again -> the app
+leaves. That third case is the control, because the first two also pass
+against a back button that does nothing at all.
+Regression test: `py -V:3.13 scripts/apk_back_test.py`, 8 checks, on device.
+It reads the verdict from `dumpsys window`, not from the page: if the app
+exits, the page is gone and a page probe just errors.
 
-## 51. Boot blocks the main thread for ~8 seconds building borders (OPEN, "fast")
-Measured at 412x915 with a longtask PerformanceObserver: 16-18 long tasks,
-8.0-8.8 s total blocking, worst single task 4.0-4.2 s. Identical with
-`?clamp=off`, so it is the 395,238 vertices, not the draping. Removing the
-0.002-degree decimation (issue: borders were 223 m out) raised the vertex count
-17-26%, so this got worse rather than being introduced.
-The fix is not to put the decimation back. Candidates: build the entities in
-chunks across frames, build in a worker, or ship the borders as a tiled vector
-source so only what is on screen is ever turned into entities.
+## 51. Boot blocks the main thread (OPEN, "fast" -- much better, not fixed)
+Was: 40,959 ms of blocking on the device with a 9,460 ms worst task. Now
+17,337 ms and 3,741 ms, and the app settles instead of stalling past the
+minute mark (blocking in the 45-60 s window went from 13,074 ms to 149 ms).
+Still fails the gate, which is 1,000 ms single / 2,500 ms total: Android's
+input-dispatch ANR is 5 s and a back press that waits a second already reads
+as broken.
+The borders are no longer the cost. An on-device CPU profile
+(`scripts/apk_profile.py`) puts the remainder in `doRefreshAlerts` at 3.8 s
+inclusive, the WebSocket handler `ws.onmessage`/`handleMessage` at 3.7 s,
+about 2.1 s of raw `querySelector`, and 6.1 s of garbage collection. That is
+where the next pass goes, and none of it is the borders.
+Do NOT restore the 0.002-degree decimation: that is Don's directive 8 undone,
+it buys 1.5 MB for 223 m of accuracy, and it was never the cost anyway.
 
-## 52. The desktop-Chromium suites cannot see either of the above
-All five suites pass (109 checks) with both defects present. They measure
-layout, state and pixels on a machine with no back button, and none of them
-watches main-thread blocking. A phone-shaped viewport is not a phone.
+## 52. The desktop suites could not see either of the above (PARTLY ADDRESSED)
+All five suites passed, 109 checks, with both defects present, because they
+measure layout, state and pixels on a machine with no back button and none of
+them watches time. A phone-shaped viewport is not a phone.
+There are now three instruments that run against the device: `apk_longtasks.py`
+(main-thread blocking, for any build), `apk_profile.py` (CPU profile from
+inside the WebView) and `apk_back_test.py` (the real key, checked against the
+window manager). None of them is wired into a single command yet, and none
+runs in CI, because there is no CI and no attached phone by default.
+
+## 53. The desktop harness inverted the verdict on a correct fix (INSTRUMENT)
+The worst mistake of the session, and it nearly threw away a working change.
+Measured on desktop Chromium at 412x915, the border rewrite looked like it did
+nothing at all: 12,937 ms of blocking before, 13,339 ms after, worst task
+4,191 ms before and 7,562 ms after. On that evidence the honest call is to
+revert it.
+The harness was measuring itself. A CPU profile put 4,754 ms of that worst
+task inside a single `getImageData` on a 131x144 canvas, with every later
+readback of the same size costing 0-11 ms. It is SwiftShader initialising its
+canvas backend once. The device does not do it, and it is larger than
+everything the fix touches.
+On the device the same change cuts blocking 58% and the worst task 60%.
+**A desktop browser with a software rasteriser cannot rank main-thread costs
+for a WebGL app.** It can still measure JS-only work, which is why
+`border_perf_test.py` survives, but any perf claim about this app has to be
+made on the device or it is not a claim.
+The same trap as issue 45, where two capture paths both lied about a frame
+that was correct the whole time: suspect the instrument first.
