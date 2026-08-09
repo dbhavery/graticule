@@ -85,6 +85,7 @@ const SHELL_URLS = [
   '/',
   '/static/app.js',
   '/static/api-config.js',
+  '/static/border-worker.js',
   '/static/style.css',
   '/manifest.webmanifest',
   '/static/icons/icon-192.png',

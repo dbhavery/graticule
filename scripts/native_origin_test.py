@@ -78,11 +78,11 @@ def serve_shell() -> http.server.ThreadingHTTPServer:
 
 # `viewer.entities` is EMPTY on a healthy boot and always was -- every layer in
 # this app is a DataSource, so a check on viewer.entities.values.length is a
-# check that reads 0 whether the app worked or not. Measured against a
-# same-origin control: entities 0, primitives 1, imagery 5, and 13,098 features
-# spread across the DataSource collection. The boundary layers are the ones
-# worth counting, because they are big, they always load, and they come from
-# the backend rather than a tile CDN.
+# check that reads 0 whether the app worked or not. The border LINES are now a
+# scene primitive (built in workers, issue 51), so entity counts shrank from
+# ~13,000 to a few hundred: the count that proves /static loaded is the app's
+# own __graticule_borders.lines, which is only written after the worker has
+# fetched and parsed the boundary files.
 PROBE = """() => {
   const v = window.__graticule_viewer;
   let feats = 0;
@@ -93,6 +93,7 @@ PROBE = """() => {
     base: window.__graticule_api_base,
     statusText: (document.getElementById('rail-status') || {}).textContent || '',
     features: feats,
+    borderLines: (window.__graticule_borders || {}).lines || 0,
     imagery: v.imageryLayers.length,
     // Starts at a hard-coded 0 in the markup and is only ever written by the
     // /api/nws/alerts handler, so a number here is proof the backend answered.
@@ -178,8 +179,8 @@ async def main() -> None:
             chk(st2["alerts"] == 0,
                 f"and the alert count stayed at its markup 0 ({st2['alerts']}), "
                 f"which is what makes the count above evidence")
-            chk(st2["features"] >= 5000,
-                f"while /static still loaded normally ({st2['features']} features) -- "
+            chk(st2["borderLines"] >= 5000,
+                f"while /static still loaded normally ({st2['borderLines']} border lines) -- "
                 f"so the failure above is the BACKEND, not a dead page")
             await pg2.close()
 

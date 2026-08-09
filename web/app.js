@@ -5,6 +5,21 @@
  *                            Kp index, solar wind speed, X-ray flare class.
  */
 
+/* Every main-thread stall over 50 ms, recorded from the first script tick.
+ * This exists because the desktop harness proved unable to see them (issue
+ * 52) and the WebView probe cannot inject an observer before load. Reading
+ * window.__graticule_longtasks on ANY running build answers "did boot
+ * freeze" with numbers instead of a feeling. Capped so it can never grow. */
+window.__graticule_longtasks = [];
+try {
+  new PerformanceObserver((list) => {
+    const log = window.__graticule_longtasks;
+    for (const e of list.getEntries()) {
+      if (log.length < 200) log.push({ t: Math.round(e.startTime), ms: Math.round(e.duration) });
+    }
+  }).observe({ entryTypes: ['longtask'] });
+} catch { /* older WebView: the probe just sees an empty list */ }
+
 /* ---------- Where the backend lives ---------------------------------------
    On the web build the backend is whatever origin served this file, so a bare
    `/api/rivers` is correct and always has been.
@@ -351,9 +366,22 @@ const SETTINGS_KEY = 'graticule.settings.v1';
  */
 const BORDER_CLAMP = new URLSearchParams(location.search).get('clamp') !== 'off';
 
-// The parsed GeoJSON, kept so a terrain transition re-drapes from memory
-// rather than re-fetching 9 MB. The download was always the expensive half.
-const borderGeo = { countries: null, states: null };
+/* ---- Loading the borders without freezing the app -------------------------
+ *
+ * The border GeoJSON is 9 MB of ~640k tiny coordinate arrays, and parsing it
+ * on the main thread is what issue 51 measured: single tasks of 4.3 s and
+ * 2.8 s at boot, landing exactly when each file was parsed and converted. An
+ * 8-second stall is also a hardware back press that never gets handled.
+ *
+ * So border-worker.js does the fetch, the parse and the degrees->ECEF math
+ * for every vertex, and hands back ONE transferable Float64Array plus
+ * offsets. The main thread wraps subarray views (zero copy) and creates
+ * entities in chunks that yield to the frame loop between slices.
+ *
+ * The cache holds the typed arrays, not the raw GeoJSON, so a terrain
+ * transition re-drapes from memory without re-parsing anything.
+ */
+const borderCache = { countries: null, states: null };
 // How the entities currently on screen were actually built, which is not the
 // same question as what is currently wanted.
 let bordersDrapedNow = false;
@@ -362,49 +390,288 @@ function borderDrapeWanted() {
   return BORDER_CLAMP && terrainIsReal;
 }
 
-/* Re-draping is a rebuild, because clampToGround is fixed at construction.
- *
- * Only the border LINES are touched. The labels are billboards positioned by
- * lat/lon and never had this problem, and rebuilding them would make the
- * country names flicker on every terrain transition for no reason. */
-function redrapeBorderLines(ds, geo, material, kind, ddc) {
-  if (!ds || !geo) return 0;
-  const clamp = borderDrapeWanted();
-  let n = 0;
-  ds.entities.suspendEvents();
-  try {
-    // Remove only what this function made, so labels and anything else that
-    // shares the data source survive.
-    for (const e of ds.entities.values.slice()) {
-      if (e.properties?.kind?.getValue?.() === kind) ds.entities.remove(e);
-    }
-    for (const f of (geo.features || [])) {
-      const coords = f.geometry?.coordinates;
-      if (!coords || coords.length < 2) continue;
-      const positions = coords
-        .filter((c) => typeof c[0] === 'number' && typeof c[1] === 'number')
-        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
-      if (positions.length < 2) continue;
-      ds.entities.add({
-        polyline: Object.assign(
-          { positions, width: 1.0, material, clampToGround: clamp },
-          ddc ? { distanceDisplayCondition: ddc } : {},
-        ),
-        properties: { kind, ...f.properties },
-      });
-      n++;
-    }
-  } finally {
-    ds.entities.resumeEvents();
-  }
-  return n;
+function loadBorderLines(url) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try {
+      w = new Worker('/static/border-worker.js');
+    } catch (e) { reject(e); return; }
+    w.onmessage = (ev) => {
+      w.terminate();
+      if (ev.data && ev.data.error) reject(new Error(ev.data.error));
+      else resolve(ev.data);
+    };
+    w.onerror = (e) => { w.terminate(); reject(new Error(e.message || 'border worker failed')); };
+    w.postMessage({ url });
+  });
 }
 
+// A parse fallback for the day a WebView has no Worker. Same output shape,
+// same thread cost as the old code -- slow but never wrong.
+async function parseBorderLinesInline(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+  const doc = await res.json();
+  const offsets = [], props = [], flat = [];
+  for (const f of (doc.features || [])) {
+    const coords = f.geometry?.coordinates;
+    if (!coords || coords.length < 2) continue;
+    const start = flat.length / 3;
+    for (const c of coords) {
+      if (typeof c[0] !== 'number' || typeof c[1] !== 'number') continue;
+      const p = Cesium.Cartesian3.fromDegrees(c[0], c[1], 0);
+      flat.push(p.x, p.y, p.z);
+    }
+    const len = flat.length / 3 - start;
+    if (len < 2) { flat.length = start * 3; continue; }
+    offsets.push(start, len);
+    props.push(f.properties || {});
+  }
+  return { buf: new Float64Array(flat), offsets: new Uint32Array(offsets), props };
+}
+
+// `?borderworker=off` forces the inline path for one load. It exists so the
+// perf test has a CONTROL: the same measurement on the same build must show
+// the stall when parsing runs inline, or a pass with the worker proves
+// nothing about the worker.
+const BORDER_WORKER_OFF =
+  new URLSearchParams(location.search).get('borderworker') === 'off';
+
+async function fetchBorderLines(url) {
+  if (BORDER_WORKER_OFF) return parseBorderLinesInline(url);
+  try {
+    return await loadBorderLines(url);
+  } catch (e) {
+    console.warn('Border worker unavailable, parsing inline:', e);
+    return parseBorderLinesInline(url);
+  }
+}
+
+/* Yield to the event loop between chunks. requestRender so Cesium's own
+ * update tick runs and batches what just landed; the setTimeout race is
+ * because a throttled rAF (hidden tab, headless) must not stall the build. */
+function borderYield() {
+  if (viewer) viewer.scene.requestRender();
+  return new Promise((r) => {
+    let done = false;
+    const fin = () => { if (!done) { done = true; r(); } };
+    requestAnimationFrame(fin);
+    setTimeout(fin, 50);
+  });
+}
+
+const BORDER_CHUNK_LINES = 300;
+
+/* ---- The lines are PRIMITIVES, not entities -------------------------------
+ *
+ * 12,846 polylines through the Entity layer meant Cesium's PolylineCollection
+ * rebuilt its vertex buffers on the MAIN THREAD -- a monolithic rewrite that
+ * profiled at 6.1 s in one task at phone size, and chunking the entity adds
+ * only made the total worse (each chunk re-batched the growing collection:
+ * 11.7 s became 20.8 s). A Primitive with PolylineGeometry instances runs
+ * createGeometry and combineGeometry in Cesium's own workers; the main thread
+ * creates descriptor objects (chunked below) and uploads the finished buffers.
+ *
+ * allowPicking is false: a border is context, not a data object, and an
+ * unpickable line means a click lands on the warning polygon under it
+ * instead of a Natural Earth property sheet.
+ *
+ * The states' hide-beyond-8-Mm condition rides as a per-instance attribute on
+ * the flat primitive. The DRAPED primitive deliberately omits it: terrain
+ * only attaches below 1.5 Mm, where the horizon is at most ~4.4 Mm away, so
+ * nothing a draped state line could hide is ever on screen. Provable no-op.
+ */
 const BORDER_LINE_STYLE = {
-  countries: { alpha: 0.45, kind: 'country_border', ddc: null },
-  states:    { alpha: 0.30, kind: 'state_border',
-               ddc: () => new Cesium.DistanceDisplayCondition(0, 8e6) },
+  countries: { color: '#cbd5e1', kind: 'country_border', ddcFar: null },
+  states:    { color: '#cbd5e1', kind: 'state_border', ddcFar: 8e6 },
 };
+
+const borderPrims = { countries: null, states: null };
+const borderLineCounts = { countries: 0, states: 0 };
+const _borderPrimGen = { countries: 0, states: 0 };
+// Layer visibility for the lines, mirrored by the toggles. Starts true
+// because both switches ship checked.
+const borderShown = { countries: true, states: true };
+
+function borderAlpha(key) {
+  return key === 'countries' ? settings.opCountries : settings.opStates;
+}
+
+async function buildBorderPrimitive(key) {
+  const cache = borderCache[key];
+  const style = BORDER_LINE_STYLE[key];
+  if (!viewer || !cache || !style) return 0;
+  const gen = ++_borderPrimGen[key];
+  const clamp = borderDrapeWanted();
+  const { buf, offsets } = cache;
+  const lineCount = offsets.length / 2;
+
+  const ddcAttr = (!clamp && style.ddcFar)
+    ? new Cesium.DistanceDisplayConditionGeometryInstanceAttribute(0, style.ddcFar)
+    : undefined;
+
+  const instances = new Array(lineCount);
+  for (let i = 0; i < lineCount; i += BORDER_CHUNK_LINES) {
+    if (gen !== _borderPrimGen[key]) return 0;      // superseded mid-build
+    const hi = Math.min(i + BORDER_CHUNK_LINES, lineCount);
+    for (let li = i; li < hi; li++) {
+      const start = offsets[li * 2], len = offsets[li * 2 + 1];
+      const positions = new Array(len);
+      for (let k = 0; k < len; k++) {
+        const o = (start + k) * 3;
+        positions[k] = new Cesium.Cartesian3(buf[o], buf[o + 1], buf[o + 2]);
+      }
+      instances[li] = new Cesium.GeometryInstance({
+        geometry: clamp
+          ? new Cesium.GroundPolylineGeometry({ positions, width: 1.0 })
+          : new Cesium.PolylineGeometry({
+              positions, width: 1.0,
+              vertexFormat: Cesium.PolylineMaterialAppearance.VERTEX_FORMAT,
+            }),
+        attributes: ddcAttr ? { distanceDisplayCondition: ddcAttr } : undefined,
+      });
+    }
+    await borderYield();
+  }
+  if (gen !== _borderPrimGen[key]) return 0;
+
+  const appearance = new Cesium.PolylineMaterialAppearance({
+    material: Cesium.Material.fromType('Color', {
+      color: Cesium.Color.fromCssColorString(style.color).withAlpha(borderAlpha(key)),
+    }),
+    translucent: true,
+  });
+  const prim = clamp
+    ? new Cesium.GroundPolylinePrimitive({
+        geometryInstances: instances, appearance,
+        allowPicking: false, asynchronous: true,
+      })
+    : new Cesium.Primitive({
+        geometryInstances: instances, appearance,
+        allowPicking: false, asynchronous: true,
+      });
+  prim.show = borderShown[key];
+  viewer.scene.primitives.add(prim);
+
+  // The geometry combines in a worker; the old primitive (a terrain
+  // transition, an opacity rebuild) stays up until the new one can draw, so
+  // the borders never blink out mid-flight.
+  const old = borderPrims[key];
+  borderPrims[key] = prim;
+  const reap = setInterval(() => {
+    const stale = gen !== _borderPrimGen[key];
+    if (prim.ready || stale) {
+      clearInterval(reap);
+      if (old && !old.isDestroyed()) viewer.scene.primitives.remove(old);
+      if (stale && !prim.isDestroyed()) viewer.scene.primitives.remove(prim);
+      viewer.scene.requestRender();
+    }
+  }, 120);
+
+  borderLineCounts[key] = lineCount;
+  window.__graticule_borders = {
+    draped: clamp,
+    lines: borderLineCounts.countries + borderLineCounts.states,
+  };
+  return lineCount;
+}
+
+function setBorderLinesShown(key, on) {
+  borderShown[key] = on;
+  const p = borderPrims[key];
+  if (p) { p.show = on; viewer?.scene.requestRender(); }
+}
+
+function setBorderLinesAlpha(key) {
+  const p = borderPrims[key];
+  if (!p || !p.appearance) return;
+  const u = p.appearance.material.uniforms;
+  u.color = Cesium.Color.fromCssColorString(BORDER_LINE_STYLE[key].color)
+    .withAlpha(borderAlpha(key));
+  viewer?.scene.requestRender();
+}
+
+/* ---- Labels are created lazily, by altitude -------------------------------
+ *
+ * Cesium rasterizes a label's glyphs on the main thread the moment the entity
+ * is created, visible or not. Profiled at boot: 10.5 s of a 12.5 s Cesium
+ * total sat in the canvas text rasterizer, for 1,726 border labels, at a
+ * camera height where all but a handful were beyond their own farthest
+ * distanceDisplayCondition. Rasterizing 1,468 state names nobody can see is
+ * most of what issue 51 measured.
+ *
+ * So a label is not created until the camera is low enough for it to possibly
+ * be seen. The test is conservative and provable: a label's distance from the
+ * camera is never less than the camera's height, so `camH > farM * 1.25`
+ * means the label is beyond its farthest display distance no matter where on
+ * the globe it sits -- skipping it cannot change a pixel. Once created, a
+ * label stays; its glyphs are in the atlas and re-creating them is the cost
+ * this exists to avoid.
+ */
+const labelPool = { countries: [], states: [] };
+let _labelSyncBusy = false;
+let _labelSyncAgain = false;
+// Labels rasterize inside the visualizer's NEXT update tick, all at once, so
+// the chunk size here IS the size of that main-thread task. A dozen labels is
+// ~10 ms on a real device.
+const LABEL_CHUNK = 12;
+
+function stashLabelDefs(key, defs) {
+  // The def's position doubles as the proximity test point. Computed once
+  // here: 1,726 conversions is microseconds, and it saves re-deriving it on
+  // every camera stop.
+  for (const d of defs) d.pos = Cesium.Cartesian3.fromDegrees(d.lon, d.lat, 0);
+  labelPool[key].push(...defs);
+  syncLabelTiers();
+}
+
+/* A label becomes real when the camera could actually see it, and the test is
+ * BOTH altitude and proximity:
+ *
+ *   camH <= farM * 1.25       cheap reject -- distance to any label is never
+ *                             less than the camera's height, so above this
+ *                             the label cannot draw anywhere on the globe.
+ *   dist <= farM * 1.35       the camera is close enough that THIS label is
+ *                             within (or near) its display range.
+ *
+ * The second test is what the first version lacked: descending to 245 km made
+ * all 1,468 state names due at once, when the view can hold half a dozen
+ * states. Both bounds are supersets of visibility, so a label that could draw
+ * a pixel is always created; the margin over 1.0 exists so a label fades in
+ * slightly before its range boundary instead of popping at it. */
+async function syncLabelTiers() {
+  if (!viewer) return;
+  if (_labelSyncBusy) { _labelSyncAgain = true; return; }
+  _labelSyncBusy = true;
+  try {
+    do {
+      _labelSyncAgain = false;
+      const camH = viewer.camera.positionCartographic.height;
+      const camPos = viewer.camera.positionWC;
+      for (const [key, ds] of [['countries', countriesDS], ['states', statesDS]]) {
+        const pool = labelPool[key];
+        if (!ds || !pool.length) continue;
+        const due = [], keep = [];
+        for (const d of pool) {
+          const near = camH <= d.farM * 1.25
+            && Cesium.Cartesian3.distance(camPos, d.pos) <= d.farM * 1.35;
+          (near ? due : keep).push(d);
+        }
+        if (!due.length) continue;
+        labelPool[key] = keep;
+        for (let i = 0; i < due.length; i += LABEL_CHUNK) {
+          ds.entities.suspendEvents();
+          for (const d of due.slice(i, i + LABEL_CHUNK)) ds.entities.add(d.make());
+          ds.entities.resumeEvents();
+          await borderYield();
+        }
+        setCount(key, ds.entities.values.length);
+      }
+    } while (_labelSyncAgain);
+  } finally {
+    _labelSyncBusy = false;
+  }
+}
 
 let _redrapeTimer = null;
 
@@ -415,25 +682,31 @@ function syncBorderDrape() {
 
   // Debounced, and for the same reason the terrain gate is: crossing the
   // altitude threshold while flying produces a burst of transitions, and
-  // rebuilding 13,098 polylines on each one would stall the frame that the
-  // rebuild exists to improve.
+  // rebuilding 12,846 polylines on each one would stall the frame that the
+  // rebuild exists to improve. The rebuild itself is cheap on this thread --
+  // the geometry combines in Cesium's workers -- and the old primitive stays
+  // up until the new one is ready to draw.
   clearTimeout(_redrapeTimer);
-  _redrapeTimer = setTimeout(() => {
+  _redrapeTimer = setTimeout(async () => {
     if (borderDrapeWanted() === bordersDrapedNow) return;
     bordersDrapedNow = borderDrapeWanted();
-    let total = 0;
-    for (const [key, ds] of [['countries', countriesDS], ['states', statesDS]]) {
-      const style = BORDER_LINE_STYLE[key];
-      const material = new Cesium.ColorMaterialProperty(
-        Cesium.Color.fromCssColorString('#cbd5e1').withAlpha(style.alpha));
-      total += redrapeBorderLines(ds, borderGeo[key], material, style.kind,
-                                  style.ddc ? style.ddc() : null);
+    // The failure path is loud AND resets the optimistic flag, or a single
+    // rejection here would freeze the borders in the wrong mode forever with
+    // nothing in the console -- the exact shape of the swallowed
+    // ReferenceError that hid the polar fix for a whole session.
+    try {
+      let total = 0;
+      for (const key of ['countries', 'states']) {
+        total += await buildBorderPrimitive(key);
+      }
+      if (total) {
+        console.log(`Borders re-drawn ${bordersDrapedNow ? 'draped over terrain' : 'flat'}`
+                    + ` (${total} lines)`);
+      }
+    } catch (e) {
+      console.error('Border re-drape failed; will retry on the next transition:', e);
+      bordersDrapedNow = !bordersDrapedNow;
     }
-    if (total) {
-      console.log(`Borders re-drawn ${bordersDrapedNow ? 'draped over terrain' : 'flat'}`
-                  + ` (${total} lines)`);
-    }
-    window.__graticule_borders = { draped: bordersDrapedNow, lines: total };
   }, 300);
 }
 
@@ -3074,12 +3347,15 @@ function buildCables() {
 function toggleCountries(on) {
   if (!countriesDS) return;
   if (on && !countriesBuilt) buildCountries();
+  // The labels are entities and fade; the lines are a primitive and snap.
+  setBorderLinesShown('countries', on);
   fadeDataSource(countriesDS, on ? 'in' : 'out');
 }
 
 function toggleStates(on) {
   if (!statesDS) return;
   if (on && !statesBuilt) buildStates();
+  setBorderLinesShown('states', on);
   fadeDataSource(statesDS, on ? 'in' : 'out');
 }
 
@@ -3117,41 +3393,25 @@ async function buildCountries() {
   if (countriesBuilt) return;
   countriesBuilt = true;     // mark optimistically so concurrent toggles don't double-fetch
   try {
-    const [bordersRes, labelsRes] = await Promise.all([
-      fetch('/static/data/ne_country_borders.geojson'),
-      fetch('/static/data/ne_country_labels.geojson'),
-    ]);
-    const borders = await bordersRes.json();
-    const labels  = await labelsRes.json();
-    borderGeo.countries = borders;
+    // The lines are parsed and converted in a worker (see the long note at
+    // borderCache) and added in chunks; only the small labels file is parsed
+    // here. Kicking the worker off first lets the label fetch ride alongside.
+    const linesPromise = fetchBorderLines('/static/data/ne_country_borders.geojson');
+    const labels = await (await fetch('/static/data/ne_country_labels.geojson')).json();
+    borderCache.countries = await linesPromise;
 
-    // Lighter slate at moderate alpha — visible over satellite imagery without
-    // shouting. Tuned by eye against ESRI World Imagery + Cesium ion Bing.
-    const lineColor    = Cesium.Color.fromCssColorString('#cbd5e1').withAlpha(0.45);
-    const lineMaterial = new Cesium.ColorMaterialProperty(lineColor);
-
-    for (const f of (borders.features || [])) {
-      const coords = f.geometry?.coordinates;
-      if (!coords || coords.length < 2) continue;
-      const positions = coords
-        .filter(c => typeof c[0] === 'number' && typeof c[1] === 'number')
-        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
-      if (positions.length < 2) continue;
-      countriesDS.entities.add({
-        polyline: {
-          /* clampToGround, and the reasoning that removed it was half right.
-             See BORDER_CLAMP for the whole argument. */
-          positions, width: 1.0, material: lineMaterial, clampToGround: borderDrapeWanted(),
-        },
-        properties: { kind: 'country_border', ...f.properties },
-      });
-    }
+    const built = await buildBorderPrimitive('countries');
 
     // Labels: tasteful — small caps, slate gray, distance-fade so they only
     // assert when zoomed close enough to be useful. Brighter fill + heavier
     // outline so they read against busy satellite imagery without shouting.
+    //
+    // They are STASHED, not added: creation rasterizes glyphs on the main
+    // thread, so each label waits in labelPool until the camera is low enough
+    // for it to possibly draw. See the long note at labelPool.
     const labelFill = Cesium.Color.fromCssColorString('#f1f5f9');
     const labelOutline = Cesium.Color.fromCssColorString('#000000').withAlpha(0.95);
+    const labelDefs = [];
     for (const f of (labels.features || [])) {
       const c = f.geometry?.coordinates;
       if (!c) continue;
@@ -3170,7 +3430,7 @@ async function buildCountries() {
                  : labelrank <= 4 ? 7.0e6
                  : labelrank <= 6 ? 3.0e6
                  : 1.6e6;
-      countriesDS.entities.add({
+      labelDefs.push({ farM, lon: c[0], lat: c[1], make: () => ({
         position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
         label: {
           text: (p.name || '').toUpperCase(),
@@ -3191,11 +3451,12 @@ async function buildCountries() {
           // (Default behavior — leaving this here as documentation of intent.)
         },
         properties: { kind: 'country_label', ...p },
-      });
+      }) });
     }
+    stashLabelDefs('countries', labelDefs);
     setCount('countries', countriesDS.entities.values.length);
     updateCategoryCounts();
-    console.log(`Built ${(borders.features||[]).length} country border lines + ${(labels.features||[]).length} labels`);
+    console.log(`Built ${built} country border lines + ${(labels.features||[]).length} labels`);
   } catch (e) {
     console.warn('Country boundaries failed to load:', e);
     countriesBuilt = false;
@@ -3206,43 +3467,24 @@ async function buildStates() {
   if (statesBuilt) return;
   statesBuilt = true;
   try {
-    const [bordersRes, labelsRes] = await Promise.all([
-      fetch('/static/data/ne_state_borders.geojson'),
-      fetch('/static/data/ne_state_labels.geojson'),
-    ]);
-    const borders = await bordersRes.json();
-    const labels  = await labelsRes.json();
-    borderGeo.states = borders;
+    // Same worker + chunked path as the countries; the state file is the big
+    // one (6.7 MB, 320k vertices) and is the reason this path exists at all.
+    const linesPromise = fetchBorderLines('/static/data/ne_state_borders.geojson');
+    const labels = await (await fetch('/static/data/ne_state_labels.geojson')).json();
+    borderCache.states = await linesPromise;
 
-    // Quieter than country borders — half the alpha so they don't compete.
-    const lineColor    = Cesium.Color.fromCssColorString('#cbd5e1').withAlpha(0.30);
-    const lineMaterial = new Cesium.ColorMaterialProperty(lineColor);
+    const built = await buildBorderPrimitive('states');
 
-    for (const f of (borders.features || [])) {
-      const coords = f.geometry?.coordinates;
-      if (!coords || coords.length < 2) continue;
-      const positions = coords
-        .filter(c => typeof c[0] === 'number' && typeof c[1] === 'number')
-        .map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, 0));
-      if (positions.length < 2) continue;
-      statesDS.entities.add({
-        polyline: {
-          // Ground-clamped, same reason as the country borders above.
-          positions, width: 1.0, material: lineMaterial, clampToGround: borderDrapeWanted(),
-          // States only readable at regional zoom — hide when very far
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 8e6),
-        },
-        properties: { kind: 'state_border', ...f.properties },
-      });
-    }
-
+    // Stashed like the country labels: 1,468 of these was most of the boot
+    // stall, and none of them can draw above 2.5 Mm anyway.
     const labelFill = Cesium.Color.fromCssColorString('#e2e8f0');
     const labelOutline = Cesium.Color.fromCssColorString('#000000').withAlpha(0.95);
+    const labelDefs = [];
     for (const f of (labels.features || [])) {
       const c = f.geometry?.coordinates;
       if (!c) continue;
       const p = f.properties || {};
-      statesDS.entities.add({
+      labelDefs.push({ farM: 2.5e6, lon: c[0], lat: c[1], make: () => ({
         position: Cesium.Cartesian3.fromDegrees(c[0], c[1], 0),
         label: {
           text: p.name || '',
@@ -3260,11 +3502,12 @@ async function buildStates() {
           // Depth-test ON so far-side labels stay hidden behind the globe.
         },
         properties: { kind: 'state_label', ...p },
-      });
+      }) });
     }
+    stashLabelDefs('states', labelDefs);
     setCount('states', statesDS.entities.values.length);
     updateCategoryCounts();
-    console.log(`Built ${(borders.features||[]).length} state border lines + ${(labels.features||[]).length} labels`);
+    console.log(`Built ${built} state border lines + ${(labels.features||[]).length} labels`);
   } catch (e) {
     console.warn('State boundaries failed to load:', e);
     statesBuilt = false;
@@ -4533,6 +4776,8 @@ function initRealisticEarth() {
   scene.camera.moveEnd.addEventListener(syncLensFlare);
   // Terrain coverage is also a property of where the camera is looking.
   scene.camera.moveEnd.addEventListener(syncTerrainForView);
+  // Labels materialise as the camera descends into their display range.
+  scene.camera.moveEnd.addEventListener(syncLabelTiers);
 
   // 2. Night lights ride on the same lighting model.
   toggleNightLights(!!settings.nightLights);
@@ -5077,6 +5322,12 @@ function gradeBaseImagery() {
 
 function applyBoundaryOpacity(which) {
   if (!viewer) return;
+  // Border lines live in a primitive whose colour is one material uniform, so
+  // the slider is a uniform write, not a walk over 8,000 entities.
+  if (which === 'countries' || which === 'states') {
+    setBorderLinesAlpha(which);
+    return;
+  }
   const map = { countries: countriesDS, states: statesDS, cities: citiesDS };
   const ds = map[which];
   if (!ds) return;
