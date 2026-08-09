@@ -1197,3 +1197,81 @@ dropped tile fetch reads as `None` rather than as a retry.
 Not caused by the border-primitive work: it is terrain tile networking, and the
 failing run was the first of four suites launched back to back. It should retry
 the sample before failing, or the test will keep crying wolf.
+
+## 57. The shipped airspace data was CC BY-NC-SA and uncredited (FIXED)
+`web/data/airspace.json` was a 21.7 MB OpenAIP extract inside the APK with no
+attribution anywhere in the app. OpenAIP is CC BY-NC-SA 4.0, so the BY term was
+being broken every day the app ran, and NonCommercial is a live question for a
+store listing. `.gitignore` even recorded the constraint ("same CC-BY-NC-SA
+license constraint as the upstream") while the file shipped in the binary
+regardless, which is the tell: the licence was known and routed around.
+
+Fixed in `4557717` with FAA Class Airspace, a work of the US government under
+17 U.S.C. 101. No attribution term, no share-alike, no NC, and it is the same
+authority the app already defers to for alerts, METAR and TFRs.
+
+Two things that would have gone wrong silently:
+
+* **`exceededTransferLimit` lives under `properties` on this service**, not at
+  the top level. Read from the top level it is `None`, the pagination loop stops
+  after one page, and you ship 250 of 2,362 polygons with nothing to tell you.
+* **`build_boundaries.py` still had an `airspace()` function** that rebuilt the
+  file from `us_asp.json`. Left alone it would have overwritten the FAA data on
+  the next run. Removed, with a note where it was.
+
+The simplification is measured, not guessed: 22 m worst-case deviation buys
+18.3 MB, and `fetch_faa_airspace.py` refuses to write if the sampled error
+exceeds 60 m. This is not the border decimation Don rejected, which charged
+223 m for 1.5 MB.
+
+## 58. One websocket frame per entity (FIXED)
+`state.upsert()` broadcast immediately, so ADS-B handing us aircraft one at a
+time meant thousands of frames in a boot burst. The cost was not the network,
+it was that **every branch of `handleMessage` falls through to
+`updateCategoryCounts()` and `refreshAlerts()`**, so those ran once per
+aircraft. That is the 2.1 s of `ws.onmessage` the device profile named, and
+making them individually faster cannot fix being called 8,000 times.
+
+Fixed in `4b7bd1e`: deltas queue into a pending map and a 250 ms loop flushes
+one `<layer>:batch` frame per layer. Keyed by entity id, so an aircraft
+reporting three times in a window is sent once. Measured on the wire over 45 s
+of a live boot: **8,381 entities arrived in 23 frames**, zero single-entity
+frames.
+
+This is a counting result, not a timing one, which is why it stands despite
+issue 55: the handler provably runs a couple of dozen times instead of 8,381,
+and that does not need a stopwatch on a contended host.
+
+## 59. CI could not fail (FIXED)
+`.github/workflows/ci.yml` ran `pip install .` and `python -c "import
+graticule"`. That was the whole job. It was green through every defect this
+project has ever had, including the back button that exited the app and a
+CC-BY-NC-SA file shipping in the binary.
+
+Fixed in `c91d16e`. `scripts/static_checks.py` is 15 checks that need no
+browser, no network and no backend, so they can actually run in Actions: the
+privacy policy names exactly the localStorage keys `app.js` uses, no tracker
+SDK is present, the socket is still receive-only, `airspace.json` is FAA-shaped
+and carries no `icaoClass`, no live line references OpenAIP, every local asset
+`index.html` names exists, and no em dashes. Every group that reports a zero
+carries a control.
+
+Proved it can fail rather than assuming: adding a fifth localStorage key turns
+it red naming the key. `compileall` was added too, so a syntax error in a feed
+that startup never imports is still caught.
+
+## 60. There was no release signing, and no AAB (FIXED)
+`android/app/build.gradle` had a `release` block with no `signingConfig`, so a
+release build produced an unsigned artifact that Play rejects at upload, and
+the build script only ever made an APK when the store takes an App Bundle.
+
+Fixed in `596a106`. Signing reads `android/keystore.properties`, gitignored
+along with the `.jks`. With no properties file the build is UNSIGNED and says
+so loudly from both gradle and the build script, rather than falling back to
+the debug key: a build signed with the wrong key fails at upload instead of on
+this machine. `--aab` runs `bundleRelease`.
+
+Verified both directions: with the keystore, `jar verified` signed by Don's
+cert; without it, `no manifest`. The key is a 4096-bit RSA **upload** key, so
+losing it is recoverable through Play support. The password is in KeePassXC and
+in no file in this repository.
