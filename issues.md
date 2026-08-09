@@ -1050,18 +1050,32 @@ Regression test: `py -V:3.13 scripts/apk_back_test.py`, 8 checks, on device.
 It reads the verdict from `dumpsys window`, not from the page: if the app
 exits, the page is gone and a page probe just errors.
 
-## 51. Boot blocks the main thread (OPEN, "fast" -- much better, not fixed)
-Was: 40,959 ms of blocking on the device with a 9,460 ms worst task. Now
-17,337 ms and 3,741 ms, and the app settles instead of stalling past the
-minute mark (blocking in the 45-60 s window went from 13,074 ms to 149 ms).
-Still fails the gate, which is 1,000 ms single / 2,500 ms total: Android's
-input-dispatch ANR is 5 s and a back press that waits a second already reads
-as broken.
-The borders are no longer the cost. An on-device CPU profile
-(`scripts/apk_profile.py`) puts the remainder in `doRefreshAlerts` at 3.8 s
-inclusive, the WebSocket handler `ws.onmessage`/`handleMessage` at 3.7 s,
-about 2.1 s of raw `querySelector`, and 6.1 s of garbage collection. That is
-where the next pass goes, and none of it is the borders.
+## 51. Boot blocks the main thread (OPEN, "fast" -- 67% better, not fixed)
+On the device, measured by `scripts/apk_longtasks.py`:
+
+  | build                  | tasks | blocking  | worst    |
+  |------------------------|-------|-----------|----------|
+  | 247d34f (before)       |  128  | 40,959 ms | 9,460 ms |
+  | a0d4f69 borders        |  108  | 17,337 ms | 3,741 ms |
+  | 3ce2a89 hot paths      |   73  | 13,590 ms | 3,576 ms |
+
+The app also settles now: blocking after the 60 s mark went 2,107 -> 717 ->
+192 ms. Still fails the gate, which is 1,000 ms single / 2,500 ms total,
+because Android's input-dispatch ANR is 5 s and a back press that waits a
+second already reads as broken.
+Three costs were removed by measuring instead of guessing. `doRefreshAlerts`
+rebuilt 60 list items and 60 click listeners every frame into a panel that
+ships hidden: 3.8 s -> 484 ms. `input[data-layer=...]` ran 27 times per
+websocket message and planes arrive one per message: about 2.1 s of
+querySelector, now a Map, gone from the profile. `noteFeed` forced a
+synchronous layout per message via offsetWidth: 1,055 ms -> 79 ms.
+What is left is not app code by name: `ws.onmessage` at 2.1 s inclusive,
+`resetLayer` at 943 ms, `pushDeltasToTicker` at 857 ms, and a 3,576 ms task
+that looks like Cesium combining the border primitive and compiling its
+shaders (`getDerivedShaderProgram`, `bufferData`, `getProgramParameter` are
+all in the profile around it). Getting under the gate probably means the
+third option from the original list: a tiled vector source, so only what is
+on screen ever becomes geometry.
 Do NOT restore the 0.002-degree decimation: that is Don's directive 8 undone,
 it buys 1.5 MB for 223 m of accuracy, and it was never the cost anyway.
 

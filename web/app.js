@@ -2045,17 +2045,33 @@ function doRefreshAlerts() {
   const cap = 60;
   const shown = filtered.slice(0, cap);
 
-  const list = document.getElementById('ap-list');
-  list.innerHTML = '';
-  for (const a of shown) {
-    const li = document.createElement('li');
-    li.dataset.sev = a.sev;
-    li.innerHTML = `<span class="al-tag">${a.tag}</span><span class="al-text">${escapeHtml(a.text)}</span><span class="al-meta">${escapeHtml(a.meta || '')}</span>`;
-    li.addEventListener('click', () => alertJumpTo(a.ref));
-    list.appendChild(li);
+  /* The list is only built when somebody can see it.
+   *
+   * This runs once per frame in which any feed message arrived, which during
+   * boot is most of them, and it was rebuilding 60 <li> elements and
+   * attaching 60 click listeners every time -- into a panel that ships
+   * hidden and stays hidden until the operator asks for it. It profiled at
+   * 3.8 s inclusive on the device, the largest remaining cost after the
+   * borders moved off the main thread.
+   *
+   * Skipping it cannot show a stale list: applyMonitor() calls refreshAlerts()
+   * on the way open, so the list is built from current data before it is
+   * visible. The counts below stay live either way, because those are three
+   * text nodes and the header badge is the one number that is always on
+   * screen. */
+  const panel = document.getElementById('alerts-panel');
+  if (panel && !panel.classList.contains('hidden')) {
+    const list = document.getElementById('ap-list');
+    list.innerHTML = '';
+    for (const a of shown) {
+      const li = document.createElement('li');
+      li.dataset.sev = a.sev;
+      li.innerHTML = `<span class="al-tag">${a.tag}</span><span class="al-text">${escapeHtml(a.text)}</span><span class="al-meta">${escapeHtml(a.meta || '')}</span>`;
+      li.addEventListener('click', () => alertJumpTo(a.ref));
+      list.appendChild(li);
+    }
+    document.getElementById('ap-empty').classList.toggle('hidden', shown.length > 0);
   }
-
-  document.getElementById('ap-empty').classList.toggle('hidden', shown.length > 0);
   const cEl = document.getElementById('ap-count');
   cEl.textContent = filtered.length;
   cEl.dataset.zero = (filtered.length === 0) ? 'true' : 'false';
@@ -2193,16 +2209,38 @@ function refreshFeedChips() {
   });
 }
 
+/* One chip update per frame, not one per message.
+ *
+ * This is called from every branch of handleMessage, and planes and ships
+ * arrive as one message per entity. Each call walked every chip in the strip
+ * writing dataset.state, ran an attribute-selector query for the one that
+ * changed, and then read offsetWidth to restart the keyframe -- and reading
+ * offsetWidth right after a class change forces a synchronous layout. That is
+ * a full layout per aircraft update.
+ *
+ * The flicker is a signal that data arrived, so it only has to be true once
+ * per frame; a chip cannot visibly restart an animation more often than the
+ * display can show it. */
+const _feedPending = new Set();
+let _feedFlushScheduled = false;
+
 function noteFeed(layer) {
   feedActivity[layer] = Date.now();
-  refreshFeedChips();
-  // Brief flicker on the matching chip to signal fresh data
-  const chip = document.querySelector(`#feedstrip-chips .chip[data-feed="${layer}"]`);
-  if (chip) {
-    chip.classList.remove('flicker');
-    void chip.offsetWidth;       // restart the keyframe
-    chip.classList.add('flicker');
-  }
+  _feedPending.add(layer);
+  if (_feedFlushScheduled) return;
+  _feedFlushScheduled = true;
+  requestAnimationFrame(() => {
+    _feedFlushScheduled = false;
+    refreshFeedChips();
+    for (const f of _feedPending) {
+      const chip = document.querySelector(`#feedstrip-chips .chip[data-feed="${f}"]`);
+      if (!chip) continue;
+      chip.classList.remove('flicker');
+      void chip.offsetWidth;     // restart the keyframe
+      chip.classList.add('flicker');
+    }
+    _feedPending.clear();
+  });
 }
 
 // ---------- Counts / category roll-up --------------------------------------
@@ -2212,11 +2250,30 @@ function setCount(layer, n) {
   if (el) el.textContent = String(n);
 }
 
+/* The layer switches are markup, not a rendered list, so looking one up is a
+ * lookup and not a search. It was a search: `input[data-layer="x"]` ran 27
+ * times in updateCategoryCounts and again in every isLayerOn, on EVERY
+ * websocket message, and planes and ships arrive one entity per message.
+ * That put about 2.1 s of raw querySelector in the device profile.
+ *
+ * isConnected is the guard: a cached node that has been replaced fails it and
+ * the cache refills, so this cannot outlive a rebuilt rail. */
+const _layerSwitch = new Map();
+
+function layerCheckbox(layer) {
+  const hit = _layerSwitch.get(layer);
+  if (hit && hit.isConnected) return hit;
+  const cb = document.querySelector(`input[data-layer="${layer}"]`);
+  if (cb) _layerSwitch.set(layer, cb);
+  else _layerSwitch.delete(layer);
+  return cb;
+}
+
 function updateCategoryCounts() {
   const totals = { air: 0, sea: 0, earth: 0, weather: 0, space: 0, alerts: 0,
                    reference: 0, land: 0, water: 0 };
   for (const [layer, cat] of Object.entries(CATEGORY)) {
-    const cb = document.querySelector(`input[data-layer="${layer}"]`);
+    const cb = layerCheckbox(layer);
     if (!cb || !cb.checked) continue;
     if (layer === 'satellites')                  totals[cat] += satelliteRecords.size;
     else if (entitiesByLayer[layer])             totals[cat] += entitiesByLayer[layer].size;
@@ -2282,7 +2339,7 @@ function handleMessage(msg) {
 }
 
 function isLayerOn(layer) {
-  const cb = document.querySelector(`input[data-layer="${layer}"]`);
+  const cb = layerCheckbox(layer);
   return !!(cb && cb.checked && !cb.disabled);
 }
 
