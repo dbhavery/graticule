@@ -55,6 +55,21 @@ def em_dashes(text: str) -> int:
     return text.count(EM) + text.lower().count("&mdash;")
 
 
+# index.html uses a bare em dash 48 times as the "no value yet" glyph in count
+# and readout slots. That is a typographic placeholder, not prose, and banning
+# it outright would either fail forever or push someone into replacing a UI
+# convention to satisfy a rule about sentences.
+#
+# So: flag an em dash only when it shares a text node with a word, which is
+# what a sentence looks like and what `>—<` never is.
+PROSE_EM = re.compile(r"\w[^<>]*" + EM + r"|" + EM + r"[^<>]*\w")
+
+
+def prose_em_dashes(text: str) -> list[str]:
+    return PROSE_EM.findall(text) + re.findall(r".{0,20}&mdash;.{0,20}",
+                                               text, re.IGNORECASE)
+
+
 def main() -> None:
     app_js = read(WEB / "app.js")
     index = read(WEB / "index.html")
@@ -142,6 +157,18 @@ def main() -> None:
         chk(em_dashes(txt) == 0, f"{name} has no em dash ({em_dashes(txt)})")
     chk(em_dashes(f"a {EM} b") == 1 and em_dashes("a &mdash; b") == 1,
         "CONTROL: the em-dash detector finds one when one is there")
+
+    # The two files above were the only ones ever checked, and both of them are
+    # documents nobody reads. The strings a user actually sees went unchecked:
+    # the PWA install name and the offline page title each shipped an em dash.
+    for name, txt in (("index.html", index),
+                      ("offline.html", read(WEB / "offline.html")),
+                      ("manifest.webmanifest", read(WEB / "manifest.webmanifest"))):
+        hits = prose_em_dashes(txt)
+        chk(not hits, f"{name} has no em dash in prose ({len(hits)} {hits[:2]})")
+    chk(len(prose_em_dashes(f"<p>a {EM} b</p>")) == 1
+        and not prose_em_dashes(f"<span>{EM}</span>"),
+        f"CONTROL: prose scan flags 'a {EM} b' and spares the >{EM}< placeholder")
 
     print(f"\n{len(ok)} passed, {len(bad)} failed")
     for m in bad:
