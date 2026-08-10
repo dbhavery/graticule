@@ -1275,3 +1275,9 @@ Verified both directions: with the keystore, `jar verified` signed by Don's
 cert; without it, `no manifest`. The key is a 4096-bit RSA **upload** key, so
 losing it is recoverable through Play support. The password is in KeePassXC and
 in no file in this repository.
+
+## 61. Eleven unused splash.png assets left in the Android res tree
+`android/app/src/main/res/drawable{,-port-*,-land-*}/splash.png`, 124 KB total.
+Capacitor's default splash. Unreferenced since `15e1b30` pointed the launch
+theme at `@drawable/launch_splash`. Not deleted, per the no-delete rule. Move
+to `_deprecated/` when Don confirms.
