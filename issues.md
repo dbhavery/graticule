@@ -1281,3 +1281,35 @@ in no file in this repository.
 Capacitor's default splash. Unreferenced since `15e1b30` pointed the launch
 theme at `@drawable/launch_splash`. Not deleted, per the no-delete rule. Move
 to `_deprecated/` when Don confirms.
+
+## 62. Boot baseline, measured the way a user feels it (2026-08-09)
+`scripts/apk_tti.py --repeat 3`, emulator, debug build at `15e1b30`, backend on
+:8744. Control passed first (`--selftest` saw a deliberate 4 s freeze).
+
+    boot   interactive_at   worst tap wait
+    1            19,393 ms         1,841 ms
+    2            31,113 ms         5,584 ms
+    3            29,790 ms         6,564 ms
+    median       29,790 ms         5,584 ms      spread 1.60x
+    idle lag          3 ms   (so the 200 ms threshold measures the app)
+
+Worst tap wait by window, last boot:
+
+    0-3s   404 ms      10-15s  2,618 ms
+    3-6s   366 ms      15-25s  6,564 ms
+    6-10s  529 ms        25s+  1,989 ms
+
+**This refutes the plan in issue 51's follow-up.** The app is not worst at the
+start. It is comparatively usable for the first ten seconds and then collapses,
+and it does not settle for about thirty. Deferring boot work to "after the globe
+is interactive" aims at the wrong window.
+
+`apk_profile.py` on the same build: app JS is ~3% of the profile. `ws.onmessage`
+is 631 ms inclusive, down from 2,100 ms before batching. The heaviest frame's
+stack is `(program)` / `(root)`, so what remains is inside Cesium and the GL
+driver, not in this codebase. `resetLayer` and `upsertEntity` already skip
+layers that are switched off, so there is no cheap app-side win left.
+
+Next: attribute the 10-25 s window specifically (terrain tiles, imagery decode,
+border primitive upload are the candidates) before changing anything. The 1.60x
+spread means only a large change can be ranked on this host.
