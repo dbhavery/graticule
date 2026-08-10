@@ -16,7 +16,20 @@
     </style>
 
 
+    <!-- The launch window, which on this app is on screen for a long time:
+         boot blocks the main thread for seconds, and until it clears this is
+         the entire user experience. Capacitor's template left it as its own
+         logo on WHITE, so a dark app opened with a bright flash and someone
+         else's brand.
+
+         Two paths, and both need setting or one of them stays white:
+           android:background        pre-Android-12 window background
+           windowSplashScreenBackground  Android 12+, where the system draws
+                                     the splash itself and ignores the above
+         On 12+ the system pairs that colour with the launcher icon, which is
+         now the Graticule mark on the same dark, so the two paths agree. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="android:background">@drawable/launch_splash</item>
+        <item name="windowSplashScreenBackground">@color/graticule_splash_bg</item>
     </style>
 </resources>

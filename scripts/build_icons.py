@@ -20,9 +20,12 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-OUT = Path(__file__).resolve().parents[1] / "web" / "icons"
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "web" / "icons"
+RES = ROOT / "android" / "app" / "src" / "main" / "res"
+STORE = ROOT / "docs" / "store"
 
 BG = (11, 14, 19, 255)        # --rail-bg #0b0e13
 DEEP = (4, 7, 13, 255)        # --panel far back
@@ -73,6 +76,172 @@ def build(size: int, maskable: bool) -> Image.Image:
     return img.resize((size, size), Image.LANCZOS)
 
 
+# ---- Android launcher -------------------------------------------------------
+#
+# These were never generated. `npx cap add android` writes Capacitor's own logo
+# into every mipmap folder and sets ic_launcher_background to #FFFFFF, and that
+# is what shipped: a white tile with the framework's mark on the home screen,
+# which is the first thing anyone sees and the last thing anyone would call
+# finished. The web icons above were built properly and stopped at web/.
+#
+# Densities are dp * scale. A legacy icon is 48dp; an adaptive icon is 108dp
+# with only the middle 72dp guaranteed to survive the launcher's mask, so the
+# foreground draws the mark at 0.29 of the canvas (0.58 diameter, inside the
+# 0.667 safe circle) on transparency.
+LEGACY_DP, ADAPTIVE_DP, SPLASH_DP = 48, 108, 96
+DENSITIES = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
+
+
+def _mark(n: int, frac: float) -> Image.Image:
+    """The globe alone, on transparency, at `frac` of the canvas."""
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    _globe(ImageDraw.Draw(img), n / 2, n / 2, n * frac, max(1.0, n * 0.008))
+    return img
+
+
+def _shaped(n: int, shape: str) -> Image.Image:
+    """A BG-filled tile masked to square, rounded square or circle."""
+    tile = Image.new("RGBA", (n, n), BG)
+    if shape == "square":
+        return tile
+    mask = Image.new("L", (n, n), 0)
+    d = ImageDraw.Draw(mask)
+    if shape == "circle":
+        d.ellipse([0, 0, n - 1, n - 1], fill=255)
+    else:
+        d.rounded_rectangle([0, 0, n - 1, n - 1], radius=int(n * 0.22), fill=255)
+    tile.putalpha(mask)
+    return tile
+
+
+def _launcher(size: int, shape: str) -> Image.Image:
+    ss = size * SS
+    img = _shaped(ss, shape)
+    img.alpha_composite(_mark(ss, 0.34))
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def android() -> list[Path]:
+    made = []
+    for name, scale in DENSITIES.items():
+        folder = RES / f"mipmap-{name}"
+        if not folder.is_dir():
+            raise SystemExit(f"{folder} does not exist; is this a Capacitor project?")
+        legacy = int(LEGACY_DP * scale)
+        adaptive = int(ADAPTIVE_DP * scale)
+
+        for fname, shape in (("ic_launcher.png", "rounded"),
+                             ("ic_launcher_round.png", "circle")):
+            p = folder / fname
+            _launcher(legacy, shape).save(p, optimize=True)
+            made.append(p)
+
+        # The adaptive foreground sits on @color/ic_launcher_background, so it
+        # must be the mark ALONE. Bake the panel dark into it as well and the
+        # launcher's parallax shifts a visible dark square around inside the
+        # mask.
+        p = folder / "ic_launcher_foreground.png"
+        _mark(adaptive * SS, 0.29).resize((adaptive, adaptive), Image.LANCZOS) \
+            .save(p, optimize=True)
+        made.append(p)
+
+    # The launch window's mark, drawn at its natural size and centred by
+    # drawable/launch_splash.xml rather than stretched across the window.
+    # 96dp is roughly what Android 12's own splash icon occupies, so the two
+    # paths look like the same app.
+    for name, scale in DENSITIES.items():
+        folder = RES / f"drawable-{name}"
+        folder.mkdir(parents=True, exist_ok=True)
+        n = int(SPLASH_DP * scale)
+        p = folder / "splash_logo.png"
+        _mark(n * SS, 0.44).resize((n, n), Image.LANCZOS).save(p, optimize=True)
+        made.append(p)
+
+    p = RES / "values" / "ic_launcher_background.xml"
+    p.write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        "<resources>\n"
+        f'    <color name="ic_launcher_background">'
+        f"#{BG[0]:02X}{BG[1]:02X}{BG[2]:02X}</color>\n"
+        "</resources>\n", encoding="utf-8")
+    made.append(p)
+    return made
+
+
+# ---- Play Store graphics ----------------------------------------------------
+
+FONT_REG = Path(r"C:\Windows\Fonts\segoeui.ttf")
+FONT_BOLD = Path(r"C:\Windows\Fonts\segoeuib.ttf")
+
+
+def _font(path: Path, size: int) -> ImageFont.FreeTypeFont:
+    if not path.exists():
+        raise SystemExit(f"missing font {path}; the feature graphic needs a real face")
+    return ImageFont.truetype(str(path), size)
+
+
+def feature_graphic() -> Image.Image:
+    """1024x500, the banner at the top of the Play listing.
+
+    Play crops this for some surfaces, so nothing that has to be read sits
+    within 10% of an edge, and the mark is the only thing allowed to bleed.
+    """
+    W, H = 1024, 500
+    img = Image.new("RGBA", (W, H), BG)
+
+    # A soft glow behind the globe so the panel dark is not a flat field.
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).ellipse([-180, -190, 560, 690], fill=(30, 92, 122, 120))
+    img.alpha_composite(glow.filter(ImageFilter.GaussianBlur(90)))
+
+    # The globe sits left of the text with real clearance. The first version of
+    # this drew the wordmark at x=468 over a globe whose right limb reached
+    # x=538, so the equator ran through the letters and the accent rule printed
+    # across the G like a strikethrough. Numbers, not eyeballing: right limb is
+    # GLOBE_X + H/2 + H*GLOBE_R, and TEXT_X is asserted clear of it below.
+    ss = 4
+    GLOBE_X, GLOBE_R, TEXT_X = 40, 0.33, 560
+    globe = Image.new("RGBA", (H * ss, H * ss), (0, 0, 0, 0))
+    _globe(ImageDraw.Draw(globe), H * ss / 2, H * ss / 2, H * ss * GLOBE_R,
+           max(1.0, H * ss * 0.0055))
+    img.alpha_composite(globe.resize((H, H), Image.LANCZOS), (GLOBE_X, 0))
+
+    limb = GLOBE_X + H / 2 + H * GLOBE_R
+    assert TEXT_X - limb >= 40, f"text starts {TEXT_X - limb:.0f}px from the limb"
+
+    d = ImageDraw.Draw(img)
+    # The rule goes ABOVE the wordmark. Through it, it reads as a strikethrough.
+    d.line([TEXT_X + 2, 140, TEXT_X + 66, 140], fill=ACCENT, width=3)
+    d.text((TEXT_X, 162), "Graticule", font=_font(FONT_BOLD, 82),
+           fill=(233, 240, 247))
+    d.text((TEXT_X, 282), "Live weather, sky and sea", font=_font(FONT_REG, 33),
+           fill=(168, 179, 194))
+    d.text((TEXT_X, 324), "on a 3D globe", font=_font(FONT_REG, 33),
+           fill=(168, 179, 194))
+
+    # Nothing readable within 10% of an edge, because Play crops this.
+    widest = max(d.textlength("Graticule", font=_font(FONT_BOLD, 82)),
+                 d.textlength("Live weather, sky and sea", font=_font(FONT_REG, 33)))
+    assert TEXT_X + widest <= W * 0.93, f"text runs to {TEXT_X + widest:.0f} of {W}"
+    return img.convert("RGB")
+
+
+def store() -> list[Path]:
+    STORE.mkdir(parents=True, exist_ok=True)
+    made = []
+    # Play wants a 512x512 32-bit PNG. The web icon is already exactly that
+    # mark at exactly that size, so copying it keeps one source of truth
+    # instead of a second drawing that drifts.
+    p = STORE / "play-icon-512.png"
+    build(512, maskable=False).save(p, optimize=True)
+    made.append(p)
+
+    p = STORE / "play-feature-graphic-1024x500.png"
+    feature_graphic().save(p, optimize=True)
+    made.append(p)
+    return made
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     made = []
@@ -90,8 +259,11 @@ def main() -> None:
     build(64, maskable=False).save(ico, sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
     made.append(ico)
 
+    made += android()
+    made += store()
+
     for p in made:
-        print(f"{p.relative_to(OUT.parents[1])}  {p.stat().st_size:,} bytes")
+        print(f"{p.relative_to(ROOT)}  {p.stat().st_size:,} bytes")
 
 
 if __name__ == "__main__":
