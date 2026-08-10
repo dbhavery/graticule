@@ -162,11 +162,72 @@ except where noted.</p>
   <li>Both need the real hosting origin in front of them before they go in the console</li>
 </ul>
 
-<h2>5. Still to produce</h2>
+<h2>5. Store description</h2>
+<p>Both fit inside Play's limits and neither contains an em dash. Every claim
+below was checked against the code on 9 August 2026: the layer count is
+<code>38</code> unique <code>data-layer</code> inputs in <code>index.html</code>,
+of which exactly three (<code>countries</code>, <code>states</code>,
+<code>radar</code>) carry <code>checked</code>. The "no analytics" line is the
+one <code>scripts/static_checks.py</code> asserts on every push.</p>
+
+<h3>Short description <span style="color:var(--mute);font-weight:400">(65 of 80 characters)</span></h3>
+<div class="card"><p>Live weather radar, NWS alerts, aircraft and ships on a 3D globe.</p></div>
+
+<h3>Full description <span style="color:var(--mute);font-weight:400">(2,213 of 4,000 characters)</span></h3>
+<div class="card">
+<p>Graticule is a live map of Earth. It opens on a 3D globe and draws what is
+happening right now, layer by layer, with nothing switched on that you did not
+ask for.</p>
+
+<p><strong>WEATHER</strong><br>
+Radar on a timeline you can scrub, so you can see which way a cell is moving
+instead of guessing from one frame, plus a short forecast loop where the source
+provides one. National Weather Service watches, warnings and advisories, drawn
+as the actual warning polygon rather than a shaded county. Storm Prediction
+Center outlooks, local storm reports and spotter positions. Surface observations
+from METAR stations, with a selectable field. Forecast fields from Open-Meteo
+with an hour selector. Air quality, cloud cover, aurora, and a day and night
+terminator that tracks real time.</p>
+
+<p><strong>THE SKY</strong><br>
+Aircraft from ADS-B with altitude, heading and type. Satellites propagated from
+public orbital elements. Airports, temporary flight restrictions, and FAA Class
+Airspace.</p>
+
+<p><strong>THE SEA AND THE GROUND</strong><br>
+Ships from AIS. Tide stations, buoys and river gauges. Earthquakes, volcanoes,
+wildfires, hurricanes and tsunami notices. Country, state and county boundaries,
+cities, undersea cables, and US parcel outlines where they are published.</p>
+
+<p><strong>HOW IT BEHAVES</strong><br>
+No account. No ads. No analytics library, no crash reporter and no advertising
+ID anywhere in the app, which is not a promise but a test that runs on every
+change.</p>
+
+<p>Your location is used on the device to move the map to you and draw your
+accuracy circle. It is not transmitted and it is not stored.</p>
+
+<p>Boundary and coastline data ships inside the app, so the globe still draws
+with no signal. The live feeds need a connection.</p>
+
+<p>Thirty-eight layers, and every one is off until you turn it on, apart from
+radar and the boundary lines. Two of them, 3D buildings and photorealistic 3D
+tiles, need a free key of your own.</p>
+
+<p>Graticule is free. There is no paid tier and nothing to unlock.</p>
+
+<p><strong>WHAT IT IS NOT</strong><br>
+This is a situational awareness map, not a navigation or aviation instrument.
+The airspace and airport layers are drawn from public FAA data and are not
+maintained for flight planning. Nothing here replaces an official National
+Weather Service alert or an instruction from your local emergency
+management.</p>
+</div>
+
+<h2>6. Still to produce</h2>
 <ul>
   <li>App icon at 512x512, feature graphic at 1024x500</li>
   <li>Between two and eight phone screenshots</li>
-  <li>Short description (80 characters) and full description (4,000)</li>
   <li>The hosting origin, which every URL above depends on</li>
 </ul>
 
