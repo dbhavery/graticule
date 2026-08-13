@@ -1459,8 +1459,43 @@ So terrain tiles, imagery decode and border primitive upload, the three
 candidates issue 62 named, are all ruled out for the worst frame. Whatever it
 is, it is inside `scene.render()` with nothing new to draw.
 
-**Naming it needs a profiler that survives, and this one does not.** On this
-2 GB emulator `apk_profile.py` ends its run with `ConnectionClosedError` and
+### The profile of that window, once the run was short enough to survive
+
+`--seconds 40` kills the WebView; `--seconds 22` does not. Same window:
+
+    sampled 15,000 ms, of which 7,767 ms was not idle
+
+    6160 ms  41.1%  (program)                     native, Cesium and the GL driver
+    1585 ms  10.6%  (garbage collector)
+    1109 ms   7.4%  ws.onmessage            app.js:2395
+    1073 ms   7.2%  (idle)
+     737 ms   4.9%  zT.resize               Cesium.js:15107
+     553 ms   3.7%  pushDeltasToTicker      app.js:2504
+     277 ms   1.8%  getImageData                  native
+     148 ms   1.0%  bm.getDerivedShaderProgram    shader compile
+     111 ms   0.7%  getProgramParameter           shader link
+
+`ws.onmessage` self time is the `JSON.parse` of the 35 MB frame, because a
+native parse is charged to the JS frame that called it. So the snapshot costs
+**1,109 + 553 + 99 + 57 = about 1.8 s of this 15 s window**, and it is almost
+certainly most of the 1,585 ms of garbage collection as well, because
+allocating a 35 MB object graph is what makes that garbage. Call it 2 to 3
+seconds.
+
+**Desktop said 271 ms for the same handler. The device says 1,486 ms
+inclusive.** A 5.5x error in the direction that would have talked me out of
+fixing it, which is the same lesson as
+`a-software-rasterizer-cannot-rank-main-thread-costs`.
+
+That settles issue 63: the 32 MB snapshot is worth fixing on main-thread cost
+as well as on data cost, and it is the largest single app-owned cost in the
+window. It is still not the 9.3 s frame.
+
+**Naming that frame needs more.** `(program)` at 41% is Cesium and the GL
+driver, and shader compilation shows up at only ~260 ms, so the obvious
+candidate is not it either. On this
+2 GB emulator `apk_profile.py` at `--seconds 40` ends with
+`ConnectionClosedError` and
 `pidof dev.dbhavery.graticule` empty, i.e. the WebView is gone. Two attempted
 fixes are recorded in the code as not fixes:
 
@@ -1475,7 +1510,9 @@ inside the window and zero before it. It failed once first, on the very first
 launch after a data wipe, because that boot was slow enough to push the armed
 timer past 25 s. That is the control working, not the control being broken.
 
-Next: an AVD with more RAM, or profile a 5 s window instead of 15.
+Next: keep profile runs at or under 22 s, and go after the frame with a
+Cesium-level instrument rather than a CPU profiler, since a CPU profiler
+cannot see inside the GL driver.
 
 ### Separately: the emulator would not start at all
 Three launches wedged at the same line, mid-write, with `qemu-system-x86_64`
