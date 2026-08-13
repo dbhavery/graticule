@@ -1398,8 +1398,11 @@ does not enable the CDP Network domain to get true wire arrival:
 `Network.webSocketFrameReceived` carries `payloadData`, so asking for it would
 push 32 MB back through the debugger socket during the window being measured.
 
-**The blocking question is not yet answered on the device.** A software
-rasteriser cannot rank
+**Confirmed on the device, issue 64:** the frame is about 35 MB there and it
+dispatches at 14.7 s and 17.4 s in two boots, inside the collapse window. What
+it is NOT is the thing that blocks the thread; that is a single Cesium frame
+with nothing new to draw. So this stays a data defect, which is the ground it
+was always worth fixing on. A software rasteriser cannot rank
 main-thread costs, so the arrival time and the block it causes have to be read
 on the emulator before any fix is chosen. The size and the row counts do not
 need the device: they are counting results.
