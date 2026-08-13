@@ -123,7 +123,13 @@ async def page_time_origin(c: Cdp) -> tuple[float, str]:
 async def profile(ws_url: str, seconds: int, selftest_at_ms: int | None
                   ) -> tuple[dict, float, str]:
     import websockets
-    async with websockets.connect(ws_url, max_size=256 * 1024 * 1024) as ws:
+    # ping_interval=None because a profile run is deliberately silent for its
+    # whole duration. The client's keepalive expects a pong within 20 s, and
+    # this app blocks its main thread for nearly 6 s in one frame at boot, so
+    # the default closes the debugger socket underneath the measurement and the
+    # first call after the sleep fails with ConnectionClosedError.
+    async with websockets.connect(ws_url, max_size=256 * 1024 * 1024,
+                                  ping_interval=None) as ws:
         c = Cdp(ws)
         await c.call("Runtime.enable")
         await c.call("Profiler.enable")
@@ -142,7 +148,16 @@ async def profile(ws_url: str, seconds: int, selftest_at_ms: int | None
                     f"page time is already {now} ms, past the {selftest_at_ms} ms "
                     "the control needed; lower --window or raise --settle")
 
+        # Two things were tried here and neither is the answer, so neither is
+        # left in the code pretending to be one. On a 2 GB emulator this
+        # profiler kills the WebView often enough that a run ends with
+        # ConnectionClosedError and `pidof` showing the app gone. A websocket
+        # Ping frame makes it worse: the WebView's devtools server closes the
+        # connection on one, which killed a run that had been surviving. A
+        # keepalive Runtime.evaluate every 10 s did not help either. See
+        # issues.md 64; retry the run, or profile a shorter window.
         await asyncio.sleep(seconds)
+
         # Read the origin before stopping: the page must still be the same
         # document the samples came from.
         origin_us, how = await page_time_origin(c)
@@ -279,6 +294,23 @@ def check_selftest(prof: dict, origin_us: float, win: tuple[float, float],
     before = self_time_of(slice_to_window(prof, origin_us, 0, win[0]), fn)
     print(f"\nCONTROL: a named function burned 4,000 ms at page time "
           f"{burn_at_ms:.0f} ms")
+    # Two different failures wear the same 0 ms, and telling them apart is the
+    # difference between fixing a clock and fixing an injection: either the
+    # burn never ran, or it ran and the window is looking somewhere else.
+    everywhere = self_time_of(prof, fn)
+    times = sample_times_us(prof)
+    print(f"  anywhere in the profile   {everywhere:7.0f} ms   "
+          f"({'the burn ran' if everywhere > 500 else 'THE BURN NEVER RAN'})")
+    if times:
+        print(f"  profile covers page time  {(times[0]-origin_us)/1000:.0f} to "
+              f"{(times[-1]-origin_us)/1000:.0f} ms")
+        if everywhere > 500:
+            at = [ (t - origin_us) / 1000 for t, nid in zip(times, prof["samples"])
+                   if {x["id"]: x for x in prof["nodes"]}[nid]["callFrame"]
+                   .get("functionName") == fn ]
+            if at:
+                print(f"  the burn sampled at       {min(at):.0f} to "
+                      f"{max(at):.0f} ms of page time")
     print(f"  inside  {win[0]/1000:.0f}-{win[1]/1000:.0f}s   {inside:7.0f} ms  "
           f"(needs >= 3000)")
     print(f"  before  0-{win[0]/1000:.0f}s      {before:7.0f} ms  (needs <= 300)")

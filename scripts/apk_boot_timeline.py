@@ -170,7 +170,11 @@ class Cdp:
 
 async def run(ws_url: str, seconds: int, query: str) -> dict:
     import websockets
-    async with websockets.connect(ws_url, max_size=256 * 1024 * 1024) as ws:
+    # ping_interval=None: this watches in silence for the whole run, and the
+    # app blocks its main thread for nearly 6 s in one frame at boot, so the
+    # default keepalive can close the debugger socket underneath the run.
+    async with websockets.connect(ws_url, max_size=256 * 1024 * 1024,
+                                  ping_interval=None) as ws:
         c = Cdp(ws)
         await c.call("Page.enable")
         await c.call("Runtime.enable")
@@ -187,7 +191,12 @@ async def run(ws_url: str, seconds: int, query: str) -> dict:
             await c.call("Page.reload", {"ignoreCache": True})
             print(f"  reloaded with the recorder installed; watching {seconds}s ...")
 
+        # Do not add a websocket ping here to keep the socket warm. The
+        # WebView's devtools server closes the connection on a Ping frame:
+        # this run watched 45 s in silence and finished, and adding a ping
+        # every 10 s killed it at the first one.
         await asyncio.sleep(seconds)
+
         res = await c.call("Runtime.evaluate",
                            {"expression": DUMP, "returnByValue": True})
         return json.loads(res["result"]["value"])
