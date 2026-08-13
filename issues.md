@@ -1356,10 +1356,29 @@ What the client then does with it, all on the main thread:
 That was measured in issue 62 and is still true. It is the receiving, parsing
 and bookkeeping that does not skip, and that is the part nobody had weighed.
 
-Timing, desktop only and therefore not a ranking claim: the frame arrived at
-18,520 ms, inside the 10-25 s window issue 62 identified as the collapse.
-`scripts/apk_boot_timeline.py` records websocket arrivals for exactly this
-reason, since Resource Timing cannot see a websocket frame.
+Timing, desktop only and therefore not a ranking claim. The socket opened at
+5,742 ms and the page did not see the frame until 18,520 ms. That gap is not
+the server and not the wire:
+
+    GET /api/snapshot   0.43 s / 0.41 s / 0.63 s   for 29.5 MB, three runs
+
+The server produces and delivers the same payload in about half a second. So
+the 12.8 s is the client, and specifically it is the main thread: the recorder
+stamps the frame in a listener registered before the app's own `onmessage`, so
+that stamp is when the event was finally DISPATCHED, which cannot happen while
+the thread is busy.
+
+Read carefully, that says the thread was already occupied from about 5.7 s by
+something else, and the 32 MB parse then starts at 18.5 s on top of it. So this
+frame is not established as the cause of the whole 10-25 s collapse. It is
+established as a large cost that lands at the end of it and runs past it.
+What holds the thread from 5.7 s to 18.5 s is still open.
+
+`scripts/apk_boot_timeline.py` records websocket dispatch for exactly this
+reason, since Resource Timing cannot see a websocket frame. It deliberately
+does not enable the CDP Network domain to get true wire arrival:
+`Network.webSocketFrameReceived` carries `payloadData`, so asking for it would
+push 32 MB back through the debugger socket during the window being measured.
 
 **Not yet confirmed on the device.** A software rasteriser cannot rank
 main-thread costs, so the arrival time and the block it causes have to be read
