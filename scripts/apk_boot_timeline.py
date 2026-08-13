@@ -45,8 +45,44 @@ from apk_probe import APP_ID, adb, attach, page_target
 SLOW_FRAME_MS = 100
 
 RECORDER = """
-window.__bt = { tileq: [], frames: [], marks: {}, prims: [], attached: false };
+window.__bt = { tileq: [], frames: [], marks: {}, prims: [], ws: [],
+                attached: false };
 try { performance.setResourceTimingBufferSize(3000); } catch (e) {}
+
+/* Resource Timing does not cover websocket frames, and this app's whole
+   opening state arrives as one: a `snapshot` message carrying every layer's
+   rows, which the server assembles from ~20 upstreams. If that lands late,
+   it lands in the middle of the window being investigated and nothing else
+   here would show it. Wrapping the constructor catches it whoever opens the
+   socket, and a listener registered here runs before the app's onmessage, so
+   the stamp is arrival rather than arrival plus handling. */
+(function () {
+  const Native = window.WebSocket;
+  function Wrapped(url, protocols) {
+    const s = protocols === undefined ? new Native(url) : new Native(url, protocols);
+    const t0 = performance.now();
+    s.addEventListener('open', function () {
+      window.__bt.marks.wsOpen = Math.round(performance.now());
+      window.__bt.marks.wsConnectMs = Math.round(performance.now() - t0);
+    });
+    s.addEventListener('message', function (e) {
+      const bt = window.__bt;
+      if (bt.ws.length >= 4000) return;
+      const raw = typeof e.data === 'string' ? e.data : '';
+      let type = '?';
+      // Read the type without parsing 8 MB: the server writes it near the
+      // front of the frame, and a full JSON.parse here would add the very
+      // cost this is trying to attribute.
+      const m = /"type"\\s*:\\s*"([^"]{0,40})"/.exec(raw.slice(0, 200));
+      if (m) type = m[1];
+      bt.ws.push([Math.round(performance.now()), raw.length, type]);
+    });
+    return s;
+  }
+  Wrapped.prototype = Native.prototype;
+  for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Wrapped[k] = Native[k];
+  window.WebSocket = Wrapped;
+})();
 
 (function waitForViewer() {
   const v = window.__graticule_viewer;
@@ -98,6 +134,7 @@ DUMP = """(() => {
   });
   return JSON.stringify({
     tileq: bt.tileq || [], frames: bt.frames || [], prims: bt.prims || [],
+    ws: bt.ws || [],
     marks: bt.marks || {}, attached: !!bt.attached, res: res,
     entities: (window.__graticule_viewer &&
                window.__graticule_viewer.entities.values.length) || 0,
@@ -203,6 +240,15 @@ def report(d: dict) -> dict:
         print(f"  {bucket(lo, hi):>8}  {len(fr):>6} {max(fr, default=0):>6} ms "
               f"{sum(fr):>6} ms  {max(tq, default=0):>6}  "
               f"{max(pr, default=0):>6}  {max(en, default=0):>8}  {top}")
+
+    # The websocket frames, biggest first: one late snapshot explains more of a
+    # bad window than a hundred small deltas do.
+    ws = d.get("ws", [])
+    if ws:
+        print(f"\n  websocket: opened at {d['marks'].get('wsOpen')} ms, "
+              f"{len(ws)} frames, {sum(n for _t, n, _k in ws) / 1e6:.1f} MB")
+        for t, n, kind in sorted(ws, key=lambda x: -x[1])[:6]:
+            print(f"    at {t:>6} ms   {n / 1000:>8.0f} KB   {kind}")
 
     slow = [(t, ms) for t, ms in d["frames"] if ms >= SLOW_FRAME_MS]
     print(f"\n  frames over {SLOW_FRAME_MS} ms: {len(slow)}")
