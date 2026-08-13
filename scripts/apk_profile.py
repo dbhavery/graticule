@@ -17,9 +17,28 @@ apk_probe.py uses, and aggregates self time per function.
 It profiles from launch by default, because the tasks worth naming happen
 during boot and are gone by the time a person can type.
 
-    py -V:3.13 scripts/apk_profile.py                 # relaunch, profile boot
-    py -V:3.13 scripts/apk_profile.py --attach        # profile it as it is now
+A profile of a whole boot says what the boot cost. It does not say what a
+PARTICULAR PART of the boot cost, and those are different questions the moment
+the boot is uneven. apk_tti.py measured this one as uneven: the first ten
+seconds are comparatively usable and the collapse is at 10-25 s. Aggregating
+across the whole run averages the good part into the bad one and names
+whatever is merely biggest overall.
+
+So `--window A:B` restricts the report to a slice of PAGE time -- the same
+clock apk_tti.py reports in, `performance.now()` since navigation -- by mapping
+each sample's profile timestamp onto it.
+
+    py -V:3.13 scripts/apk_profile.py                     # relaunch, whole boot
+    py -V:3.13 scripts/apk_profile.py --window 10:25      # only the collapse
+    py -V:3.13 scripts/apk_profile.py --attach            # as it is now
     py -V:3.13 scripts/apk_profile.py --seconds 60
+
+CONTROL: --selftest burns a named function for 4 s in the middle of the
+requested window and fails unless the windowed report attributes it there AND
+does not attribute it outside. Two clocks are being joined; a windowed profile
+whose alignment is wrong still prints a confident table.
+
+    py -V:3.13 scripts/apk_profile.py --window 10:25 --selftest
 """
 from __future__ import annotations
 
@@ -27,6 +46,7 @@ import argparse
 import asyncio
 import collections
 import json
+import sys
 import time
 
 from apk_probe import APP_ID, adb, attach, page_target
@@ -37,31 +57,151 @@ from apk_probe import APP_ID, adb, attach, page_target
 INTERVAL_US = 200
 
 
-async def profile(ws_url: str, seconds: int) -> dict:
+# The control's blocking function, named so it shows up in the profile as
+# itself rather than as an anonymous frame. Armed at an absolute PAGE time, so
+# the assertion is about the same clock the window is expressed in.
+SELFTEST_ARM = """(() => {
+  window.__profileSelftestBurn = function __profileSelftestBurn() {
+    const end = performance.now() + 4000;
+    while (performance.now() < end) { /* deliberately blocking */ }
+  };
+  const now = performance.now();
+  setTimeout(window.__profileSelftestBurn, Math.max(0, %d - now));
+  return Math.round(now);
+})()"""
+
+
+class Cdp:
+    def __init__(self, ws):
+        self.ws = ws
+        self.n = 0
+
+    async def call(self, method: str, params: dict | None = None) -> dict:
+        self.n += 1
+        mine = self.n
+        await self.ws.send(json.dumps({"id": mine, "method": method,
+                                       "params": params or {}}))
+        while True:
+            msg = json.loads(await self.ws.recv())
+            if msg.get("id") == mine:
+                if "error" in msg:
+                    raise SystemExit(f"{method}: {msg['error']}")
+                return msg.get("result", {})
+
+
+async def page_time_origin(c: Cdp) -> tuple[float, str]:
+    """Profile-clock microseconds at the instant page time was 0.
+
+    The profiler timestamps samples on the renderer's monotonic clock and
+    `performance.now()` counts from navigation, so joining them needs one
+    reading that exists in both. The Performance domain in the timeTicks domain
+    publishes exactly that. There is no silent fallback on purpose: a windowed
+    profile with a guessed origin still prints a confident table, and a wrong
+    table is worse than no table.
+    """
+    await c.call("Performance.enable", {"timeDomain": "timeTicks"})
+    m = {x["name"]: x["value"] for x in (await c.call("Performance.getMetrics"))["metrics"]}
+    if "NavigationStart" in m:
+        return m["NavigationStart"] * 1e6, "Performance.NavigationStart"
+
+    # No NavigationStart on this build: pair a monotonic reading with a page
+    # reading taken between two of them, and carry the bracket as the error.
+    before = (await c.call("Performance.getMetrics"))["metrics"]
+    page = (await c.call("Runtime.evaluate",
+                         {"expression": "performance.now()",
+                          "returnByValue": True}))["result"]["value"]
+    after = (await c.call("Performance.getMetrics"))["metrics"]
+    ts = [ {x["name"]: x["value"] for x in side}.get("Timestamp") for side in (before, after) ]
+    if None in ts:
+        raise SystemExit(
+            "no NavigationStart and no Timestamp metric: this WebView cannot "
+            "join the profiler clock to page time, so --window would be a guess")
+    mid = (ts[0] + ts[1]) / 2
+    return mid * 1e6 - page * 1000, f"Timestamp pairing (+/-{(ts[1]-ts[0])*500:.0f} ms)"
+
+
+async def profile(ws_url: str, seconds: int, selftest_at_ms: int | None
+                  ) -> tuple[dict, float, str]:
     import websockets
     async with websockets.connect(ws_url, max_size=256 * 1024 * 1024) as ws:
-        n = 0
-
-        async def call(method: str, params: dict | None = None):
-            nonlocal n
-            n += 1
-            mine = n
-            await ws.send(json.dumps({"id": mine, "method": method,
-                                      "params": params or {}}))
-            while True:
-                msg = json.loads(await ws.recv())
-                if msg.get("id") == mine:
-                    return msg.get("result", {})
-
-        await call("Profiler.enable")
-        await call("Profiler.setSamplingInterval", {"interval": INTERVAL_US})
-        await call("Profiler.start")
+        c = Cdp(ws)
+        await c.call("Runtime.enable")
+        await c.call("Profiler.enable")
+        await c.call("Profiler.setSamplingInterval", {"interval": INTERVAL_US})
+        await c.call("Profiler.start")
         print(f"profiling {seconds}s ...")
+
+        if selftest_at_ms is not None:
+            now = (await c.call("Runtime.evaluate",
+                                {"expression": SELFTEST_ARM % selftest_at_ms,
+                                 "returnByValue": True}))["result"]["value"]
+            print(f"  self-test armed at page time {selftest_at_ms} ms "
+                  f"(it is {now} ms now)")
+            if now > selftest_at_ms:
+                raise SystemExit(
+                    f"page time is already {now} ms, past the {selftest_at_ms} ms "
+                    "the control needed; lower --window or raise --settle")
+
         await asyncio.sleep(seconds)
-        return (await call("Profiler.stop"))["profile"]
+        # Read the origin before stopping: the page must still be the same
+        # document the samples came from.
+        origin_us, how = await page_time_origin(c)
+        return (await c.call("Profiler.stop"))["profile"], origin_us, how
+
+
+def sample_times_us(prof: dict) -> list[float]:
+    """Absolute profile-clock time of every sample.
+
+    timeDeltas[i] is the gap that ENDS at samples[i], so a running sum from
+    startTime lands each sample at its own instant.
+    """
+    t = prof["startTime"]
+    deltas = prof["timeDeltas"]
+    out = []
+    for i in range(len(prof["samples"])):
+        t += deltas[i] if i < len(deltas) else 0
+        out.append(t)
+    return out
+
+
+def slice_to_window(prof: dict, origin_us: float, lo_ms: float, hi_ms: float) -> dict:
+    """The same profile with only the samples inside [lo, hi) of page time.
+
+    A sample carries the interval that ended at it, so the first one kept is
+    clamped to the part of its interval that is actually inside the window.
+    Without that clamp the first sample absorbs the whole excluded stretch and
+    whatever happened to be running at the boundary wins the report.
+    """
+    lo_us, hi_us = origin_us + lo_ms * 1000, origin_us + hi_ms * 1000
+    times = sample_times_us(prof)
+    deltas = prof["timeDeltas"]
+    samples, kept = [], []
+    for i, t in enumerate(times):
+        if not (lo_us <= t < hi_us):
+            continue
+        d = deltas[i] if i < len(deltas) else 0
+        if not samples:                      # first kept sample
+            d = min(d, max(0.0, t - lo_us))
+        samples.append(prof["samples"][i])
+        kept.append(d)
+    return {**prof, "samples": samples, "timeDeltas": kept}
+
+
+def self_time_of(prof: dict, fn_name: str) -> float:
+    """Milliseconds of self time attributed to a named function."""
+    nodes = {x["id"]: x for x in prof["nodes"]}
+    us = 0.0
+    for i, nid in enumerate(prof["samples"]):
+        if nodes[nid]["callFrame"].get("functionName") == fn_name:
+            us += prof["timeDeltas"][i] if i < len(prof["timeDeltas"]) else 0
+    return us / 1000
 
 
 def report(prof: dict, top: int = 24) -> None:
+    if not prof["samples"]:
+        print("\n  no samples in this window -- the profiler was not running "
+              "then, or the window is outside the run")
+        return
     nodes = {x["id"]: x for x in prof["nodes"]}
     parent: dict[int, int] = {}
     for x in prof["nodes"]:
@@ -122,6 +262,34 @@ def report(prof: dict, top: int = 24) -> None:
         print("   ", f)
 
 
+def parse_window(text: str | None) -> tuple[float, float] | None:
+    if not text:
+        return None
+    lo, _, hi = text.partition(":")
+    if not _:
+        raise SystemExit("--window wants SECONDS:SECONDS, e.g. --window 10:25")
+    return float(lo) * 1000, float(hi) * 1000
+
+
+def check_selftest(prof: dict, origin_us: float, win: tuple[float, float],
+                   burn_at_ms: float) -> None:
+    """The window must contain the deliberate 4 s burn, and only the window."""
+    fn = "__profileSelftestBurn"
+    inside = self_time_of(slice_to_window(prof, origin_us, *win), fn)
+    before = self_time_of(slice_to_window(prof, origin_us, 0, win[0]), fn)
+    print(f"\nCONTROL: a named function burned 4,000 ms at page time "
+          f"{burn_at_ms:.0f} ms")
+    print(f"  inside  {win[0]/1000:.0f}-{win[1]/1000:.0f}s   {inside:7.0f} ms  "
+          f"(needs >= 3000)")
+    print(f"  before  0-{win[0]/1000:.0f}s      {before:7.0f} ms  (needs <= 300)")
+    if inside < 3000 or before > 300:
+        print("\n  FAIL  the burn is not where it was put. The two clocks are")
+        print("        joined wrongly, so every windowed number is fiction.")
+        sys.exit(1)
+    print("  PASS  the window holds what was put in it and nothing from outside,")
+    print("        so a windowed report on a real boot means something.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--attach", action="store_true",
@@ -129,8 +297,16 @@ def main() -> None:
     ap.add_argument("--seconds", type=int, default=50)
     ap.add_argument("--settle", type=float, default=3.0,
                     help="seconds to wait after launch before attaching")
+    ap.add_argument("--window", help="report only this slice of PAGE time, "
+                                     "in seconds, e.g. 10:25")
+    ap.add_argument("--selftest", action="store_true",
+                    help="prove the window is where it claims to be")
     ap.add_argument("--json", help="write the raw profile here")
     args = ap.parse_args()
+
+    win = parse_window(args.window)
+    if args.selftest and not win:
+        raise SystemExit("--selftest checks a --window; give it one")
 
     if not args.attach:
         adb("shell", "am", "force-stop", APP_ID)
@@ -140,14 +316,35 @@ def main() -> None:
         # and its name carries the pid, so this cannot be forwarded in advance.
         time.sleep(args.settle)
 
+    # A forward from a previous launch survives force-stop and points at a dead
+    # pid's socket, which fails at handshake rather than at connect.
+    adb("forward", "--remove-all")
     attach()
     ws = page_target()
-    prof = asyncio.run(profile(ws, args.seconds))
+    burn_at = (win[0] + win[1]) / 2 if (args.selftest and win) else None
+    prof, origin_us, how = asyncio.run(
+        profile(ws, args.seconds, int(burn_at) if burn_at else None))
     if args.json:
         with open(args.json, "w") as f:
             json.dump(prof, f)
         print(f"raw profile -> {args.json}")
-    report(prof)
+
+    if not win:
+        report(prof)
+        return
+
+    times = sample_times_us(prof)
+    covered = ((times[0] - origin_us) / 1000, (times[-1] - origin_us) / 1000) \
+        if times else (0, 0)
+    print(f"\n== page time {win[0]/1000:.0f}-{win[1]/1000:.0f}s ==")
+    print(f"   clock joined by {how}; the profile covers "
+          f"{covered[0]:.0f}-{covered[1]:.0f}s of page time")
+    if covered[0] > win[0]:
+        print(f"   ** profiling started {covered[0]:.0f}s in, so the first "
+              f"{covered[0] - win[0]/1000:.0f}s of this window is missing **")
+    report(slice_to_window(prof, origin_us, *win))
+    if args.selftest:
+        check_selftest(prof, origin_us, win, burn_at)
 
 
 if __name__ == "__main__":
