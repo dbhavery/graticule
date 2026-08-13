@@ -1369,10 +1369,28 @@ that stamp is when the event was finally DISPATCHED, which cannot happen while
 the thread is busy.
 
 Read carefully, that says the thread was already occupied from about 5.7 s by
-something else, and the 32 MB parse then starts at 18.5 s on top of it. So this
-frame is not established as the cause of the whole 10-25 s collapse. It is
-established as a large cost that lands at the end of it and runs past it.
-What holds the thread from 5.7 s to 18.5 s is still open.
+something else, and the frame only got handled once that let go.
+
+Then a windowed CPU profile of the same desktop boot said the handling itself
+is cheap:
+
+    ws.onmessage      271 ms inclusive
+    handleMessage     124 ms
+    resetLayer        108 ms
+    pushDeltasToTicker 94 ms
+
+V8 parses 32 MB of JSON faster than the size suggests. So **the CPU cost of
+this frame is not the boot problem**, and an earlier draft of this entry
+saying it was "a large cost that lands at the end of the collapse" was wrong.
+What does hold the thread reads as 85-92% `(program)` in every window of that
+profile, which under SwiftShader is the software rasteriser and says nothing.
+Desktop has answered as far as it can.
+
+What stands on its own, without needing the device at all, is the transfer:
+**32 MB on every launch, 28 MB of it rows for layers nobody switched on.** On
+a phone on cellular that is the user's money and their data cap, and it is a
+worse defect than the milliseconds were. It is worth fixing on that ground
+whatever the emulator says about blocking.
 
 `scripts/apk_boot_timeline.py` records websocket dispatch for exactly this
 reason, since Resource Timing cannot see a websocket frame. It deliberately
@@ -1380,7 +1398,8 @@ does not enable the CDP Network domain to get true wire arrival:
 `Network.webSocketFrameReceived` carries `payloadData`, so asking for it would
 push 32 MB back through the debugger socket during the window being measured.
 
-**Not yet confirmed on the device.** A software rasteriser cannot rank
+**The blocking question is not yet answered on the device.** A software
+rasteriser cannot rank
 main-thread costs, so the arrival time and the block it causes have to be read
 on the emulator before any fix is chosen. The size and the row counts do not
 need the device: they are counting results.
