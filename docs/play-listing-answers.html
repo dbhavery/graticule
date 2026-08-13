@@ -224,10 +224,32 @@ Weather Service alert or an instruction from your local emergency
 management.</p>
 </div>
 
-<h2>6. Still to produce</h2>
+<h2>6. Graphics, ready to upload</h2>
+<p>All produced from the real app on an emulator, on 2026-08-13, with a live
+backend. Nothing here is a mockup.</p>
 <ul>
-  <li>App icon at 512x512, feature graphic at 1024x500</li>
-  <li>Between two and eight phone screenshots</li>
+  <li><code>docs/store/play-icon-512.png</code> and
+      <code>docs/store/play-feature-graphic-1024x500.png</code>, both drawn by
+      <code>scripts/build_icons.py</code> so they can be regenerated</li>
+  <li><b>Four phone screenshots</b> in <code>docs/store/screenshots/</code>:
+    <ol>
+      <li>the globe with live radar over North America and an active flood warning</li>
+      <li>alerts and warnings, 553 of them, with live tropical storms listed</li>
+      <li>the layer rail open on its categories</li>
+      <li>the layer switches with live counts (ships 1,287, quakes 910, volcanoes 1,214)</li>
+    </ol>
+  </li>
+</ul>
+<p><b>Two sizes are provided and only one of them may be accepted.</b> The
+captures are the phone's own 1080x2400, which is 2.22:1. Play's phone
+screenshots are safest at 9:16, so <code>docs/store/screenshots/9x16/</code>
+holds the same four at 1080x1920. The 480 rows were taken out of the upper
+globe, which is empty arctic and ocean in all four, so the header and the
+panels at the bottom are untouched. Upload the 9x16 set; keep the originals in
+case Play takes the taller ratio.</p>
+
+<h2>7. Still to produce</h2>
+<ul>
   <li>The hosting origin, which every URL above depends on</li>
 </ul>
 
