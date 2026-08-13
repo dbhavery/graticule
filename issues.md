@@ -1313,3 +1313,69 @@ layers that are switched off, so there is no cheap app-side win left.
 Next: attribute the 10-25 s window specifically (terrain tiles, imagery decode,
 border primitive upload are the candidates) before changing anything. The 1.60x
 spread means only a large change can be ranked on this host.
+
+## 63. The boot snapshot is a 32 MB websocket frame, and none of it is drawn
+Measured server-side against the running backend, so this is a fact about the
+server rather than about a renderer: connect to `/ws`, take the first
+`snapshot` frame, and weigh it.
+
+    snapshot frame        32.4 MB
+    layers in the frame   13
+
+    layer                 rows        MB   on at boot
+    fires               107665     23.54
+    planes                6149      1.69
+    airports              5272      1.36
+    satellites            1352      0.37
+    volcanoes             1214      0.27
+    quakes                 915      0.27
+    ships                 1279      0.25
+    tfrs                   134      0.16
+    ... 5 more, 0.14 MB together
+
+    layers total           28.1 MB
+    meta total              1.5 MB
+    for layers OFF at boot  28.1 MB   (100% of the layer payload)
+
+Three switches ship checked: `radar`, `countries`, `states`. None of them is in
+the layers payload. Radar arrives as `meta.radar`, and the two border layers are
+GeoJSON fetched separately by `border-worker.js`. So **every one of the 28.1 MB
+of rows in this frame is for a layer nobody has switched on**, and `fires` alone
+is 23.5 MB of it, 73% of the whole frame.
+
+What the client then does with it, all on the main thread:
+
+1. `JSON.parse(ev.data)` over 32.4 MB in `ws.onmessage`
+2. `resetLayer()` per layer, which stores `layerData[layer] = entries` whether
+   or not the layer is drawn
+3. `pushDeltasToTicker()` per layer, which builds a `Set` of every id and diffs
+   it, so 107,665 keys for a layer that is off
+4. `updateCategoryCounts()` + `refreshAlerts()`, once
+
+`upsertEntity` and the drawing half of `resetLayer` do skip switched-off layers.
+That was measured in issue 62 and is still true. It is the receiving, parsing
+and bookkeeping that does not skip, and that is the part nobody had weighed.
+
+Timing, desktop only and therefore not a ranking claim: the frame arrived at
+18,520 ms, inside the 10-25 s window issue 62 identified as the collapse.
+`scripts/apk_boot_timeline.py` records websocket arrivals for exactly this
+reason, since Resource Timing cannot see a websocket frame.
+
+**Not yet confirmed on the device.** A software rasteriser cannot rank
+main-thread costs, so the arrival time and the block it causes have to be read
+on the emulator before any fix is chosen. The size and the row counts do not
+need the device: they are counting results.
+
+Fix candidates, in order of how much they address the cause:
+
+* Send counts, not rows, for layers that are off, and deliver rows when a layer
+  is switched on. Preserves the documented behaviour that counts report what the
+  feed has rather than what is drawn.
+* Split the snapshot into one frame per layer, so the main thread gets gaps
+  instead of one 32 MB slab. Cheaper, and it does not reduce the bytes.
+* Parse off the main thread. Fixes the parse, not the transfer.
+
+Note for whoever takes this: the client telling the server which layers are on
+would be the obvious protocol, and it is the one option to think twice about.
+`/privacy` claims there is no `ws.send` anywhere and `legal_pages_test.py`
+asserts it. That claim is worth more than the bytes it would save.
