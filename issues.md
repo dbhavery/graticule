@@ -1417,3 +1417,70 @@ Note for whoever takes this: the client telling the server which layers are on
 would be the obvious protocol, and it is the one option to think twice about.
 `/privacy` claims there is no `ws.send` anywhere and `legal_pages_test.py`
 asserts it. That claim is worth more than the bytes it would save.
+
+## 64. Device run of the boot window (2026-08-13): it is one frame
+Emulator, debug build, backend on :8744, `scripts/apk_boot_timeline.py`.
+Three boots:
+
+    run   snapshot frame   dispatched at   worst single frame   at
+    1     not recorded             -              5,928 ms      13,449 ms
+    2         34,989 KB       14,656 ms            9,290 ms      30,671 ms
+    3         34,942 KB       17,384 ms            2,054 ms      28,550 ms
+
+Two things hold across boots and one does not.
+
+**The snapshot is about 35 MB on the device and lands inside the collapse
+window**, 14.7 s and 17.4 s in the two runs that recorded it. That confirms the
+server-side measurement in issue 63 on the real client.
+
+**The worst blocking event is a single rendered frame**, measured between
+Cesium's own `preRender` and `postRender`. Not a spread of work, not the
+websocket handler: one frame. In run 2 that frame ran from 30,671 ms to
+39,961 ms while the frames on either side of it cost 4 to 67 ms.
+
+**How big it is does not hold**: 2.0 s, 5.9 s, 9.3 s across three boots of the
+same build. That is the sampling problem from issue 62 again, and it means this
+can rank a large change and nothing finer.
+
+What is NOT happening during the worst frame, read from the raw timeline:
+
+* no network activity at all (the last request of the run finished at 18,198 ms,
+  12 s before the frame started)
+* no tile loading (`tileLoadProgressEvent` is silent through it, and
+  `tilesLoaded` first went true at 9,582 ms)
+* no new primitives (`scene.primitives.length` reached 3 at 9,444 ms and never
+  changed again)
+* no entities (the layers are off, and `upsertEntity` correctly skips them)
+
+So terrain tiles, imagery decode and border primitive upload, the three
+candidates issue 62 named, are all ruled out for the worst frame. Whatever it
+is, it is inside `scene.render()` with nothing new to draw.
+
+**Naming it needs a profiler that survives, and this one does not.** On this
+2 GB emulator `apk_profile.py` ends its run with `ConnectionClosedError` and
+`pidof dev.dbhavery.graticule` empty, i.e. the WebView is gone. Two attempted
+fixes are recorded in the code as not fixes:
+
+* a websocket Ping frame makes it worse. The WebView's devtools server closes
+  the connection on one, and adding a ping killed a timeline run that had been
+  surviving 45 s of silence.
+* a keepalive `Runtime.evaluate` every 10 s changed nothing.
+
+The windowed profiler itself is sound: `--window 10:25 --selftest` passed on
+this device, putting a deliberate 4 s burn at 18,170-22,154 ms of page time,
+inside the window and zero before it. It failed once first, on the very first
+launch after a data wipe, because that boot was slow enough to push the armed
+timer past 25 s. That is the control working, not the control being broken.
+
+Next: an AVD with more RAM, or profile a 5 s window instead of 15.
+
+### Separately: the emulator would not start at all
+Three launches wedged at the same line, mid-write, with `qemu-system-x86_64`
+alive at 182 MB and adb never seeing a device. It survived a `-wipe-data` and
+happened identically on `-gpu swiftshader_indirect`, so it was neither the AVD
+data nor the GPU path.
+
+The log stops while writing crashpad annotations, and the line above it names
+the crash database: `%TEMP%\AndroidEmulator\emu-crash-36.3.10.db`, which had
+grown to **43 MB**. Moved it aside (not deleted) and the emulator booted in
+70 s. Worth trying first next time the emulator hangs on startup.
