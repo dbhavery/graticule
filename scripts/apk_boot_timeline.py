@@ -22,10 +22,16 @@ narrows the candidates to the ones actually present in the window, and then a
 condition run (`?terrain=off`, `?clamp=off`) has to move the tap-wait number
 before anything is believed.
 
-CONTROL: --control runs the same recorder with `?terrain=off` and fails unless
-the terrain requests it counted in the normal run actually disappear. A
-recorder that reports the same activity either way is not reading what it says
-it is reading.
+CONTROL: --control repeats the run with `?borderworker=off` and fails unless
+the app-data request count moves. Border GeoJSON is fetched inside
+border-worker.js, and a worker has its own Resource Timing buffer, so those
+fetches are invisible to the page; forcing the inline path moves them onto
+this timeline. A recorder that reports the same thing either way is not
+reading what it says it is reading.
+
+`?terrain=off` is the wrong control for this app at boot: it opens on North
+America from orbit and syncTerrainForView() does not attach terrain until the
+camera comes down, so there is nothing for the flag to remove.
 
     py -V:3.13 scripts/apk_boot_timeline.py
     py -V:3.13 scripts/apk_boot_timeline.py --control
@@ -274,7 +280,7 @@ def main() -> None:
     ap.add_argument("--seconds", type=int, default=45)
     ap.add_argument("--settle", type=float, default=3.0)
     ap.add_argument("--control", action="store_true",
-                    help="also run ?terrain=off and prove the terrain count moves")
+                    help="also run ?borderworker=off and prove the counts move")
     ap.add_argument("--json", help="write the raw timeline here")
     args = ap.parse_args()
 
@@ -289,18 +295,21 @@ def main() -> None:
     if not args.control:
         return
 
-    print("\n--- CONTROL: the same recorder with ?terrain=off ---")
-    kinds_off = report(one_run(args, "?terrain=off"))
-    on, off = kinds.get("terrain", 0), kinds_off.get("terrain", 0)
-    print(f"\n  terrain requests   normal {on}   terrain=off {off}")
-    if on == 0:
-        print("\n  FAIL  the normal run counted no terrain requests at all, so")
-        print("        this control cannot tell a working recorder from a dead")
-        print("        one. Fix the classifier before reading any row above.")
+    print("\n--- CONTROL: the same recorder with ?borderworker=off ---")
+    kinds_off = report(one_run(args, "?borderworker=off"))
+    total = sum(kinds.values())
+    on, off = kinds.get("app data", 0), kinds_off.get("app data", 0)
+    print(f"\n  requests counted, normal run   {total}")
+    print(f"  app-data requests   worker on {on}   worker off {off}")
+    if total < 20:
+        print("\n  FAIL  the normal run counted almost nothing. A control cannot")
+        print("        tell a working recorder from a dead one against a run")
+        print("        that recorded nothing, so nothing above is readable yet.")
         sys.exit(1)
-    if off > on * 0.2:
-        print("\n  FAIL  turning terrain off barely moved the count. The recorder")
-        print("        is not reading what it says it is reading.")
+    if off - on < 2:
+        print("\n  FAIL  moving the border parse onto the main thread did not")
+        print("        change what this timeline saw. It is not reading the")
+        print("        page's requests.")
         sys.exit(1)
     print("  PASS  the count follows the flag, so the rows above are measuring "
           "the app.")
