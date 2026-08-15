@@ -1654,3 +1654,133 @@ Two headline sources are non-commercial only, verified 2026-08-14:
 So charging for the app, or running ads in it, breaches both as they stand. The
 US government feeds (NWS, USGS, NOAA, NASA, FAA) are public domain and would be
 fine. Radar and aircraft are the two layers in the store screenshots.
+
+## 67. The 2-9 second boot frame is border geometry upload (2026-08-15)
+Named at last, with `scripts/apk_gl_frame.py`. Issue 64 left it unnamed because
+a CPU profile put 41% of the window in `(program)`, which is native code the
+sampler cannot give a stack to. So this instrument does not sample: it puts a
+timestamp on both sides of the GL calls that can block, and buckets them by the
+animation-frame tick they ran in.
+
+**The emulator is not a software rasterizer**, which matters for reading every
+number below:
+
+    unmasked renderer   Android Emulator OpenGL ES Translator
+                        (NVIDIA GeForce RTX 3090 Ti/PCIe/SSE2)
+    drawing buffer      411 x 914      devicePixelRatio 2.625
+
+Real GPU, behind a command translator that marshals every call to the host. So
+the GPU work is real hardware and the per-call overhead is not.
+
+### What the frame is
+
+Captured stack, from the instrument, on a 2,444 KB upload:
+
+    ou.createVertexBuffer      Cesium.js:80:25730
+    gp.fromGeometry            Cesium.js:3876:51365      VertexArray.fromGeometry
+    iL.update                  Cesium.js:14994:2383      Primitive.update
+
+That is `Primitive.update` creating vertex and index buffers, and the only
+large `Cesium.Primitive` geometry in this app is the border lines built at
+`web/app.js:588`. So it is candidate three from issue 62, border primitive
+upload, which issue 64 wrongly ruled out. **The reason it was ruled out was a
+bad test:** `scene.primitives.length` sat at 3 and never moved, and a count of
+top-level primitives does not change when geometry lands inside them.
+
+### The volume, which is the actual finding
+
+Three interleaved boots of the shipped build, identical every time:
+
+    uploaded per boot     346 MB in 75 calls over 1 MB
+    bufferData            1,970 / 1,610 / 1,816 ms
+    getProgramParameter   1,399 / 1,200 / 1,383 ms   (all pname LINK_STATUS)
+
+346 MB of vertex and index data per boot, for 11,378 border lines. The uploads
+arrive in two bursts, one per border layer; the larger burst is twelve
+consecutive buffers of 14,864 KB each, 174 MB, landing 40-120 ms apart.
+
+`ne_state_borders.geojson` carries 320,146 positions across 3,593 features,
+`ne_country_borders.geojson` 75,092 across 7,785. `PolylineGeometry` at
+`PolylineMaterialAppearance.VERTEX_FORMAT` expands every position into four
+vertices carrying position, previous, next, expand-and-width and texture
+coordinates, which is where 395,238 positions turn into 346 MB.
+
+**Both `.full.geojson` and the slimmed `.geojson` hold the same position
+count** (320,146 and 75,092). The slimming pass reduced coordinate precision
+and file bytes, not vertex count, so it never touched this cost.
+
+### About half the frame is not in a GL call, and that is measured
+
+    worst tick, shipped build   2,487 / 1,777 / 2,216 ms
+    of which in GL              roughly 45%
+    longest stretch inside one of those frames with NO GL call   32-217 ms
+
+So the non-GL half is not one long block of JavaScript. It is spread between
+the uploads in gaps of tens of milliseconds, which is the per-buffer work
+inside `VertexArray.fromGeometry` interleaving attributes into typed arrays.
+
+The control makes that reading trustworthy rather than a guess about what the
+instrument cannot see. `--control` fires 200 full-canvas `readPixels` calls, a
+hard pipeline stall, inside one tick:
+
+    readPixels attributed   normal run 0 ms     control run 1,367 ms / 200 calls
+    the burn's own clock                        1,383 ms   -> 98.8% accounted
+    that tick     1,383 ms total, 1,367 ms in GL, 16 ms unattributed (1%)
+
+When the time really is in GL this instrument reads 1% unattributed. So 45-58%
+unattributed on the border frames is a fact about those frames.
+
+### `?borderprims=split` does not fix it. That flag is now settled.
+
+`web/app.js:530` shipped the split behind a flag marked NOT PROVEN, because the
+2026-08-08 attempt ran the two conditions back to back on a busy host. Re-run
+here as three INTERLEAVED pairs, so drift cannot land on one side:
+
+                        worst   blocking   slowTicks   uploadMB   calls   bufferData
+    shipped   median    2,216      9,709          21        346      75      1,816 ms
+    split     median    2,416     12,081          28        303      91      1,594 ms
+
+    shipped   worst per run   2,487 / 1,777 / 2,216
+    split     worst per run   2,416 / 2,637 / 1,819
+
+The theory said the worst tick would fall because each primitive is uploaded
+atomically, so more primitives means smaller uploads. **It does not fall.** The
+ranges overlap completely and total blocking gets 24% worse.
+
+The mechanism explains why: splitting the geometry does not spread the uploads,
+because `flush()` adds every batch to the scene as soon as it is built, and
+Cesium then updates every primitive whose async geometry is ready **in the same
+frame**. One shipped tick carried 45 `bufferData` calls. Splitting makes more,
+smaller buffers that still land together. To actually spread them you would
+have to delay `primitives.add`, not the geometry.
+
+Leave the flag off. It is now off for a measured reason.
+
+### What is left, and none of it is mine to choose
+
+* **Fewer vertices.** Douglas-Peucker was removed on purpose and Don reported
+  the reason: 223 m of displacement put borders visibly in the wrong place at
+  city zoom (`scripts/slim_boundaries.py`). That docstring also concludes
+  "vertices are cheap again", which was true of frame rate after the
+  `clampToGround` fix and is **not** true of boot upload cost. A zoom-dependent
+  pair of datasets would get both, at the cost of shipping and switching two.
+* **A lighter vertex format.** The lines are one flat colour with an alpha, so
+  `PolylineMaterialAppearance` is buying a material this app does not vary.
+* **Spread the uploads for real**, by adding primitives to the scene over
+  several frames rather than as they are built.
+
+All three are visible-behaviour or design changes, so they are Don's call.
+
+### Two things found on the way
+
+**The app carries a 325 MB native heap after boot** (`dumpsys meminfo`, PSS,
+debug build), 405 MB allocated, 105 MB swapped, on a 2 GB emulator with 122 MB
+free. Not attributed: the border buffers, the imagery cache and the websocket
+snapshot all live in there and this did not separate them.
+
+**The WebView process died outright** on one run of six, at about 44 s, taking
+the whole record with it. Issue 64 saw the same thing under the CPU profiler
+and read it as a profiler problem; it is not, it happens without the profiler.
+So the instrument now drains its record every 5 s instead of dumping once at
+the end, and a run that is cut short says INCOMPLETE RUN rather than printing a
+tidy short table.

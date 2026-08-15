@@ -527,20 +527,32 @@ const BORDER_LINE_STYLE = {
  * The cost is draw calls, which goes from 2 to about 12 for the whole world.
  * That is not a number that matters here.
  *
- * DEFAULT OFF, behind `?borderprims=split`, because it is NOT PROVEN.
+ * DEFAULT OFF. Settled 2026-08-15: it does not work. Do not re-run this A/B.
  *
- * Measured 2026-08-08 on the emulator, same session, back to back: the worst
- * task fell 3,465 -> 1,968 ms, which is what the theory predicts, but total
- * blocking ROSE 14,787 -> 16,877 ms and the long-task count went 72 -> 96.
- * Then three boots of the UNCHANGED baseline read 14,787, 11,240 and 12,225 ms
- * with worst tasks of 3,465, 2,464 and 1,842 ms. The 1,968 ms sits inside that
- * range, so the improvement was never established at all, and the host was
- * 50-74% busy with other work throughout.
+ * The 2026-08-08 attempt could not rank it, because it ran the two conditions
+ * back to back on a host that was 50-74% busy, so any drift over those minutes
+ * landed entirely on the second one. `apk_gl_frame.py --ab 3` runs them
+ * INTERLEAVED and counts the uploads themselves, which are identical every
+ * boot rather than at the mercy of the host:
  *
- * So the flag, rather than a guess in either direction: the code is written,
- * reviewed and passing, and a quiet machine can settle it with
- * `apk_longtasks.py --repeat 5` on one build and then the other. Shipping it
- * on this evidence would be the same mistake as reverting it would be.
+ *                     worst   blocking   uploads   MB uploaded
+ *     shipped median  2,216      9,709        75           346
+ *     split   median  2,416     12,081        91           303
+ *
+ *     shipped per run   2,487 / 1,777 / 2,216 ms
+ *     split   per run   2,416 / 2,637 / 1,819 ms
+ *
+ * The worst tick does not fall. The ranges overlap completely and total
+ * blocking is 24% worse.
+ *
+ * The reason is in this function: flush() hands each batch to the scene AS IT
+ * IS BUILT, and Cesium then updates every primitive whose async geometry is
+ * ready in the SAME frame. One shipped tick carried 45 bufferData calls.
+ * Splitting the geometry makes more, smaller buffers that still land together.
+ * Spreading the uploads would mean delaying primitives.add, not the geometry.
+ *
+ * The cost itself is 346 MB of vertex and index data per boot for 11,378
+ * lines, which no amount of rearranging uploads it in. issues.md 67.
  */
 const BORDER_PRIM_SPLIT =
   new URLSearchParams(location.search).get('borderprims') === 'split';
