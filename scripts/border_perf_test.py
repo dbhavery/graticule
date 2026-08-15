@@ -117,6 +117,9 @@ MAX_TOTAL_BLOCKING_MS = 2500
 # device. 34 leaves room for tile-count drift and still fails if a change adds
 # a handful of new variants.
 MAX_SHADER_PROGRAMS = 34
+# And a floor, because `len([]) <= 34` is true and an instrument that failed to
+# install produces exactly that.
+MIN_SHADER_PROGRAMS = 12
 
 # Sub-millimetre. The GeoJSON is rounded to 5 decimal places (1.1 m), so a
 # formula that agrees this closely cannot be what moves a border.
@@ -201,7 +204,26 @@ RENDERER = """() => {
 }"""
 
 
-async def boot(br, errors: list[str], built: list[str]) -> tuple:
+def note_console(m, errors: list[str], foreign: list[str], built: list[str]) -> None:
+    """Split OUR errors from the tile servers'.
+
+    This check exists to catch the classic native bug: a file the shell asks
+    for that is not in dist/, which shows as a same-origin 404 and a white
+    screen. It was also failing on a single unnamed 404 from ESRI or
+    RainViewer roughly one run in three, and a gate that cries wolf is the
+    disease this whole file is being treated for. Same-origin still fails.
+    """
+    if "border lines" in m.text:
+        built.append(m.text)
+    if m.type != "error":
+        return
+    loc = (m.location or {}).get("url") or ""
+    entry = f"{m.text} [{loc[:120]}]" if loc else m.text
+    # No URL means it came from app code, not the network stack, so it is ours.
+    (foreign if loc and not loc.startswith(BASE) else errors).append(entry)
+
+
+async def boot(br, errors: list[str], foreign: list[str], built: list[str]) -> tuple:
     """One full boot in a fresh context, watched for WINDOW_S.
 
     The BROWSER is reused by the caller, so the second call gets Chromium's
@@ -212,9 +234,7 @@ async def boot(br, errors: list[str], built: list[str]) -> tuple:
                               is_mobile=True, has_touch=True)
     await ctx.add_init_script(INSTR)
     pg = await ctx.new_page()
-    pg.on("console", lambda m: (
-        built.append(m.text) if "border lines" in m.text else None,
-        errors.append(m.text) if m.type == "error" else None))
+    pg.on("console", lambda m: note_console(m, errors, foreign, built))
     pg.on("pageerror", lambda e: errors.append(f"PAGEERROR {e}"))
 
     await pg.goto(URL, wait_until="load")
@@ -261,13 +281,14 @@ async def main() -> None:
         br = await p.chromium.launch(
             args=SWIFT_ARGS if FORCE_SWIFT else GPU_ARGS, chromium_sandbox=False)
         errors: list[str] = []
+        foreign: list[str] = []
         built: list[str] = []
 
         print(f"== boot, {DEVICE['width']}x{DEVICE['height']}, {WINDOW_S}s window ==")
         print(f"   {URL}")
 
         # ---- Boot 1: cold compiled-shader cache -----------------------------
-        ctx1, pg1, cold = await boot(br, errors, built)
+        ctx1, pg1, cold = await boot(br, errors, foreign, built)
         renderer = await pg1.evaluate(RENDERER)
         rasteriser_ms = await pg1.evaluate(RASTERISER_CONTROL)
         # --gpu is a request, not a fact: ANGLE falls back silently, and every
@@ -288,15 +309,26 @@ async def main() -> None:
 
         # ---- Boot 2: warm ---------------------------------------------------
         built.clear()
-        ctx2, pg2, warm = await boot(br, errors, built)
+        ctx2, pg2, warm = await boot(br, errors, foreign, built)
         st = show("boot 2, WARM compiled-shader cache (every launch after the "
                   "first) -- THIS is what is gated", warm)
 
+        # The instrument first. Every number above and below is a count of
+        # things a wrapper saw, so a wrapper that did not install reads as a
+        # clean, passing zero -- including the shader budget, which an empty
+        # list satisfies trivially.
+        chk(warm["wrapped"] >= 15 and warm["glWrapped"] >= 15 and warm["ctxs"] >= 1,
+            f"the instrument installed ({warm['wrapped']} cesium, "
+            f"{warm['glWrapped']} gl, {warm['ctxs']} context) -- without this "
+            f"the numbers below are zeroes, not measurements")
+
         progs = warm.get("programs") or []
-        chk(len(progs) <= MAX_SHADER_PROGRAMS,
-            f"boot links no more than {MAX_SHADER_PROGRAMS} shader programs "
-            f"({len(progs)}) -- the app controls this through its imagery "
-            f"layers and any flag that toggles mid-boot")
+        chk(MIN_SHADER_PROGRAMS <= len(progs) <= MAX_SHADER_PROGRAMS,
+            f"boot links between {MIN_SHADER_PROGRAMS} and "
+            f"{MAX_SHADER_PROGRAMS} shader programs ({len(progs)}) -- the app "
+            f"controls this through its imagery layers and any flag that "
+            f"toggles mid-boot, and a floor is here because an empty list "
+            f"passes a ceiling for free")
 
         if hardware:
             chk(st["worstMs"] <= MAX_SINGLE_TASK_MS,
@@ -389,9 +421,15 @@ async def main() -> None:
             f"{MAX_SINGLE_TASK_MS} ms), so a green above means something")
         await ctx4.close()
 
-        chk(not errors, f"no console errors during boot ({len(errors)})")
+        chk(not errors, f"no console errors from this app during boot "
+            f"({len(errors)})")
         for m in errors[:10]:
             print("   ERR ", m[:200])
+        if foreign:
+            print(f"   (plus {len(foreign)} error(s) from third-party servers, "
+                  f"not gated:)")
+            for m in foreign[:5]:
+                print("   ext ", m[:160])
 
         await br.close()
 
