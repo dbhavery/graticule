@@ -36,6 +36,14 @@ EXPIRE_SEC: dict[str, int] = {
 }
 
 
+# A layer with more rows than this is named and counted in the boot snapshot
+# but its rows are not sent; the client fetches them when the layer is switched
+# on. 2,000 is chosen to sit above every layer that feeds the opening ticker
+# and below the four that make the frame big (fires 107,665, planes ~6,100,
+# airports 5,272, satellites 1,352 are the ones measured in issues.md 63).
+SNAPSHOT_INLINE_MAX = 2000
+
+
 @dataclass
 class StateStore:
     # Dynamic layers (rolling, per-entity)
@@ -144,8 +152,37 @@ class StateStore:
             if stale:
                 logger.debug(f"expired {len(stale)} {layer}")
 
-    def snapshot(self) -> dict[str, Any]:
-        return {"layers": self.layers, "meta": self.meta}
+    def snapshot(self, inline_max: int | None = SNAPSHOT_INLINE_MAX) -> dict[str, Any]:
+        """The opening state a client gets on connect.
+
+        `inline_max=None` returns everything, which is what `/api/snapshot`
+        does. The websocket asks for the bounded form, because the full one is
+        32 MB and 28 MB of it is rows for layers that ship switched off. See
+        issues.md 63: a layer nobody has turned on still costs the client the
+        transfer, the parse and the garbage, and on the device that measured
+        about 2 to 3 seconds of main thread as well as the bytes.
+
+        A big layer is named in `counts` and listed in `deferred`, so the
+        client can label the switch honestly without holding the rows. It
+        fetches them from /api/layer/<name> if and when the layer is turned on.
+        Small layers are still sent inline, which keeps the opening ticker
+        (top quakes, next launches) working exactly as it did.
+        """
+        if inline_max is None:
+            return {"layers": self.layers, "meta": self.meta,
+                    "counts": {k: len(v) for k, v in self.layers.items()},
+                    "deferred": []}
+        layers: dict[str, dict[str, dict[str, Any]]] = {}
+        counts: dict[str, int] = {}
+        deferred: list[str] = []
+        for name, rows in self.layers.items():
+            counts[name] = len(rows)
+            if len(rows) > inline_max:
+                deferred.append(name)
+            else:
+                layers[name] = rows
+        return {"layers": layers, "meta": self.meta,
+                "counts": counts, "deferred": deferred}
 
     # ---------- subscribers ----------
 

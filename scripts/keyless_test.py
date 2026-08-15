@@ -161,7 +161,17 @@ async def main() -> None:
             f"({heights[-1] if heights else None} m), so these are heights and not noise")
 
         print("\n=== keyless feeds ===")
-        counts = await pg.evaluate("""() => {
+        # The boot snapshot no longer carries rows for big layers, it counts
+        # them and the client fetches on demand (issues.md 63). So load the
+        # deferred ones first and then count, which is what the app itself does
+        # when the layer is switched on. Counting `layerData` cold would read
+        # whatever handful of rows happened to arrive as live deltas: planes
+        # would still pass, for entirely the wrong reason, and fires would read
+        # zero because FIRMS does not push deltas that fast.
+        counts = await pg.evaluate("""async () => {
+          const load = (k) => (typeof fetchDeferredLayer === 'function'
+            ? (fetchDeferredLayer(k) || Promise.resolve()) : Promise.resolve());
+          await Promise.all(['planes', 'ships', 'fires'].map(load));
           const L = (typeof layerData !== 'undefined' ? layerData : {});
           const n = (k) => Object.keys(L[k] || {}).length;
           return { planes: n('planes'), ships: n('ships'), fires: n('fires') };

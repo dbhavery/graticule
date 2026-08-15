@@ -1731,10 +1731,20 @@ function bindUI() {
         // as it always did; what changed is that nothing exists in between.
         if (on) {
           if (layer === 'satellites') {
-            if (!satelliteRecords.size && layerData.satellites) {
-              rebuildSatellites(layerData.satellites);
-              setCount('satellites', satelliteRecords.size);
-            }
+            // Satellites sit under the snapshot's inline limit today, so the
+            // rows are usually already here. Going through the same fetch
+            // keeps it correct if the TLE set ever grows past it, instead of
+            // silently switching on an empty sky.
+            const pending = fetchDeferredLayer('satellites');
+            const build = () => {
+              if (!isLayerOn('satellites')) return;
+              if (!satelliteRecords.size && layerData.satellites) {
+                rebuildSatellites(layerData.satellites);
+                setCount('satellites', satelliteRecords.size);
+              }
+            };
+            if (pending) pending.then(build);
+            else build();
           } else {
             materialiseLayer(layer);
           }
@@ -2402,6 +2412,18 @@ function handleMessage(msg) {
       resetLayer(layer, entries);
       if (Object.keys(entries).length) noteFeed(layer);
     }
+    // Layers the server counted but did not send. Their rows arrive from
+    // /api/layer/<name> the first time somebody switches one on. The count is
+    // set here so the switch still reads what the feed has rather than zero,
+    // which is the same promise resetLayer makes for the layers that did come
+    // down. See issues.md 63.
+    deferredLayers = new Set(msg.data.deferred || []);
+    for (const [layer, n] of Object.entries(msg.data.counts || {})) {
+      if (deferredLayers.has(layer)) {
+        setCount(layer, n);
+        if (n) noteFeed(layer);
+      }
+    }
     const meta = msg.data.meta || {};
     if (meta.radar)         { radarMeta = meta.radar;   noteFeed('radar');  if (isLayerOn('radar'))  toggleRadar(true); if (isLayerOn('clouds')) toggleClouds(true); }
     if (meta.aurora)        { auroraMeta = meta.aurora; noteFeed('aurora'); if (isLayerOn('aurora')) toggleAurora(true); }
@@ -2445,6 +2467,10 @@ function isLayerOn(layer) {
 
 function resetLayer(layer, entries) {
   layerData[layer] = entries;
+  // A reset carries the whole layer, so a deferred one no longer needs
+  // fetching. Without this a `<layer>:reset` would be discarded the moment
+  // somebody switched the layer on and the fetch overwrote it.
+  if (deferredLayers.has(layer)) deferredLoaded.add(layer);
 
   if (layer === 'satellites') {
     // Satellites propagate their own orbits on a 1 Hz tick, so building them
@@ -2476,9 +2502,68 @@ function resetLayer(layer, entries) {
   pushDeltasToTicker(layer, entries);
 }
 
+/* Layers the boot snapshot counted but did not send, and the fetches already
+   in flight for them, so a fast off/on does not ask twice. */
+let deferredLayers = new Set();
+const deferredFetches = new Map();
+/* Which deferred layers hold a COMPLETE set of rows. This cannot be inferred
+   from `layerData[layer]` being non-empty: live `:batch` messages call
+   upsertEntity, which stores rows for switched-off layers too, so a deferred
+   layer picks up a handful of entries within seconds of boot. Reading that as
+   "already loaded" would switch the layer on showing the nine planes that
+   happened to move, out of six thousand. */
+const deferredLoaded = new Set();
+
+/* Ask the server for a deferred layer's rows, once.
+
+   Returns a promise for the rows, or null if this layer was never deferred and
+   therefore has nothing to wait for. The fetch is remembered rather than the
+   result: two toggles in quick succession then share one request instead of
+   racing, and a failure clears the memo so the next toggle can retry rather
+   than being stuck with an empty layer forever. */
+function fetchDeferredLayer(layer) {
+  if (!deferredLayers.has(layer) || deferredLoaded.has(layer)) return null;
+  if (deferredFetches.has(layer)) return deferredFetches.get(layer);
+
+  const p = fetch(apiUrl(`/api/layer/${encodeURIComponent(layer)}`))
+    .then((r) => {
+      if (!r.ok) throw new Error(`${layer} -> HTTP ${r.status}`);
+      return r.json();
+    })
+    .then((doc) => {
+      // Anything that arrived by websocket while this was in the air is newer
+      // than what the server serialised, so it wins.
+      layerData[layer] = Object.assign(doc.rows || {}, layerData[layer] || {});
+      deferredLoaded.add(layer);
+      noteFeed(layer);
+      return layerData[layer];
+    })
+    .catch((e) => {
+      console.warn('Deferred layer fetch failed:', e);
+      deferredFetches.delete(layer);
+      return null;
+    });
+  deferredFetches.set(layer, p);
+  return p;
+}
+
 /* Build the entities for a layer from the feed rows already in hand. Called
-   when a layer is switched on; a no-op if the scene is already in step. */
+   when a layer is switched on; a no-op if the scene is already in step.
+
+   Big layers are not in hand at boot any more, so this fetches them first and
+   builds when they land. The switch is already on and the fade is already
+   running by then, which is the same thing that happens when a layer's first
+   batch arrives over the socket. */
 function materialiseLayer(layer) {
+  const pending = fetchDeferredLayer(layer);
+  if (pending) {
+    pending.then(() => {
+      // The user may have switched it off again while the rows were in the
+      // air. Building then would leave entities behind a switch that is off.
+      if (isLayerOn(layer)) materialiseLayer(layer);
+    });
+    return 0;
+  }
   const ds = dataSources[layer];
   const entries = layerData[layer];
   if (!ds || !entries) return 0;
@@ -12515,6 +12600,11 @@ const DASH_EARTH = {
   title: 'GEOPHYSICAL',
   sub: 'Earthquakes (USGS) · volcanoes (GVP) · wildfires (FIRMS) · natural events (EONET)',
   async load() {
+    // Fires is big enough that the boot snapshot only counts it, so this
+    // dashboard has to ask for the rows rather than assume they are in hand.
+    // Without this the panel reads zero wildfires until somebody happens to
+    // switch the layer on, which is the chrome lying about the data behind it.
+    await (fetchDeferredLayer('fires') || Promise.resolve());
     return {
       quakes:    Object.entries(layerData.quakes    || {}).map(([id, p]) => ({ id, ...p })),
       volcanoes: Object.entries(layerData.volcanoes || {}).map(([id, p]) => ({ id, ...p })),

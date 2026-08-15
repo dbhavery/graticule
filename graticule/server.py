@@ -147,7 +147,26 @@ app.add_middleware(
 
 @app.get("/api/snapshot")
 async def snapshot() -> JSONResponse:
-    return JSONResponse(state.snapshot())
+    # Everything, unbounded: this endpoint exists for inspection and for tests
+    # that want the whole picture in one call. The websocket sends the bounded
+    # form instead, which is the one a client actually boots on.
+    return JSONResponse(state.snapshot(inline_max=None))
+
+
+@app.get("/api/layer/{name}")
+async def layer_rows(name: str) -> JSONResponse:
+    """One layer's rows, for a layer the boot snapshot only counted.
+
+    The client calls this when a big layer is switched on. Keeping it a plain
+    GET rather than asking the client to tell the socket what it wants is
+    deliberate: /privacy states that the app never sends anything up the
+    websocket, and legal_pages_test.py asserts it. A layer that is never
+    switched on is never fetched and never paid for.
+    """
+    rows = state.layers.get(name)
+    if rows is None:
+        return JSONResponse({"error": f"no such layer: {name}"}, status_code=404)
+    return JSONResponse({"layer": name, "rows": rows})
 
 
 @app.get("/api/config")
