@@ -48,6 +48,16 @@
 <body>
   <div id="cesiumContainer"></div>
 
+  <!-- Attribution. This is a licence condition, not decoration: OpenStreetMap
+       is ODbL, OpenTopoMap is CC-BY-SA, Esri's terms require the credit, and
+       adsb.fi's terms require citing them with a link to their home page.
+
+       It used to be a `document.createElement('div')` passed straight into the
+       Viewer options and never appended to anything, so Cesium wrote fourteen
+       credits into a node that was not on the page and none of them was ever
+       seen (issues.md 66). Keep this element in the document. -->
+  <div id="credits" aria-label="Data sources"></div>
+
   <!-- Where am I.
        The first thing anyone does with a weather app on a phone is find out
        what is happening where they are standing, and until now the only way to

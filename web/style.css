@@ -1385,9 +1385,54 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 #diagnostics-overlay .diag-key { color: var(--text-mute); margin-right: 6px; }
 #diagnostics-overlay .diag-val { color: var(--text); }
 
-/* Hide Cesium chrome we don't want */
+/* Hide Cesium chrome we don't want. The credit bar is NOT in that category:
+   it moves to #credits below, because several of the credits it carries are
+   licence conditions. */
 .cesium-viewer-bottom { display: none !important; }
-.cesium-credit-lightbox-overlay { display: none !important; }
+
+/* Attribution, bottom left, under everything else so it never takes a tap
+   away from the app. Small and low contrast because it has to be legible and
+   present rather than loud, and `pointer-events` is off on the strip so only
+   the links themselves are clickable. */
+/* Anchored by BOTH edges rather than given a width. Shrink-to-fit on an
+   absolutely positioned box computed to 0px here, so the strip was present,
+   measurable at 0x0, and its link unclickable.
+
+   Placement follows the locate button's convention: above the sheet on a
+   phone, on the bottom edge on a desktop, and stopping short of the button so
+   the two never overlap. z-index sits above the rail because the first attempt
+   put this under it, and Cesium's "Data attribution" expander has to be
+   reachable or the credits behind it are suppressed by a second route. */
+#credits {
+  position: fixed;
+  left: 12px; right: 68px;
+  bottom: calc(var(--sheet-peek, 96px) + 6px + env(safe-area-inset-bottom, 0px));
+  z-index: 34;
+  text-align: right;
+  font-size: 10px; line-height: 1.35; color: var(--text-mute);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .9);
+  pointer-events: none;
+}
+/* On a desktop the sheet does not exist and the rail owns the left edge. */
+@media (min-width: 781px) and (min-height: 501px) {
+  #credits { left: 352px; right: 20px; bottom: 8px; }
+}
+#credits a, #credits .cesium-credit-expand-link {
+  color: var(--text-mute); text-decoration: none; pointer-events: auto;
+}
+#credits a:hover, #credits .cesium-credit-expand-link:hover {
+  color: var(--text); text-decoration: underline;
+}
+#credits .cesium-credit-expand-link { cursor: pointer; }
+/* Cesium ships its own inline styles on these; keep them from stacking. */
+#credits .cesium-credit-textContainer,
+#credits .cesium-credit-logoContainer { display: inline; }
+#credits img { height: 12px; vertical-align: -2px; opacity: .75; }
+
+/* The expanded list has to be reachable, or the credits that do not fit on
+   one line are suppressed again by another route. It was display:none. */
+.cesium-credit-lightbox-overlay { z-index: 70; }
+.cesium-credit-lightbox { background: var(--panel, #0f141d); color: var(--text); }
 
 /* Custom scrollbars */
 #hud::-webkit-scrollbar, #panel::-webkit-scrollbar { width: 6px; }

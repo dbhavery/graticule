@@ -170,6 +170,33 @@ def main() -> None:
         and not prose_em_dashes(f"<span>{EM}</span>"),
         f"CONTROL: prose scan flags 'a {EM} b' and spares the >{EM}< placeholder")
 
+    # ---- attribution ----------------------------------------------------
+    #
+    # This shipped as `creditContainer: document.createElement('div')`, a node
+    # that was never appended, so Cesium wrote fourteen credits into nothing
+    # and the app displayed no attribution at all. Several of those credits are
+    # licence conditions (OpenStreetMap is ODbL, OpenTopoMap is CC-BY-SA, Esri
+    # requires it), which made a suppressed credit bar the same class of defect
+    # as shipping a non-commercial dataset. issues.md 66.
+    app = read(WEB / "app.js")
+    css = read(WEB / "style.css")
+    chk('id="credits"' in index,
+        "index.html has a #credits element for Cesium to write into")
+    chk("creditContainer: document.getElementById('credits')" in app,
+        "the viewer's creditContainer is that element and not a detached div")
+    chk("document.createElement('div')" not in
+        app[app.index("creditContainer:"):app.index("creditContainer:") + 120],
+        "CONTROL: the exact detached-div form that caused this is gone")
+    chk(".cesium-credit-lightbox-overlay { display: none" not in css,
+        "the attribution expander is not hidden by CSS")
+    # adsb.fi's terms require citing them WITH a link, and aircraft arrive as
+    # websocket entities so no imagery credit ever covered them.
+    chk("adsb.fi" in app and 'href="https://adsb.fi/"' in app,
+        "adsb.fi is credited with a link, which its terms require")
+    chk(app.count("onScreenCredit(") >= 5,
+        f"the base map's own credit is on screen, not behind the expander "
+        f"({app.count('onScreenCredit(')} promoted)")
+
     print(f"\n{len(ok)} passed, {len(bad)} failed")
     for m in bad:
         print("  FAILED:", m)

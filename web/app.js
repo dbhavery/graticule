@@ -1130,7 +1130,13 @@ async function initViewer() {
     geocoder: false, homeButton: false, sceneModePicker: false,
     timeline: false, animation: false, fullscreenButton: false,
     navigationHelpButton: false, selectionIndicator: false, infoBox: false,
-    creditContainer: document.createElement('div'),
+    // A real element in the document. This was `document.createElement('div')`
+    // inline, a node that was never appended, so every credit Cesium produced
+    // went nowhere and nothing was ever displayed. Several of them are licence
+    // conditions rather than courtesies (OpenStreetMap is ODbL, OpenTopoMap is
+    // CC-BY-SA, Esri requires the credit), which made a suppressed credit bar
+    // the same class of defect as shipping a non-commercial dataset. issues.md 66.
+    creditContainer: document.getElementById('credits'),
 
     // Multi-pane snapshots read pixels back off this canvas with drawImage,
     // and they have to wait for the pane's imagery tiles to load first. That
@@ -1158,6 +1164,8 @@ async function initViewer() {
   // Test-only handle so Playwright (and the dev console) can drive the camera
   // and inspect data sources during self-test without re-plumbing the closure.
   window.__graticule_viewer = viewer;
+
+  addFeedCredits(viewer);
 
   viewer.imageryLayers.removeAll();
   // Before the base, so it lands at index 0 and the base stacks on top of it.
@@ -2500,6 +2508,52 @@ function resetLayer(layer, entries) {
 
   // Live ticker — only push entries that are NEW since last reset (delta-aware).
   pushDeltasToTicker(layer, entries);
+}
+
+/* Credit the feeds that arrive over the websocket rather than as imagery.
+
+   An imagery layer carries its own `credit:` and Cesium shows it. Everything
+   the backend fetches -- aircraft, vessels, quakes, fires, satellites,
+   volcanoes, launches, cables -- arrives as entities, so there was no credit
+   object anywhere and nothing to suppress: it was simply missing. For adsb.fi
+   that is a breach rather than an omission, because their terms require citing
+   them with a link to their home page.
+
+   `showOnScreen` is false for all of these on purpose. Fourteen imagery
+   credits plus a dozen feeds would be a paragraph across the bottom of a
+   phone; Cesium puts these behind its own "Data attribution" expander, which
+   is the same place every map app of this shape puts them. The imagery
+   credits, which are the ones carrying ODbL and CC-BY-SA conditions, stay on
+   screen. */
+const FEED_CREDITS = [
+  'Aircraft <a href="https://adsb.fi/" target="_blank" rel="noopener">adsb.fi</a>',
+  'Vessels <a href="https://www.digitraffic.fi/" target="_blank" rel="noopener">Digitraffic</a>',
+  'Warnings and forecasts NOAA National Weather Service',
+  'Earthquakes USGS',
+  'Wildfires NASA FIRMS',
+  'Satellites <a href="https://celestrak.org/" target="_blank" rel="noopener">CelesTrak</a>',
+  'Volcanoes Smithsonian Global Volcanism Program',
+  'Launches <a href="https://thespacedevs.com/" target="_blank" rel="noopener">The Space Devs</a>',
+  'Airports <a href="https://ourairports.com/" target="_blank" rel="noopener">OurAirports</a>',
+  'Flight restrictions FAA',
+  'Submarine cables <a href="https://www.submarinecablemap.com/" target="_blank" rel="noopener">TeleGeography</a>',
+  'Natural events NASA EONET',
+];
+
+function addFeedCredits(viewer) {
+  const display = viewer.scene && viewer.scene.frameState
+    && viewer.scene.frameState.creditDisplay;
+  if (!display || typeof display.addStaticCredit !== 'function') {
+    // Never silently: a missing credit is the defect this function exists to
+    // fix, so a Cesium that cannot take one has to say so out loud.
+    console.error('Cannot add feed credits: no creditDisplay.addStaticCredit. '
+                  + 'Attribution for the websocket feeds is NOT being shown.');
+    return 0;
+  }
+  for (const html of FEED_CREDITS) {
+    display.addStaticCredit(new Cesium.Credit(html, false));
+  }
+  return FEED_CREDITS.length;
 }
 
 /* Layers the boot snapshot counted but did not send, and the fetches already
@@ -5408,6 +5462,16 @@ async function initPolarBackstop() {
   });
 }
 
+/* The BASE MAP's credit goes on screen; overlay credits stay in the expander.
+
+   OpenStreetMap is ODbL and OpenTopoMap is CC-BY-SA, and for those two the
+   credit is a term of the licence rather than a courtesy, so the map itself
+   carries the line whenever they are the active base. Esri's terms ask for the
+   same. The other fourteen credits stay behind Cesium's "Data attribution"
+   expander, because fourteen lines across the bottom of a phone is not
+   attribution, it is a wall nobody reads. */
+const onScreenCredit = (html) => new Cesium.Credit(html, true);
+
 let baseImageryLayer = null;
 async function applyImageryBase(kind) {
   if (!viewer) return;
@@ -5423,14 +5487,14 @@ async function applyImageryBase(kind) {
       provider = new Cesium.UrlTemplateImageryProvider({
         url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
         maximumLevel: 19,
-        credit: 'Tiles © OpenStreetMap contributors',
+        credit: onScreenCredit('Tiles © OpenStreetMap contributors'),
       });
     } else if (kind === 'topo') {
       provider = new Cesium.UrlTemplateImageryProvider({
         url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
         subdomains: ['a', 'b', 'c'],
         maximumLevel: 17,
-        credit: 'Tiles © OpenTopoMap (CC-BY-SA)',
+        credit: onScreenCredit('Tiles © OpenTopoMap (CC-BY-SA)'),
       });
     } else if (kind === 'night') {
       // Same two GIBS traps as the night-lights overlay: VIIRS_Black_Marble is
@@ -5440,7 +5504,7 @@ async function applyImageryBase(kind) {
         url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg',
         tilingScheme: new Cesium.WebMercatorTilingScheme(),
         maximumLevel: 8,
-        credit: 'NASA Earthdata · VIIRS City Lights',
+        credit: onScreenCredit('NASA Earthdata · VIIRS City Lights'),
       });
     } else {
       // Satellite: prefer Cesium ion when token is present, else ESRI.
@@ -5451,14 +5515,14 @@ async function applyImageryBase(kind) {
           provider = new Cesium.UrlTemplateImageryProvider({
             url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
             maximumLevel: 19,
-            credit: 'Tiles © Esri',
+            credit: onScreenCredit('Tiles © Esri'),
           });
         }
       } else {
         provider = new Cesium.UrlTemplateImageryProvider({
           url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 19,
-          credit: 'Tiles © Esri',
+          credit: onScreenCredit('Tiles © Esri'),
         });
       }
     }
