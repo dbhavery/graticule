@@ -1586,3 +1586,53 @@ script looked broken when nothing was.
 that the control page still loads (3,593 border lines against an expected
 11,378). It looks like the border worker not having finished. Unrelated to
 this change and not investigated.
+
+## 66. No attribution is displayed for anything, and some of it is a licence condition
+Found 2026-08-14 while checking whether the app could be charged for.
+
+`web/app.js:1133`, in the Viewer options:
+
+    creditContainer: document.createElement('div'),
+
+That div is created inline and **never appended to the document**. Cesium
+writes every credit into it, so nothing is ever shown. The app carries fourteen
+`credit:` strings that all go nowhere:
+
+    Radar (c) RainViewer            Tiles (c) OpenStreetMap contributors
+    Clouds (c) RainViewer           Tiles (c) OpenTopoMap (CC-BY-SA)
+    NEXRAD (c) Iowa State Mesonet   Tiles (c) Esri  (x2)
+    GOES (c) Iowa State Mesonet     NASA GIBS - MODIS True Color
+    Aurora (c) NOAA SWPC            NASA Earthdata - VIIRS City Lights (x2)
+    Parcels (c) Regrid              Natural Earth II
+
+For several of those, attribution is a **licence condition and not a
+courtesy**: OpenStreetMap is ODbL, OpenTopoMap is CC-BY-SA, and Esri's terms
+require the credit. Suppressing them is the same shape of defect as issue 57,
+where an OpenAIP non-commercial licence was known in a `.gitignore` comment and
+routed around anyway.
+
+**And one source has no credit string at all.** adsb.fi's terms require citing
+adsb.fi with a link to their home page. Aircraft arrive over the websocket as
+entities rather than as an imagery layer, so there is no Cesium credit to
+suppress; there is simply nothing. Same for the Digitraffic AIS feed, USGS,
+NWS, FIRMS, Celestrak, the Smithsonian GVP and the rest of the backend feeds.
+
+**This blocks the store submission** on its own, independent of pricing. Fix is
+small and conventional: give Cesium a real container in the corner it already
+expects, and add a data-sources list covering the feeds that never had a credit
+object. Cesium's own credit display is compact, which suits the UI default.
+
+Not fixed in this commit because it puts new chrome on Don's screen and that is
+his call on placement.
+
+### The pricing question this came out of
+Two headline sources are non-commercial only, verified 2026-08-14:
+
+* **RainViewer**, the radar layer: "The API is free for personal or educational
+  use only." No commercial tier is documented; it needs contacting them.
+* **adsb.fi**, the aircraft layer: personal and non-commercial use only, with
+  commercial use requiring a separate arrangement.
+
+So charging for the app, or running ads in it, breaches both as they stand. The
+US government feeds (NWS, USGS, NOAA, NASA, FAA) are public domain and would be
+fine. Radar and aircraft are the two layers in the store screenshots.
