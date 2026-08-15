@@ -1622,8 +1622,26 @@ small and conventional: give Cesium a real container in the corner it already
 expects, and add a data-sources list covering the feeds that never had a credit
 object. Cesium's own credit display is compact, which suits the UI default.
 
-Not fixed in this commit because it puts new chrome on Don's screen and that is
-his call on placement.
+**FIXED 2026-08-14 (`4808b51`).** Don said go. Three things were suppressing
+it, not one: the detached container, and `.cesium-viewer-bottom` and
+`.cesium-credit-lightbox-overlay` both set to `display: none` since the initial
+commit under a comment reading "Hide Cesium chrome we don't want".
+
+The base map's credit is now on screen and follows the picker, verified in a
+browser: Esri reads `Tiles (c) Esri`, switching to OSM reads
+`Tiles (c) OpenStreetMap contributors`. Everything else sits behind Cesium's
+"Data attribution" expander, which is where fourteen credits belong on a phone.
+Twelve websocket feeds got credits they never had, adsb.fi with the link its
+terms require.
+
+Two defects that only showed up by driving it: the strip computed to **0px
+wide**, because shrink-to-fit on an absolutely positioned box gave it no width,
+and the **HUD rail covered it** so the expander could not be clicked. Reading
+the CSS would not have found either. Anchored by both edges now, above the
+rail, following the locate button's placement convention.
+
+Six static checks guard it, each proven to fail against a copy of the original
+defect held in memory.
 
 ### The pricing question this came out of
 Two headline sources are non-commercial only, verified 2026-08-14:
