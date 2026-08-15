@@ -403,13 +403,77 @@ const BORDER_CLAMP = new URLSearchParams(location.search).get('clamp') !== 'off'
  * The cache holds the typed arrays, not the raw GeoJSON, so a terrain
  * transition re-drapes from memory without re-parsing anything.
  */
-const borderCache = { countries: null, states: null };
-// How the entities currently on screen were actually built, which is not the
-// same question as what is currently wanted.
+/* ---- Two levels of border, because accuracy and boot cost pull apart ------
+ *
+ * The full data is 428,427 positions and every one of them becomes four fat
+ * vertices, which measured 221 MB of GPU upload at boot (issues.md 67, 68).
+ * It cannot be thinned: Douglas-Peucker at 10 m removes 2% of it, because
+ * Natural Earth and the Census have already done that work. The vertices are
+ * there because the borders are genuinely that shape.
+ *
+ * So there are two files per layer. The overview is simplified with a BOUND of
+ * 500 m and is 37% of the size; the detail is the real thing and is fetched
+ * only when the camera is low enough for the difference to be visible. Boot
+ * pays for the overview alone.
+ *
+ * 500 m is chosen from pixels rather than taste. Cesium's 60 degree field of
+ * view puts roughly 1.155*h metres across a canvas of W pixels, so the
+ * overview is sub-pixel while h >= 500*W/1.155, and borderDetailAltM() is
+ * exactly that expression. A wider window swaps to detail from higher up.
+ */
+const borderCache = {
+  countries: { overview: null, detail: null },
+  states: { overview: null, detail: null },
+};
+const BORDER_FILES = {
+  countries: { overview: '/static/data/ne_country_borders.overview.geojson',
+               detail: '/static/data/ne_country_borders.geojson' },
+  states: { overview: '/static/data/ne_state_borders.overview.geojson',
+            detail: '/static/data/ne_state_borders.geojson' },
+};
+const BORDER_OVERVIEW_TOL_M = 500;
+
+// How the lines currently on screen were actually built, which is not the same
+// question as what is currently wanted.
 let bordersDrapedNow = false;
+let bordersDetailedNow = false;
 
 function borderDrapeWanted() {
   return BORDER_CLAMP && terrainIsReal;
+}
+
+function borderDetailAltM() {
+  const w = (viewer && viewer.canvas && viewer.canvas.width) || 411;
+  return BORDER_OVERVIEW_TOL_M * w / 1.155;
+}
+
+function borderDetailWanted() {
+  if (!viewer) return false;
+  const h = viewer.camera.positionCartographic.height;
+  // Hysteresis, so drifting across the line does not thrash the rebuild. Once
+  // the detail is up it stays up until well above where it came in.
+  const alt = borderDetailAltM();
+  return bordersDetailedNow ? h <= alt * 1.5 : h <= alt;
+}
+
+/* Fetch the detail file once, the first time the camera goes low enough.
+ * Deliberately NOT at boot: most sessions never leave orbit, and this is the
+ * 221 MB the whole split exists to avoid paying for. */
+const _borderDetailFetch = {};
+function ensureBorderDetail(key) {
+  if (borderCache[key].detail) return Promise.resolve(borderCache[key].detail);
+  if (_borderDetailFetch[key]) return _borderDetailFetch[key];
+  const p = fetchBorderLines(BORDER_FILES[key].detail)
+    .then((d) => { borderCache[key].detail = d; return d; })
+    .catch((e) => {
+      // Leave the overview up and let the next transition try again. A border
+      // that vanishes is worse than one that is 500 m smooth.
+      console.warn(`Detailed ${key} borders unavailable, staying on the overview:`, e);
+      delete _borderDetailFetch[key];
+      return null;
+    });
+  _borderDetailFetch[key] = p;
+  return p;
 }
 
 function loadBorderLines(url) {
@@ -563,6 +627,7 @@ const BORDER_PRIM_LINES = BORDER_PRIM_SPLIT ? 1000 : Infinity;
 
 const borderPrims = { countries: [], states: [] };
 const borderLineCounts = { countries: 0, states: 0 };
+const borderVertexCounts = { countries: 0, states: 0 };
 const _borderPrimGen = { countries: 0, states: 0 };
 // Layer visibility for the lines, mirrored by the toggles. Starts true
 // because both switches ship checked.
@@ -573,9 +638,14 @@ function borderAlpha(key) {
 }
 
 async function buildBorderPrimitive(key) {
-  const cache = borderCache[key];
+  const slot = borderCache[key];
   const style = BORDER_LINE_STYLE[key];
-  if (!viewer || !cache || !style) return 0;
+  if (!viewer || !slot || !style) return 0;
+  // Detail if it is both wanted and here. Wanting it is not having it: the
+  // fetch is kicked off by syncBorderLod and this must draw something in the
+  // meantime.
+  const cache = (bordersDetailedNow && slot.detail) ? slot.detail : slot.overview;
+  if (!cache) return 0;
   const gen = ++_borderPrimGen[key];
   const clamp = borderDrapeWanted();
   const { buf, offsets } = cache;
@@ -664,9 +734,15 @@ async function buildBorderPrimitive(key) {
   }, 120);
 
   borderLineCounts[key] = lineCount;
+  borderVertexCounts[key] = buf.length / 3;
   window.__graticule_borders = {
     draped: clamp,
     lines: borderLineCounts.countries + borderLineCounts.states,
+    // Line COUNT stopped being a measure of how much border data loaded when
+    // the build started joining contiguous segments: the same geometry went
+    // from 11,378 lines to 4,236 without losing a vertex. Anything checking
+    // that the borders are really there should read this instead.
+    positions: borderVertexCounts.countries + borderVertexCounts.states,
   };
   syncBorderCount(key);
   return lineCount;
@@ -793,37 +869,52 @@ async function syncLabelTiers() {
 
 let _redrapeTimer = null;
 
-function syncBorderDrape() {
-  if (!BORDER_CLAMP) return;
-  const want = borderDrapeWanted();
-  if (want === bordersDrapedNow) return;
+/* One rebuild, two decisions: how the lines are drawn (flat or draped over
+ * terrain) and which of them is drawn (overview or full detail). They are
+ * handled together because both change as the camera comes down, and two
+ * independent rebuild paths would race each other over the same primitives.
+ *
+ * Unlike the old drape-only version this runs even when `?clamp=off`, because
+ * the level of detail is not a draping question. */
+function syncBorderLod() {
+  if (!viewer) return;
+  if (borderDrapeWanted() === bordersDrapedNow
+      && borderDetailWanted() === bordersDetailedNow) return;
 
   // Debounced, and for the same reason the terrain gate is: crossing the
   // altitude threshold while flying produces a burst of transitions, and
-  // rebuilding 12,846 polylines on each one would stall the frame that the
-  // rebuild exists to improve. The rebuild itself is cheap on this thread --
-  // the geometry combines in Cesium's workers -- and the old primitive stays
-  // up until the new one is ready to draw.
+  // rebuilding every line on each one would stall the frame that the rebuild
+  // exists to improve. The rebuild itself is cheap on this thread -- the
+  // geometry combines in Cesium's workers -- and the old primitive stays up
+  // until the new one is ready to draw.
   clearTimeout(_redrapeTimer);
   _redrapeTimer = setTimeout(async () => {
-    if (borderDrapeWanted() === bordersDrapedNow) return;
-    bordersDrapedNow = borderDrapeWanted();
-    // The failure path is loud AND resets the optimistic flag, or a single
+    const drape = borderDrapeWanted();
+    const detail = borderDetailWanted();
+    if (drape === bordersDrapedNow && detail === bordersDetailedNow) return;
+    const wasDraped = bordersDrapedNow, wasDetailed = bordersDetailedNow;
+    bordersDrapedNow = drape;
+    bordersDetailedNow = detail;
+    // The failure path is loud AND resets the optimistic flags, or a single
     // rejection here would freeze the borders in the wrong mode forever with
     // nothing in the console -- the exact shape of the swallowed
     // ReferenceError that hid the polar fix for a whole session.
     try {
+      if (detail) {
+        await Promise.all(['countries', 'states'].map(ensureBorderDetail));
+      }
       let total = 0;
       for (const key of ['countries', 'states']) {
         total += await buildBorderPrimitive(key);
       }
       if (total) {
-        console.log(`Borders re-drawn ${bordersDrapedNow ? 'draped over terrain' : 'flat'}`
-                    + ` (${total} lines)`);
+        console.log(`Borders re-drawn ${detail ? 'at full detail' : 'from the overview'}`
+                    + `, ${drape ? 'draped over terrain' : 'flat'} (${total} lines)`);
       }
     } catch (e) {
-      console.error('Border re-drape failed; will retry on the next transition:', e);
-      bordersDrapedNow = !bordersDrapedNow;
+      console.error('Border rebuild failed; will retry on the next transition:', e);
+      bordersDrapedNow = wasDraped;
+      bordersDetailedNow = wasDetailed;
     }
   }, 300);
 }
@@ -1140,6 +1231,22 @@ async function initViewer() {
     baseLayer: false,
 
     geocoder: false, homeButton: false, sceneModePicker: false,
+
+    /* This globe is a globe. There is no scene-mode picker, nothing morphs,
+     * and no code path reads scene.mode.
+     *
+     * Left at Cesium's default of false, every Primitive ALSO computes and
+     * uploads a second copy of its geometry projected for 2D: position2D,
+     * prevPosition2D and nextPosition2D, each as a high/low pair. For the
+     * border lines that is six extra vec3 attributes per vertex on top of the
+     * eight the 3D form needs. issues.md 68.
+     *
+     * `?scene3donly=off` restores Cesium's default so the A/B is one flag on
+     * one build, rather than a number from this session against a number from
+     * another one. scripts/border_upload_test.py runs both.
+     */
+    scene3DOnly: new URLSearchParams(location.search).get('scene3donly') !== 'off',
+
     timeline: false, animation: false, fullscreenButton: false,
     navigationHelpButton: false, selectionIndicator: false, infoBox: false,
     // A real element in the document. This was `document.createElement('div')`
@@ -3317,7 +3424,7 @@ async function applyTerrain(on) {
   if (!on) {
     viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
     terrainIsReal = false;
-    syncBorderDrape();
+    syncBorderLod();
     return;
   }
   try {
@@ -3325,7 +3432,7 @@ async function applyTerrain(on) {
     if (gen !== _terrainGen) return;          // superseded while loading
     viewer.terrainProvider = provider;
     terrainIsReal = true;
-    syncBorderDrape();
+    syncBorderLod();
   } catch (e) {
     if (gen !== _terrainGen) return;
     // A dead terrain service must not cost the user their map. The ellipsoid is
@@ -3333,7 +3440,7 @@ async function applyTerrain(on) {
     console.warn('Terrain unavailable, staying on the ellipsoid:', e);
     viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
     terrainIsReal = false;
-    syncBorderDrape();
+    syncBorderLod();
   }
 }
 
@@ -3720,9 +3827,9 @@ async function buildCountries() {
     // The lines are parsed and converted in a worker (see the long note at
     // borderCache) and added in chunks; only the small labels file is parsed
     // here. Kicking the worker off first lets the label fetch ride alongside.
-    const linesPromise = fetchBorderLines('/static/data/ne_country_borders.geojson');
+    const linesPromise = fetchBorderLines(BORDER_FILES.countries.overview);
     const labels = await (await fetch('/static/data/ne_country_labels.geojson')).json();
-    borderCache.countries = await linesPromise;
+    borderCache.countries.overview = await linesPromise;
 
     const built = await buildBorderPrimitive('countries');
 
@@ -3793,9 +3900,9 @@ async function buildStates() {
   try {
     // Same worker + chunked path as the countries; the state file is the big
     // one (6.7 MB, 320k vertices) and is the reason this path exists at all.
-    const linesPromise = fetchBorderLines('/static/data/ne_state_borders.geojson');
+    const linesPromise = fetchBorderLines(BORDER_FILES.states.overview);
     const labels = await (await fetch('/static/data/ne_state_labels.geojson')).json();
-    borderCache.states = await linesPromise;
+    borderCache.states.overview = await linesPromise;
 
     const built = await buildBorderPrimitive('states');
 
@@ -5111,6 +5218,9 @@ function initRealisticEarth() {
   scene.camera.moveEnd.addEventListener(syncLensFlare);
   // Terrain coverage is also a property of where the camera is looking.
   scene.camera.moveEnd.addEventListener(syncTerrainForView);
+  // Detail follows altitude whether or not terrain is switched on, so
+  // this cannot ride on the terrain gate the way draping used to.
+  scene.camera.moveEnd.addEventListener(syncBorderLod);
   // Labels materialise as the camera descends into their display range.
   scene.camera.moveEnd.addEventListener(syncLabelTiers);
 

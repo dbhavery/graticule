@@ -94,6 +94,7 @@ PROBE = """() => {
     statusText: (document.getElementById('rail-status') || {}).textContent || '',
     features: feats,
     borderLines: (window.__graticule_borders || {}).lines || 0,
+    borderPositions: (window.__graticule_borders || {}).positions || 0,
     imagery: v.imageryLayers.length,
     // Starts at a hard-coded 0 in the markup and is only ever written by the
     // /api/nws/alerts handler, so a number here is proof the backend answered.
@@ -179,9 +180,13 @@ async def main() -> None:
             chk(st2["alerts"] == 0,
                 f"and the alert count stayed at its markup 0 ({st2['alerts']}), "
                 f"which is what makes the count above evidence")
-            chk(st2["borderLines"] >= 5000,
-                f"while /static still loaded normally ({st2['borderLines']} border lines) -- "
-                f"so the failure above is the BACKEND, not a dead page")
+            # POSITIONS, not lines. The build joins contiguous segments now,
+            # so the same geometry reports 4,236 lines where it used to report
+            # 11,378, and a threshold on line count would fail on a build that
+            # lost nothing. Vertices are the thing that actually arrived.
+            chk(st2["borderPositions"] >= 300000,
+                f"while /static still loaded normally ({st2['borderPositions']:,} border "
+                f"positions) -- so the failure above is the BACKEND, not a dead page")
             await pg2.close()
 
             await br.close()

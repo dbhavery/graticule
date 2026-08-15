@@ -30,6 +30,10 @@ us_hot.geojson
 # Converted to GeoJSON via scripts/build_boundaries.py → web/data/ne_*.geojson.
 # We commit the derived GeoJSONs (~11 MB total) but keep the zips out.
 ne_*.zip
+# US Census cartographic boundaries, fetched by build_boundaries.py for the
+# authoritative US state lines. Same rule as the Natural Earth zips: a source
+# download, not a source file.
+cb_*_us_*.zip
 
 # web/data/airspace.json IS COMMITTED as of 2026-08-09.
 #
