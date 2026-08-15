@@ -184,7 +184,11 @@ async def main() -> None:
             # so the same geometry reports 4,236 lines where it used to report
             # 11,378, and a threshold on line count would fail on a build that
             # lost nothing. Vertices are the thing that actually arrived.
-            chk(st2["borderPositions"] >= 300000,
+            #
+            # 100,000 and not 300,000: this page never leaves orbit, so it holds
+            # the 157,607-position OVERVIEW, not the 428,427-position detail.
+            # A threshold above the overview would fail on a working app.
+            chk(st2["borderPositions"] >= 100000,
                 f"while /static still loaded normally ({st2['borderPositions']:,} border "
                 f"positions) -- so the failure above is the BACKEND, not a dead page")
             await pg2.close()
