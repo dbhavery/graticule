@@ -1524,3 +1524,65 @@ The log stops while writing crashpad annotations, and the line above it names
 the crash database: `%TEMP%\AndroidEmulator\emu-crash-36.3.10.db`, which had
 grown to **43 MB**. Moved it aside (not deleted) and the emulator booted in
 70 s. Worth trying first next time the emulator hangs on startup.
+
+## 65. Deferred snapshot, verified on the device (2026-08-14)
+The fix from issue 63 is in. A layer over `SNAPSHOT_INLINE_MAX` rows is named
+and counted in the boot snapshot but its rows are not sent; the client fetches
+them from `/api/layer/<name>` when the layer is switched on.
+
+**Size, measured three times on the emulator and identical every time:**
+
+    boot websocket frame   34,989 KB  ->  3,352 KB     90% smaller
+    /api/snapshot (unbounded, unchanged)      37.06 MB
+    the bounded form                           3.35 MB
+
+**Main thread, same window and same device as issue 64:**
+
+    ws.onmessage self time      1,109 ms  ->  150 ms
+    pushDeltasToTicker            553 ms  ->  gone from the table
+
+That is about 1.5 s of main-thread work removed, and it is the direct measure
+of the thing that changed, which makes it the trustworthy number here.
+
+**What did NOT improve, said plainly.** In that same profile the window's
+total non-idle time went UP, 7,767 ms to 9,747 ms, and garbage collection went
+up with it, 1,585 ms to 2,737 ms. One run cannot settle that: the Cesium and
+GL side dominates the window and varies enormously between boots. The worst
+single frame reads 1,211 / 1,524 / 3,994 ms across three boots now against
+2,054 / 5,928 / 9,290 ms before, which points the right way but sits inside
+the spread this host has always had (issue 62, and
+`one-device-boot-is-a-sample-not-a-measurement`).
+
+So: the transfer is 90% smaller and the handler is 7.4x cheaper, both
+measured. **Boot is not claimed to be faster.** The 2-9 s frame from issue 64
+is still there and still unnamed.
+
+Correctness is held by two new suites, each with a control that can fail:
+
+* `snapshot_budget_test.py` (16 checks): the frame is under 4 MB, every
+  deferred layer is still counted, its rows are reachable and the count
+  matches, an unknown layer 404s, and **/api/snapshot is far larger**, so an
+  empty server cannot pass.
+* `deferred_layer_test.py` (5 checks): the switch shows 5,272 airports before
+  anything is clicked, **nothing is drawn yet**, and switching it on draws
+  exactly 5,272.
+
+Full run after the change: static_checks 19, legal_pages 34, keyless 25,
+world_consistency 17, native_origin 11, ui_scroll 27, globe_visual 29,
+snapshot_budget 16, deferred_layer 5. **183 checks, 0 failed.**
+
+`keyless_test.py` needed a real change, not an adjustment: it counted
+`layerData` cold, which after this reads whatever handful of rows arrived as
+live deltas. Fires read 0 and planes still passed for the wrong reason. It now
+loads the deferred layers first, which is what the app does.
+
+### Two smaller things found on the way
+`page_target()` in `apk_probe.py` failed on the first packet after a fresh
+launch: the socket is listed in `/proc/net/unix`, the forward is in place, and
+`/json` still closes without a response. It retries now. Every measurement
+script looked broken when nothing was.
+
+`native_origin_test.py` failed once and passed on a re-run, on the assertion
+that the control page still loads (3,593 border lines against an expected
+11,378). It looks like the border worker not having finished. Unrelated to
+this change and not investigated.

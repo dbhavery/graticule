@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 
 APP_ID = "dev.dbhavery.graticule"
@@ -53,9 +54,28 @@ def attach() -> None:
     adb("forward", f"tcp:{PORT}", f"localabstract:webview_devtools_remote_{pid}")
 
 
-def page_target() -> str:
-    with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json", timeout=10) as r:
-        targets = json.load(r)
+def page_target(tries: int = 8, wait: float = 1.5) -> str:
+    """The websocket URL of the app's document target.
+
+    Retries, because the WebView's devtools server is not accepting the moment
+    the process exists. Straight after a force-stop and relaunch the socket is
+    listed in /proc/net/unix and the forward is in place, and /json still
+    closes the connection without a response. Failing on the first packet made
+    every measurement script look broken when nothing was.
+    """
+    targets = None
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json",
+                                        timeout=10) as r:
+                targets = json.load(r)
+            break
+        except Exception as e:                      # noqa: BLE001 - any transport
+            if attempt == tries - 1:                # failure here is the same
+                raise SystemExit(                   # thing: not ready yet
+                    f"the WebView debugger never answered on :{PORT} after "
+                    f"{tries} tries ({e}). Is the app running?")
+            time.sleep(wait)
     for t in targets:
         # The service worker and Cesium's blob workers are also 'page'-ish
         # targets here. The document is the one whose URL is the app root.
