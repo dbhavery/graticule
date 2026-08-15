@@ -155,12 +155,20 @@ except where noted.</p>
 
 <h2>4. Listing fields already done</h2>
 <ul>
-  <li><strong>Privacy policy URL</strong> <code>/privacy</code>, live, and its claims
-      are asserted by <code>scripts/legal_pages_test.py</code></li>
-  <li><strong>Support URL</strong> <code>/support</code>, live</li>
+  <li><strong>Privacy policy URL</strong>
+      <code>https://graticule.vercel.app/privacy</code>, live and public, and its
+      claims are asserted by <code>scripts/legal_pages_test.py</code></li>
+  <li><strong>Support URL</strong>
+      <code>https://graticule.vercel.app/support</code>, live and public</li>
   <li><strong>Contact email</strong> dbhavery@gmail.com</li>
-  <li>Both need the real hosting origin in front of them before they go in the console</li>
 </ul>
+<p>These two are on free static hosting rather than on the app's backend, on
+purpose. Play requires both URLs to resolve for as long as the listing exists,
+and serving them from the backend would tie a compliance requirement to a
+running process: if the backend is down or moves host, the listing's URLs 404,
+which is a listing problem and not just an outage. The files are copied from
+<code>web/</code> by <code>scripts/build_site.py</code>, so there is one source
+of truth and the tested copy is the shipped copy.</p>
 
 <h2>5. Store description</h2>
 <p>Both fit inside Play's limits and neither contains an em dash. Every claim
@@ -248,9 +256,42 @@ globe, which is empty arctic and ocean in all four, so the header and the
 panels at the bottom are untouched. Upload the 9x16 set; keep the originals in
 case Play takes the taller ratio.</p>
 
-<h2>7. Still to produce</h2>
+<h2>7. Hosting</h2>
+<p><strong>Decided and half done.</strong> The two listing URLs are live now.
+The backend is written and configured but not deployed, because deploying it
+needs an account and a card.</p>
+<table>
+<tr><th>Piece</th><th>Where</th><th>Cost</th><th>State</th></tr>
+<tr><td>Privacy and support pages</td>
+    <td><code>https://graticule.vercel.app</code></td>
+    <td>Free</td>
+    <td><span class="yes">Live</span>, verified public with no login wall</td></tr>
+<tr><td>The app's backend</td>
+    <td>Fly.io, one machine, <code>graticule.fly.dev</code></td>
+    <td>$6.64/mo plus $0.02/GB out</td>
+    <td>Configured, never deployed</td></tr>
+</table>
+<p><strong>Why Fly and not something cheaper or free.</strong> The backend
+cannot be serverless: its feed loops are long-lived asyncio tasks and the state
+they build is in memory, so a platform that scales to zero stops the feeds, and
+one that scales out multiplies the polling against donated ADS-B
+infrastructure. That leaves a small always-on machine. Fly gives one machine
+with automatic TLS and first-class websockets for about $6.64/mo; a Hetzner VM
+is roughly $2 cheaper and adds operating system patching, TLS renewal and
+firewall upkeep, which is a bad trade on an app with no users yet.</p>
+<p>The machine is 1 GB because the process was measured at <strong>356 MB
+resident</strong> with every feed loaded, and serialising the unbounded
+snapshot briefly costs several hundred more. 512 MB would be tight.</p>
+<p><strong>Egress is worth one line.</strong> At the old 35 MB boot snapshot,
+a thousand app launches a day would have been about a terabyte a month, which
+is roughly $20 of bandwidth. After the deferred-snapshot change it is about
+3.4 MB a launch, so the same traffic is nearer $2. The fix pays for the machine
+several times over.</p>
+
+<h2>8. Still to produce</h2>
 <ul>
-  <li>The hosting origin, which every URL above depends on</li>
+  <li>Nothing that can be produced without an account. See
+      <a href="deploying.html">deploying.html</a> for the four commands.</li>
 </ul>
 
 <footer>

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploying Graticule</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0 auto; max-width: 52rem; padding: 40px 24px 80px;
+         background: #0b0e13; color: #e9f0f7;
+         font: 16px/1.65 "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 38px 0 10px; color: #5cd6ff; }
+  .rule { width: 64px; height: 3px; background: #5cd6ff; margin: 0 0 26px; }
+  p, li { color: #c2ccd8; }
+  code, pre { font-family: Consolas, "Courier New", monospace; }
+  code { background: #131923; padding: 1px 5px; border-radius: 3px;
+         color: #e9f0f7; font-size: .92em; }
+  pre { background: #0f141d; border: 1px solid #1e2735; border-radius: 6px;
+        padding: 14px 16px; overflow-x: auto; color: #d7e2ee; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0 6px; }
+  th, td { border: 1px solid #1e2735; padding: 8px 10px; text-align: left;
+           vertical-align: top; font-size: .95rem; }
+  th { background: #131923; color: #a8b3c2; font-weight: 600; }
+  .you { color: #ffcf70; font-weight: 600; }
+  .done { color: #7ee787; font-weight: 600; }
+  .warn { border-left: 3px solid #ffcf70; padding-left: 14px; margin: 18px 0; }
+  a { color: #5cd6ff; }
+</style>
+</head>
+<body>
+
+<h1>Deploying Graticule</h1>
+<div class="rule"></div>
+<p>Two pieces, deployed separately on purpose. Written 14 August 2026.</p>
+
+<h2>1. The public pages. Already live.</h2>
+<p><span class="done">Done.</span> The privacy policy and support page are on
+Vercel at <code>https://graticule.vercel.app</code>, free, and verified public
+with no login wall. Those are the two URLs the Play listing names.</p>
+<p>They are kept off the backend deliberately: Play needs them to resolve for
+as long as the listing exists, and a page that depends on a running server is a
+compliance problem the first time the server is down.</p>
+<pre>py -V:3.13 scripts/build_site.py
+cd site-dist
+vercel deploy --prod --yes</pre>
+<p><code>build_site.py</code> copies <code>web/privacy.html</code> and
+<code>web/support.html</code> rather than keeping a second copy, so the pages
+that ship are the pages <code>legal_pages_test.py</code> checks. Re-run both
+commands after any edit to either page.</p>
+<p>To take it down: <code>vercel remove graticule --yes</code>.</p>
+
+<h2>2. The backend. Needs your account.</h2>
+<p><span class="you">This part is yours</span>, because it needs a Fly.io
+account and a payment method, and neither of those is mine to create. Everything
+else is written and committed: <code>Dockerfile</code> and
+<code>fly.toml</code> are in the repository root.</p>
+
+<div class="warn">
+<p><strong>The container has never been built.</strong> Docker is not installed
+on this machine, so the Dockerfile is careful but unproven. Fly builds remotely,
+so the first <code>fly deploy</code> is where it gets exercised. Expect to fix
+something on the first run; send me the output.</p>
+</div>
+
+<p>Four commands, after installing <code>flyctl</code> and signing in:</p>
+<pre>fly auth login
+fly apps create graticule
+fly deploy
+fly logs</pre>
+
+<p>Then point the release build at it and rebuild:</p>
+<pre>py -V:3.13 scripts/android_build.py --api-base https://graticule.fly.dev --release --aab</pre>
+
+<h2>What it costs</h2>
+<table>
+<tr><th>Item</th><th>Cost</th><th>Note</th></tr>
+<tr><td>One shared-cpu-1x machine, 1 GB, always on</td>
+    <td>$6.64/mo</td>
+    <td>Fly's published rate, checked 14 August 2026. Varies by region.</td></tr>
+<tr><td>Outbound bandwidth</td>
+    <td>$0.02/GB</td>
+    <td>About 3.4 MB per app launch after the deferred-snapshot change.
+        A thousand launches a day is roughly $2/mo.</td></tr>
+<tr><td>Vercel static pages</td>
+    <td>Free</td>
+    <td>Two small HTML files.</td></tr>
+</table>
+<p>Call it <strong>$7 to $10 a month</strong> at low usage. Nothing has been
+signed and no card has been entered.</p>
+
+<h2>Why this shape</h2>
+<p>The backend cannot be serverless, and that is structural rather than a
+preference. Its feed loops are long-lived asyncio tasks polling about twenty
+upstreams on their own schedules, and the state they build lives in memory.
+A platform that scales to zero stops the feeds. A platform that scales out
+multiplies the polling against donated ADS-B aggregators, which is rude and
+eventually gets the app blocked. So: one machine, always up, never more
+than one. <code>fly.toml</code> sets
+<code>auto_stop_machines&nbsp;=&nbsp;false</code> and
+<code>min_machines_running&nbsp;=&nbsp;1</code> for exactly that reason, and the
+comments there say so, so nobody turns autoscaling on later thinking it is free
+performance.</p>
+<p>1 GB because the process was measured at <strong>356 MB resident</strong>
+with every feed loaded. That is a measurement, not a guess, and 512 MB would
+have been tight.</p>
+<p>Fly over a cheaper VM because a Hetzner box saves about $2 a month and costs
+operating system patching, TLS renewal and firewall upkeep. That is a bad trade
+before the app has users.</p>
+
+<h2>If you would rather not pay anything yet</h2>
+<p>The alternative is a Cloudflare Tunnel from your own machine, which is free
+and gives a public HTTPS hostname with no inbound ports. It is a real option and
+I did not choose it, because a store-listed app whose backend reboots when you
+reboot is a review problem, and because the box is already shared with GPU work.
+Say the word and I will set it up instead; the app code does not change either
+way.</p>
+
+<h2>What is verified and what is not</h2>
+<table>
+<tr><th>Claim</th><th>How</th></tr>
+<tr><td>The two listing URLs are live and public</td>
+    <td><span class="done">Verified.</span> Fetched anonymously, HTTP 200,
+        byte sizes match the local files, no redirect to a login.</td></tr>
+<tr><td>356 MB resident with feeds loaded</td>
+    <td><span class="done">Measured</span> on this machine.</td></tr>
+<tr><td>$6.64/mo</td>
+    <td><span class="done">Read</span> off Fly's pricing page on 14 August 2026.</td></tr>
+<tr><td>The container builds and runs</td>
+    <td><span class="you">Not verified.</span> No Docker here.</td></tr>
+<tr><td>The app works against a remote origin</td>
+    <td>Partly. <code>native_origin_test.py</code> proves the app works when
+        served from one origin with its backend on another, but against a local
+        backend, not a hosted one.</td></tr>
+</table>
+
+</body>
+</html>

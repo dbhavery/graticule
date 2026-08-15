@@ -1,0 +1,49 @@
+# One machine, always on. See the Dockerfile for why that is structural.
+app = "graticule"
+primary_region = "sea"          # Seattle: nearest to the author, and the NWS,
+                                # USGS and NOAA feeds it pulls are US-hosted
+
+[build]
+
+[env]
+  GRATICULE_HOST = "0.0.0.0"
+  GRATICULE_PORT = "8080"
+  # The Capacitor shell's own origins are already allowed in server.py. This
+  # adds the public site, which is the only other place the app is served from.
+  GRATICULE_ALLOWED_ORIGINS = "https://graticule.vercel.app"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # BOTH must stay false. Stopping the machine stops the feed loops, and the
+  # state they build is in memory, so a cold start serves an empty globe for
+  # the minute or two it takes the feeds to come back.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+  # One, and never more. The feed loops are per-process singletons: two
+  # machines means two pollers against donated ADS-B aggregators.
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    # Each client holds a websocket open for as long as the app is in front of
+    # them, so connections and not requests is the meaningful limit.
+    hard_limit = 250
+    soft_limit = 200
+
+[[http_service.checks]]
+  grace_period = "60s"          # the feeds take about a minute to fill
+  interval = "30s"
+  method = "GET"
+  timeout = "10s"
+  path = "/api/config"          # cheap, no upstream calls, and 200 only if
+                                # the app object is actually serving
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Measured, not guessed: the process sits at 356 MB resident with every feed
+  # loaded (145,150 fires, 5,272 airports, ~3,000 aircraft), and serialising
+  # the unbounded /api/snapshot briefly costs several hundred more. 512 MB
+  # would be tight. 1 GB is the size this was measured into.
+  memory = "1gb"

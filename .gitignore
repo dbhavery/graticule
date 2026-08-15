@@ -79,3 +79,4 @@ scripts/_phone_out/
 # Passwords live in the KeePassXC vault, never here.
 android/*.jks
 android/keystore.properties
+site-dist/
