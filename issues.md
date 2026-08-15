@@ -1784,3 +1784,142 @@ and read it as a profiler problem; it is not, it happens without the profiler.
 So the instrument now drains its record every 5 s instead of dumping once at
 the end, and a run that is cut short says INCOMPLETE RUN rather than printing a
 tidy short table.
+
+## 68. The borders were wrong, and fixing them made boot cheaper (2026-08-15)
+Don: "figure out the border issues and fix them. replace them if you have to.
+Use actual, accurate borders."
+
+### What was wrong
+
+State borders were built from `ne_10m_admin_1_states_provinces` POLYGONS,
+outlined, then capped at 250 points per ring by keeping every k-th point.
+Measured against the ring each cap replaced:
+
+    displacement, over the 835 rings the cap touched
+        median 5,131 m     p90 17,503 m     worst 162,702 m (Nunavut)
+    worst offenders: Nunavut 163 km, Inner Mongolia 151 km, Queensland 82 km,
+                     New South Wales 79 km, Alaska 74 km
+
+Douglas-Peucker was removed from this project on purpose, in
+`slim_boundaries.py`, because Don saw its **223 m** error putting borders in
+the wrong place at city zoom. The cap that remained was 23x worse in the median
+and 700x worse at the tail, under a comment claiming it "keeps coastline
+fidelity at city zoom". **A point-count cap cannot make that claim.** DP bounds
+the deviation; keeping every k-th point bounds nothing, because it discards the
+points that carry the shape as readily as the redundant ones.
+
+Outlining polygons was the other half of it:
+
+* every shared border was drawn TWICE, once from each side;
+* every COASTLINE was drawn as if it were a state border, which is why the
+  worst offenders above are all coastal;
+* `scalerank > 5` dropped **3,128 of 4,596** admin-1 areas from the map.
+
+### Natural Earth is not accurate enough for the US, and no build fixes that
+
+Scored against the US Census Bureau's own rendition (TIGER/Line 1:500,000,
+public domain), vertex to nearest authoritative boundary, interior US only:
+
+    what shipped        median 477 m   p90 1,491 m   p99 11,959 m   max 54,499 m
+    NE admin-1 lines    median 470 m   p90 1,175 m   p99  1,991 m   max  9,504 m
+
+The tail is the build. **The 470 m median is Natural Earth itself**, a
+1:10,000,000 product behaving exactly as documented, and it is the same order
+of error Don rejected at 223 m. So for the US the source changed.
+
+TIGER ships state POLYGONS, so the interior lines have to be recovered. It is
+topologically consistent, which makes that exact: an edge between two states
+belongs to both polygons and appears twice, a coastline or national border
+appears once.
+
+    284,144 segments  ->  240,610 unique  ->  43,534 appearing twice
+
+Coastline is deliberately excluded; this app draws none anywhere else.
+
+    US state lines now        median 0 m   p90 0 m   p99 1 m   max 1 m
+
+The 1 m is the 5-decimal rounding. Verified by eye as well as by number: Four
+Corners renders as a true quadripoint, and the Arkansas/Tennessee line through
+Memphis carries the Mississippi's oxbow meanders that the 250-point cap
+flattened.
+
+### Joining fragments first, because the fragmentation was a floor
+
+The shapefiles split a boundary wherever an attribute changes.
+
+    admin-1   39,571 lines -> 4,012        admin-0   7,785 lines -> 224
+
+Every fragment keeps both endpoints no matter what, so 39,571 fragments carry a
+79,142-position floor that no simplifier can go under. Nothing was lost: the
+per-feature properties that forced the split were already dead, parsed by
+border-worker.js into `props` and read by nothing.
+
+### There is no redundancy to reclaim
+
+The obvious idea, "simplify losslessly", does not exist here:
+
+    DP tolerance   10 m      25 m     50 m     100 m
+    admin-1 kept   98.0%     95.6%    89.7%     78.2%
+
+2% at 10 m. Natural Earth and the Census have already done that work. The
+vertices are there because the borders are that shape, so accuracy and boot
+cost genuinely pull apart and something has to give. What gives is WHEN.
+
+### Two levels
+
+Boot loads an overview simplified with a bound of 500 m, 157,607 positions
+against 428,427. The detail is fetched only when the camera is low enough to
+see the difference, and most sessions never go there.
+
+500 m is derived, not chosen by taste: a 60 degree field of view puts about
+1.155*h metres across W pixels, so the overview is sub-pixel while
+h >= 500*W/1.155, and `borderDetailAltM()` is that expression. A wider window
+swaps to detail from higher up. The build asserts the bound it claims and
+**failed doing so the first time**, reporting 1,495 m against a 500 m
+tolerance: both the simplifier and its checker were scaling longitude by the
+cosine of ONE latitude, which is fine for a shapefile fragment and badly wrong
+for a merged chain that runs from the tropics to the Arctic. Redone on the
+sphere.
+
+### scene3DOnly
+
+There is no scene mode picker, nothing morphs, and no code reads `scene.mode`,
+but Cesium's default made every Primitive compute and upload a second copy of
+its geometry projected for 2D.
+
+    scene3DOnly false (the default)   372.5 MB in 164 calls
+    scene3DOnly true                  206.6 MB in  95 calls
+
+### Result
+
+    GPU upload at boot     372.5 MB  ->  120.0 MB      68% less
+    US border accuracy      477 m median  ->  0 m
+    worst global error    162,702 m  ->  bounded at 500 m, and only while
+                                        the camera is too high to see it
+    dead weight in the APK   17.2 MB of .full.geojson, gone
+
+Upload bytes are the ranking metric throughout because they are IDENTICAL on
+every boot of a given build, where this project's timings vary by 1.9x.
+
+### What did NOT improve, said plainly
+
+`border_perf_test.py` fails on this build. It also fails on the build before
+it, which is why it was not in the suite list in issue 65. Three INTERLEAVED
+pairs, desktop SwiftShader:
+
+                    blocking            worst task          callback lag
+    before    9404, 6775, 7172    6364, 5330, 5161    5433, 5009, 4469
+    after     7461, 7729, 8280    4628, 4970, 4262    3783, 4936, 3609
+    median          7172 -> 7729        5330 -> 4628        5009 -> 3783
+
+Worst task is cleanly better, and it is the only one of the three where the
+ranges do not overlap at all: every run after beats every run before. Callback
+lag is better. **Total blocking is unchanged within noise and may be slightly
+worse.** The thresholds themselves (1,000 ms worst task, 2,500 ms total
+blocking) are met by neither build and were not met before this work started.
+That is an inherited failure, not a regression, and it is still open.
+
+All of the above is DESKTOP, under SwiftShader. The emulator was unavailable
+for the whole of this work: another session held the GPU lease. The device
+number that matters, and that issue 67's instrument would produce, has not been
+taken.

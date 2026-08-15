@@ -371,7 +371,7 @@ const SETTINGS_KEY = 'graticule.settings.v1';
  * the shape I assumed twice now.
  *
  * The reason is that a GroundPolylinePrimitive is built whether or not the
- * terrain is real, and at orbit all 13,098 lines are on screen at once. Zoomed
+ * terrain is real, and at orbit every line is on screen at once. Zoomed
  * in, a handful are.
  *
  * And the error follows exactly the same curve inverted: at orbit the camera
@@ -615,8 +615,10 @@ const BORDER_LINE_STYLE = {
  * Splitting the geometry makes more, smaller buffers that still land together.
  * Spreading the uploads would mean delaying primitives.add, not the geometry.
  *
- * The cost itself is 346 MB of vertex and index data per boot for 11,378
- * lines, which no amount of rearranging uploads it in. issues.md 67.
+ * The cost itself was 346 MB of vertex and index data per boot, which no
+ * amount of rearranging uploads it in. That is now 120 MB, by setting
+ * scene3DOnly and by loading a simplified overview at boot and the real
+ * borders only when the camera is low enough to see them. issues.md 67, 68.
  */
 const BORDER_PRIM_SPLIT =
   new URLSearchParams(location.search).get('borderprims') === 'split';
