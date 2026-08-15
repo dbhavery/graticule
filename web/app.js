@@ -808,8 +808,16 @@ const labelPool = { countries: [], states: [] };
 let _labelSyncBusy = false;
 let _labelSyncAgain = false;
 // Labels rasterize inside the visualizer's NEXT update tick, all at once, so
-// the chunk size here IS the size of that main-thread task. A dozen labels is
-// ~10 ms on a real device.
+// the chunk size here IS the size of that main-thread task.
+//
+// This used to say "A dozen labels is ~10 ms on a real device". Measured on
+// the device instead of asserted (scripts/apk_boot_attrib.py, issues.md 69),
+// the FIRST chunk of twelve costs 1,526-2,146 ms and is the single worst task
+// of the whole boot. It is wrong by 150x, and shrinking the chunk would not
+// fix it: every later chunk of twelve costs tens of milliseconds, because what
+// the first one is paying for is Cesium building the LabelCollection's glyph
+// atlas, not the twelve labels. Left at 12 until that is dealt with properly;
+// the number to beat is the atlas, not this constant.
 const LABEL_CHUNK = 12;
 
 function stashLabelDefs(key, defs) {

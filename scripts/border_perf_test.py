@@ -3,73 +3,120 @@
 Issue 51: at phone size the app froze for about eight seconds while it turned
 9 MB of border GeoJSON into something drawable. Issue 50 is probably the same
 bug wearing a different hat -- a main thread that is busy for four seconds is
-a hardware back press that nobody is listening for. Issue 52 is why this file
-exists at all: all five existing suites pass with both defects present,
-because every one of them measures layout, state or pixels and none of them
-measures TIME.
+a hardware back press that nobody is listening for.
 
-Two things are checked here, and they fail for different reasons.
+    py -V:3.13 scripts/border_perf_test.py [port] [--swiftshader] [--control]
 
-1. The stall. A `longtask` PerformanceObserver, injected by this harness
-   before any application script runs, over a fixed window from navigation.
-   Injected rather than read out of the app on purpose: the same instrument
-   then works on any build, including one from before the app carried an
-   observer of its own, so a before/after is a real comparison instead of two
-   different measurements with the same name.
+---- What this file got wrong for three sessions, and what changed -----------
 
-2. The border math. border-worker.js converts degrees to ECEF itself rather
-   than dragging 4 MB of Cesium into a worker, which means there are now two
-   implementations of the one formula that decides where every border on the
-   globe lands. This asserts they agree to sub-millimetre, and it carries a
-   CONTROL -- a spherical-earth conversion, which is what you get if the
-   eccentricity term is dropped -- that must fail the same assertion by
-   kilometres. Without the control a passing agreement check proves only that
-   the comparison ran.
+The blocking half of this test used to run under SwiftShader and gate the
+result against Android's input-dispatch budget. Those are not the same
+quantity, and the gap is not small. Measured by scripts/boot_attrib.py, same
+build, same 412x915 viewport, same instrument:
 
-    py -V:3.13 scripts/border_perf_test.py [port] [--control]
+                             blocking    worst   what dominated it
+    SwiftShader                  4,893    1,891  the software rasteriser
+    real GPU, cold shaders       4,276    1,638  shader linking, 80-95%
+    real GPU, warm shaders         478      316  nothing in particular
+    emulator, cold              20,453    1,968  spread across everything
+
+A fixed 512x512 `readPixels` control measured 3 ms on the card and up to
+12,000 ms under SwiftShader in the same script on the same machine. One chunk
+of twelve labels measured 196 ms on the card and 6,228 ms under SwiftShader.
+Those are the numbers this gate was reading as app behaviour.
+
+The 2026-08-08 handoff already caught one instance of this (a 4,754 ms
+`getImageData` that was SwiftShader initialising its canvas backend) and
+concluded that this file "survives because it does measure JS-only work
+honestly". That conclusion was wrong, and it is why last session's real work
+-- border GPU upload cut from 372.5 MB to 120.0 MB -- moved this test by
+nothing. With every border file aborted at the network layer, the no-borders
+FLOOR on the real GPU is 3,715-4,472 ms of blocking against the full build's
+4,276-6,231. Borders were never what this gate was measuring.
+
+So the milliseconds are now gated where they can be measured:
+
+  * on the real GPU, on the WARM boot -- the one a user gets on every launch
+    after the first. It passes today, which is the point: a gate that cannot
+    pass is not a gate, and this one had been permanently red for reasons no
+    change to this repo could move.
+  * the COLD boot and the full attribution are printed, not gated. Cold is
+    first-launch-after-install, and it is dominated by Cesium linking ~27
+    shader programs. CesiumJS has never supported KHR_parallel_shader_compile
+    -- not in 1.121, not on main at 1.145 -- so every one of them blocks the
+    frame that first needs it. That is not fixable here.
+  * under --swiftshader the millisecond gates are SKIPPED, loudly, because the
+    control in this file demonstrates they would be measuring the rasteriser.
+
+  * the number of shader programs linked IS gated, on any rasteriser, because
+    it is deterministic and the app controls it: it is how a new imagery layer
+    or a grade that toggles a shader flag mid-boot would show up.
+
+The device answer -- the one the 1,000 ms threshold is actually about -- comes
+from scripts/apk_boot_attrib.py, which runs this same instrument inside the
+APK's WebView. It is worse than anything here: 20,453 ms of blocking, and only
+12% of it is shaders. See issues.md 69.
+
+---- The border math ---------------------------------------------------------
+
+border-worker.js converts degrees to ECEF itself rather than dragging 4 MB of
+Cesium into a worker, which means there are two implementations of the one
+formula that decides where every border on the globe lands. This asserts they
+agree to sub-millimetre, and it carries a CONTROL -- a spherical-earth
+conversion, which is what you get if the eccentricity term is dropped -- that
+must fail the same assertion by kilometres. Without the control a passing
+agreement check proves only that the comparison ran.
 
 `--control` loads `?borderworker=off`, which forces the inline main-thread
-parse. That is the honest A/B for the WORKER half of the fix: the same build,
-the same measurement, one flag. It does not control for the primitive or the
-lazy labels -- for those, measure this script against an older commit.
+parse, as the A/B for the worker half of the fix.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import statistics
 import sys
 
 from playwright.async_api import async_playwright
 
+# Imported, not copied. The desktop gate, the diagnostic and the device script
+# must run the SAME instrument or their numbers are three vocabularies rather
+# than one comparison.
+from boot_attrib import GPU_ARGS, INSTR, READ, SWIFT_ARGS, attribute, inside, stats
+
 PORT = "8744"
 CONTROL = False
+FORCE_SWIFT = False
 for a in sys.argv[1:]:
     if a == "--control":
         CONTROL = True
+    elif a == "--swiftshader":
+        FORCE_SWIFT = True
     else:
         PORT = a
 
 BASE = f"http://127.0.0.1:{PORT}/"
 URL = BASE + ("?borderworker=off" if CONTROL else "")
 
-# A Pixel 8 viewport. This is not a phone -- see issue 52, and section 6 of the
-# Android handoff -- but main-thread JS time is the one thing a desktop browser
-# at this size does measure honestly, because parsing and object allocation do
-# not care what is drawing the frame.
+# A Pixel 8 viewport.
 DEVICE = {"width": 412, "height": 915}
 
 # How long to watch. Boot has to be finished inside this or the numbers are a
-# measurement of the timeout. Both builds finish their border work well inside
-# 50 s on SwiftShader; the script prints when they actually did.
+# measurement of the timeout; the script prints when the last task actually
+# landed, which is ~8 s on the real GPU and ~39 s on the emulator.
 WINDOW_S = 50
 
-# The gate. These are what a phone needs, not a description of what the app
-# currently does: Android's input-dispatch ANR is 5 s, a back press that waits
-# a second already feels broken, and the whole point of issue 51 is that the
-# app must be able to answer a key while it boots.
+# The gate, unchanged since issue 51: Android's input-dispatch ANR is 5 s, a
+# back press that waits a second already feels broken, and the app must be able
+# to answer a key while it boots. What changed is WHERE these are applied.
 MAX_SINGLE_TASK_MS = 1000
 MAX_TOTAL_BLOCKING_MS = 2500
+
+# Cesium links one program per distinct shader variant, and the app controls
+# how many variants exist: every imagery layer, and every flag that toggles
+# mid-boot, multiplies them. Observed 21-29 across both rasterisers and the
+# device. 34 leaves room for tile-count drift and still fails if a change adds
+# a handful of new variants.
+MAX_SHADER_PROGRAMS = 34
 
 # Sub-millimetre. The GeoJSON is rounded to 5 decimal places (1.1 m), so a
 # formula that agrees this closely cannot be what moves a border.
@@ -77,6 +124,7 @@ MAX_ECEF_ERROR_M = 1e-3
 
 ok: list[str] = []
 bad: list[str] = []
+skipped: list[str] = []
 
 
 def chk(cond: bool, msg: str) -> None:
@@ -84,41 +132,11 @@ def chk(cond: bool, msg: str) -> None:
     print(("  PASS  " if cond else "  FAIL  ") + msg)
 
 
-# Installed before the first application script. `buffered: true` catches the
-# long tasks that land before this line runs on a slow boot.
-OBSERVER = """
-window.__perf_longtasks = [];
-try {
-  new PerformanceObserver((list) => {
-    for (const e of list.getEntries()) {
-      if (window.__perf_longtasks.length < 500) {
-        window.__perf_longtasks.push({t: Math.round(e.startTime), ms: Math.round(e.duration)});
-      }
-    }
-  }).observe({entryTypes: ['longtask'], buffered: true});
-} catch (e) { window.__perf_observer_failed = String(e); }
-"""
+def skip(msg: str, why: str) -> None:
+    skipped.append(msg)
+    print(f"  SKIP  {msg}\n         {why}")
 
-# Blocking time, the way Lighthouse counts it: everything a task costs beyond
-# the 50 ms that makes it "long" in the first place. Total task time flatters
-# a build that blocks in many medium chunks; blocking time does not.
-READ = """() => {
-  const lt = window.__perf_longtasks || [];
-  const sorted = lt.map(e => e.ms).sort((a, b) => b - a);
-  return {
-    observerFailed: window.__perf_observer_failed || null,
-    count: lt.length,
-    totalTaskMs: lt.reduce((a, e) => a + e.ms, 0),
-    blockingMs: lt.reduce((a, e) => a + Math.max(0, e.ms - 50), 0),
-    worstMs: sorted[0] || 0,
-    top5: lt.slice().sort((a, b) => b.ms - a.ms).slice(0, 5),
-    lastTaskEndMs: lt.reduce((a, e) => Math.max(a, e.t + e.ms), 0),
-  };
-}"""
 
-# The two formulas, side by side, plus the control. `toEcef` is lifted out of
-# the real worker file rather than copied here, so this cannot pass against a
-# stale duplicate of the thing it is supposed to be guarding.
 ECEF = """async (workerSrc) => {
   const g = (0, eval)(workerSrc + ';window.__toEcef = toEcef;');
   const pts = [];
@@ -149,65 +167,164 @@ ECEF = """async (workerSrc) => {
   return {points: pts.length, maxErr, maxAt, maxSphere};
 }"""
 
+# A stall the instrument must see, and the evidence for the SwiftShader skip
+# above. A 1 MB readback is a hard pipeline flush: microseconds of work and
+# whatever the driver owes.
+RASTERISER_CONTROL = """() => {
+  const gl = window.__graticule_viewer.scene.context._gl;
+  const t0 = performance.now();
+  const px = new Uint8Array(4 * 512 * 512);
+  gl.readPixels(0, 0, 512, 512, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  return Math.round(performance.now() - t0);
+}"""
+
+# The gate's own control. `--control` (the inline main-thread parse) moves the
+# warm numbers 5x -- 241 ms of blocking to 1,281, worst 205 ms to 623 -- but on
+# desktop hardware it does not cross a threshold sized for a phone, so it
+# proves the gate is SENSITIVE and not that it can FAIL. This does: a
+# deliberate stall, longer than the budget, which the gate must reject. If this
+# passes, every green above is worthless.
+BURN_MS = 1500
+BURN = """
+setTimeout(() => {
+  const end = performance.now() + %d;
+  while (performance.now() < end) { /* hold the main thread */ }
+  window.__burnDone = true;
+}, 3000);
+""" % BURN_MS
+
+RENDERER = """() => {
+  const gl = window.__graticule_viewer.scene.context._gl;
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)
+             : gl.getParameter(gl.RENDERER);
+}"""
+
+
+async def boot(br, errors: list[str], built: list[str]) -> tuple:
+    """One full boot in a fresh context, watched for WINDOW_S.
+
+    The BROWSER is reused by the caller, so the second call gets Chromium's
+    on-disk compiled-shader cache already populated while still starting from
+    an empty page cache and empty localStorage.
+    """
+    ctx = await br.new_context(viewport=DEVICE, device_scale_factor=3,
+                              is_mobile=True, has_touch=True)
+    await ctx.add_init_script(INSTR)
+    pg = await ctx.new_page()
+    pg.on("console", lambda m: (
+        built.append(m.text) if "border lines" in m.text else None,
+        errors.append(m.text) if m.type == "error" else None))
+    pg.on("pageerror", lambda e: errors.append(f"PAGEERROR {e}"))
+
+    await pg.goto(URL, wait_until="load")
+    await pg.wait_for_function(
+        "()=>window.__graticule_viewer && window.__graticule_viewer.scene", timeout=90_000)
+    await asyncio.sleep(WINDOW_S)
+    res = await pg.evaluate(READ)
+    return ctx, pg, res
+
+
+def show(label: str, res: dict) -> dict:
+    st = stats(res["longtasks"])
+    print(f"\n== {label} ==")
+    if res["err"]:
+        print(f"   OBSERVER FAILED: {res['err']}")
+    print(f"   long tasks     {st['count']}")
+    print(f"   total task ms  {st['totalTaskMs']}")
+    print(f"   blocking ms    {st['blockingMs']}   (task time over 50 ms)")
+    print(f"   worst task ms  {st['worstMs']}")
+    print(f"   last task at   {st['lastEndMs']} ms after navigation")
+
+    progs = res.get("programs") or []
+    link_ms = sum(p.get("ms", 0) for p in progs)
+    print(f"   shader links   {len(progs)} programs, {link_ms:.0f} ms blocked "
+          f"in getProgramParameter(LINK_STATUS)")
+
+    rows = [r for r in attribute(res) if r[1] >= 25]
+    print(f"   {'where it went':<34}{'self ms':>9}{'calls':>8}")
+    for name, ms, n, _worst in rows[:8]:
+        print(f"   {name:<34}{ms:>9.0f}{n:>8}")
+
+    worst = sorted(res["longtasks"], key=lambda e: -e[1])[:3]
+    for t, d in worst:
+        parts = sorted(
+            ((nm, inside(v["spans"], t, t + d)) for nm, v in res["calls"].items()),
+            key=lambda p: -p[1])
+        head = ", ".join(f"{n} {m:.0f}" for n, m in parts[:3] if m >= 15)
+        print(f"     worst t={t:>7.0f} {d:>6.0f} ms   {head or 'nothing named'}")
+    return st
+
 
 async def main() -> None:
     async with async_playwright() as p:
-        br = await p.chromium.launch(args=[
-            "--use-gl=angle", "--use-angle=swiftshader",
-            "--enable-unsafe-swiftshader", "--disable-dev-shm-usage",
-        ])
-        ctx = await br.new_context(viewport=DEVICE, device_scale_factor=3,
-                                   is_mobile=True, has_touch=True)
-        await ctx.add_init_script(OBSERVER)
-        pg = await ctx.new_page()
-
-        # Both builds log one of these per boundary file, so it is a build
-        # completion signal that does not depend on which build is loaded.
-        built: list[str] = []
+        br = await p.chromium.launch(
+            args=SWIFT_ARGS if FORCE_SWIFT else GPU_ARGS, chromium_sandbox=False)
         errors: list[str] = []
-        pg.on("console", lambda m: (
-            built.append(m.text) if "border lines" in m.text else None,
-            errors.append(m.text) if m.type == "error" else None))
-        pg.on("pageerror", lambda e: errors.append(f"PAGEERROR {e}"))
+        built: list[str] = []
 
         print(f"== boot, {DEVICE['width']}x{DEVICE['height']}, {WINDOW_S}s window ==")
         print(f"   {URL}")
-        await pg.goto(URL, wait_until="load")
-        await pg.wait_for_function(
-            "()=>window.__graticule_viewer && window.__graticule_viewer.scene", timeout=90_000)
-        await asyncio.sleep(WINDOW_S)
 
-        lt = await pg.evaluate(READ)
-        chk(lt["observerFailed"] is None,
-            f"the longtask observer attached ({lt['observerFailed'] or 'ok'})")
+        # ---- Boot 1: cold compiled-shader cache -----------------------------
+        ctx1, pg1, cold = await boot(br, errors, built)
+        renderer = await pg1.evaluate(RENDERER)
+        rasteriser_ms = await pg1.evaluate(RASTERISER_CONTROL)
+        # --gpu is a request, not a fact: ANGLE falls back silently, and every
+        # millisecond below would then be a SwiftShader millisecond wearing a
+        # GPU label.
+        hardware = not FORCE_SWIFT and "swiftshader" not in renderer.lower() \
+            and "software" not in renderer.lower()
+        print(f"   renderer       {renderer}")
+        print(f"   rasteriser control: a 512x512 readPixels cost {rasteriser_ms} ms")
+        show("boot 1, COLD compiled-shader cache (first launch after install)", cold)
+        chk(cold["err"] is None,
+            f"the longtask observer attached ({cold['err'] or 'ok'})")
         chk(len(built) >= 2,
             f"both boundary files finished inside the window ({len(built)}/2)")
         for line in built:
             print(f"         {line[:88]}")
+        await ctx1.close()
 
-        print(f"\n   long tasks     {lt['count']}")
-        print(f"   total task ms  {lt['totalTaskMs']}")
-        print(f"   blocking ms    {lt['blockingMs']}   (task time over 50 ms)")
-        print(f"   worst task ms  {lt['worstMs']}")
-        print(f"   last task at   {lt['lastTaskEndMs']} ms after navigation")
-        print(f"   top 5          {json.dumps(lt['top5'])}")
+        # ---- Boot 2: warm ---------------------------------------------------
+        built.clear()
+        ctx2, pg2, warm = await boot(br, errors, built)
+        st = show("boot 2, WARM compiled-shader cache (every launch after the "
+                  "first) -- THIS is what is gated", warm)
 
-        chk(lt["worstMs"] <= MAX_SINGLE_TASK_MS,
-            f"no single task blocks longer than {MAX_SINGLE_TASK_MS} ms "
-            f"(worst {lt['worstMs']} ms)")
-        chk(lt["blockingMs"] <= MAX_TOTAL_BLOCKING_MS,
-            f"total blocking stays under {MAX_TOTAL_BLOCKING_MS} ms "
-            f"({lt['blockingMs']} ms)")
+        progs = warm.get("programs") or []
+        chk(len(progs) <= MAX_SHADER_PROGRAMS,
+            f"boot links no more than {MAX_SHADER_PROGRAMS} shader programs "
+            f"({len(progs)}) -- the app controls this through its imagery "
+            f"layers and any flag that toggles mid-boot")
 
-        # ---- The border math ----------------------------------------------
-        # Read before the boot page closes, and before the second page opens:
+        if hardware:
+            chk(st["worstMs"] <= MAX_SINGLE_TASK_MS,
+                f"no single task blocks longer than {MAX_SINGLE_TASK_MS} ms "
+                f"(worst {st['worstMs']} ms)")
+            chk(st["blockingMs"] <= MAX_TOTAL_BLOCKING_MS,
+                f"total blocking stays under {MAX_TOTAL_BLOCKING_MS} ms "
+                f"({st['blockingMs']} ms)")
+        else:
+            why = (f"this run is on {renderer}. The control above measured "
+                   f"{rasteriser_ms} ms for a readback that costs 3 ms on the "
+                   f"card, so these milliseconds are the rasteriser's, not the "
+                   f"app's. Run without --swiftshader, or use "
+                   f"scripts/apk_boot_attrib.py for the device.")
+            skip(f"worst task under {MAX_SINGLE_TASK_MS} ms "
+                 f"(measured {st['worstMs']} ms)", why)
+            skip(f"total blocking under {MAX_TOTAL_BLOCKING_MS} ms "
+                 f"(measured {st['blockingMs']} ms)", why)
+
+        # ---- The border math ------------------------------------------------
+        # Read before the boot pages close and before the probe page opens:
         # same-origin pages share a renderer process, so a page left spinning
-        # Cesium turns the responsiveness probe below into a measurement of
-        # this page's stall on top of its own.
+        # Cesium turns the responsiveness probe into a measurement of that
+        # page's stall on top of its own.
         print("\n== the worker's ECEF agrees with Cesium ==")
-        src = await pg.evaluate(
+        src = await pg2.evaluate(
             "async () => (await fetch('/static/border-worker.js')).text()")
-        e = await pg.evaluate(ECEF, src)
+        e = await pg2.evaluate(ECEF, src)
         print(f"   {e['points']} points, worst error {e['maxErr']:.6f} m at {e['maxAt']}")
         print(f"   control (spherical earth) worst error {e['maxSphere']:.1f} m")
         chk(e["maxErr"] <= MAX_ECEF_ERROR_M,
@@ -216,16 +333,21 @@ async def main() -> None:
         chk(e["maxSphere"] > 1000,
             f"and the control fails it by {e['maxSphere']:.0f} m, so the check above "
             f"can actually catch a wrong formula")
-        await pg.close()
+        await ctx2.close()
 
         # ---- Responsiveness, which is the thing the numbers stand for -------
         # A stall only matters because it eats input. This asks the page a
-        # question during boot and times the answer, which is as close to "can
-        # it handle a back press" as a desktop browser gets.
-        print("\n== can the page answer while it boots ==")
-        pg2 = await ctx.new_page()
-        await pg2.goto(URL, wait_until="load")
-        probe = await pg2.evaluate("""async () => {
+        # question during boot and times the answer. It runs third, so the
+        # shader cache is warm and it measures the same boot the gates above
+        # do -- the old version opened a cold page here and reported first-ever
+        # shader compilation as the back button's window.
+        print("\n== can the page answer while it boots (warm) ==")
+        ctx3 = await br.new_context(viewport=DEVICE, device_scale_factor=3,
+                                    is_mobile=True, has_touch=True)
+        pg3 = await ctx3.new_page()
+        pg3.on("pageerror", lambda ev: errors.append(f"PAGEERROR {ev}"))
+        await pg3.goto(URL, wait_until="load")
+        probe = await pg3.evaluate("""async () => {
           const worst = [];
           for (let i = 0; i < 60; i++) {
             const t0 = performance.now();
@@ -236,10 +358,36 @@ async def main() -> None:
           return {worstLagMs: Math.round(worst[0]), p90LagMs: Math.round(worst[6])};
         }""")
         print(f"   worst callback lag {probe['worstLagMs']} ms, p90 {probe['p90LagMs']} ms")
-        chk(probe["worstLagMs"] <= MAX_SINGLE_TASK_MS,
-            f"a timer scheduled during boot fires within {MAX_SINGLE_TASK_MS} ms of its due "
-            f"time (worst {probe['worstLagMs']} ms) -- this is the back button's window")
-        await pg2.close()
+        if hardware:
+            chk(probe["worstLagMs"] <= MAX_SINGLE_TASK_MS,
+                f"a timer scheduled during boot fires within {MAX_SINGLE_TASK_MS} ms of "
+                f"its due time (worst {probe['worstLagMs']} ms) -- this is the back "
+                f"button's window")
+        else:
+            skip(f"callback lag under {MAX_SINGLE_TASK_MS} ms "
+                 f"(measured {probe['worstLagMs']} ms)",
+                 "same reason: the rasteriser owns these milliseconds.")
+        await ctx3.close()
+
+        # ---- Does the gate above actually work? -----------------------------
+        print(f"\n== control: a deliberate {BURN_MS} ms stall, which the gate "
+              f"must reject ==")
+        ctx4 = await br.new_context(viewport=DEVICE, device_scale_factor=3,
+                                    is_mobile=True, has_touch=True)
+        await ctx4.add_init_script(INSTR)
+        await ctx4.add_init_script(BURN)
+        pg4 = await ctx4.new_page()
+        await pg4.goto(URL, wait_until="load")
+        await asyncio.sleep(15)
+        burn = await pg4.evaluate(READ)
+        burned = await pg4.evaluate("() => !!window.__burnDone")
+        bst = stats(burn["longtasks"])
+        print(f"   burn ran: {burned}   worst task {bst['worstMs']} ms")
+        chk(burned, "the deliberate stall actually ran")
+        chk(bst["worstMs"] > MAX_SINGLE_TASK_MS,
+            f"and the gate rejects it ({bst['worstMs']} ms > "
+            f"{MAX_SINGLE_TASK_MS} ms), so a green above means something")
+        await ctx4.close()
 
         chk(not errors, f"no console errors during boot ({len(errors)})")
         for m in errors[:10]:
@@ -247,9 +395,13 @@ async def main() -> None:
 
         await br.close()
 
-    print(f"\n{len(ok)} passed, {len(bad)} failed")
+    print(f"\n{len(ok)} passed, {len(bad)} failed, {len(skipped)} skipped")
     for m in bad:
         print("  FAILED:", m)
+    for m in skipped:
+        print("  SKIPPED:", m)
+    print("\nThe device is the only place the 1,000 ms threshold means what it "
+          "says:\n  py -V:3.13 scripts/apk_boot_attrib.py --runs 2")
     sys.exit(1 if bad else 0)
 
 

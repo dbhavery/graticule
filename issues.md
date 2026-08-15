@@ -1923,3 +1923,119 @@ All of the above is DESKTOP, under SwiftShader. The emulator was unavailable
 for the whole of this work: another session held the GPU lease. The device
 number that matters, and that issue 67's instrument would produce, has not been
 taken.
+
+## 69. border_perf_test gated a phone budget on a software rasteriser (2026-08-15)
+
+**FIXED (the test). The device number it was hiding is OPEN and much worse.**
+
+Issue 68 closed with "border_perf_test.py fails on this build. It also fails on
+the build before it... That is an inherited failure, not a regression, and it
+is still open." This is why it failed, and it is not the borders.
+
+### The gate was measuring the rasteriser, not the app
+
+Same build, same 412x915 viewport, same instrument (`scripts/boot_attrib.py`,
+which charges SELF time so a nested call cannot be counted three times):
+
+                                 blocking    worst   what dominated it
+    SwiftShader (what it ran)       4,893    1,891   the software rasteriser
+    real GPU, cold shaders          4,276    1,638   shader linking, 80-95%
+    real GPU, warm shaders            478      316   nothing in particular
+    emulator, cold                 20,453    1,968   spread across everything
+
+Two controls, both in one script on one machine:
+
+    a fixed 512x512 readPixels      3 ms on the card, up to 12,000 ms SwiftShader
+    one chunk of twelve labels    196 ms on the card,       6,228 ms SwiftShader
+
+Those are the milliseconds the gate was reading as app behaviour and comparing
+against Android's 1,000 ms input budget.
+
+### Borders were never what it measured
+
+Aborting both border files at the network layer and asserting nothing drew
+(`borders on screen: None`), on the real GPU:
+
+    full        blocking 4,276 / 6,231      worst 894 / 1,050
+    no borders  blocking 3,715 / 4,472      worst 1,498 / 1,025
+
+The floor is the build. That is why issue 68's real work -- GPU upload at boot
+372.5 MB to 120.0 MB -- moved this test by nothing, and it is the third time
+this harness has sent a session after the wrong thing. The 2026-08-08 handoff
+caught one instance (a 4,754 ms `getImageData` that was SwiftShader
+initialising its canvas backend) and then concluded this file "survives because
+it does measure JS-only work honestly". It does not.
+
+### What the cold boot actually is
+
+27 shader programs, linked synchronously. Ten of them are Cesium globe-surface
+variants at 200-590 ms each on ANGLE/D3D11. `getProgramParameter(LINK_STATUS)`
+blocks until the driver is done, and **CesiumJS has never supported
+KHR_parallel_shader_compile** -- not in the 1.121 build the app loads, not on
+main at 1.145. Nothing in this repo can make that call return sooner.
+
+The variants are not a bug either. The layer stack changes once at boot (the
+radar mosaic arrives at alpha 0.70 and the base takes the muted grade), and
+Cesium keys the globe shader on layer count and flags, so a second generation
+is compiled. Forcing `dimBaseUnderData: false` removes the grade change and the
+count does not move: 10 either way. It is the layer count, which is the app's
+opening frame.
+
+Chromium caches compiled programs on disk, so this is first-launch-after-
+install, not every launch. Warm, the same build blocks 478 ms with a 316 ms
+worst task, against budgets of 2,500 and 1,000.
+
+### What changed in the test
+
+* Runs on the real GPU by default, and asserts the renderer string rather than
+  trusting the flag -- ANGLE falls back silently.
+* Measures TWO boots: cold shader cache and warm, in one profile.
+* Gates the WARM boot on the original 1,000 / 2,500 ms. It passes today, which
+  is the point: a gate that cannot pass is not a gate.
+* Gates the NUMBER of shader programs linked (34), which is deterministic and
+  app-controlled: it is how a new imagery layer, or a flag that toggles
+  mid-boot, would show up.
+* Prints the cold boot and the full attribution, ungated.
+* Under `--swiftshader` the millisecond gates SKIP with the control's number
+  printed as the reason, instead of failing against a rasteriser.
+* Carries its own control: a deliberate 1,500 ms stall that the gate must
+  reject. `--control` (the inline main-thread parse) moves the warm numbers 5x,
+  241 ms of blocking to 1,281 and 205 ms worst to 623, but on desktop hardware
+  it does not cross a phone-sized threshold, so it proves the gate is sensitive
+  and NOT that it can fail. The burn proves that.
+* The responsiveness probe used to open a fresh page and report first-ever
+  shader compilation as the back button's window. It now runs warm: 180 ms.
+
+Result on the real GPU: 11 passed, 0 failed.
+
+### STILL OPEN: the device is far worse than this test ever said
+
+`scripts/apk_boot_attrib.py` runs the same instrument inside the APK's WebView.
+Emulator, cold, 50 s window:
+
+    long tasks 103    blocking 20,453 ms    worst 1,968 ms    last task 38,703 ms
+
+    Scene.render            4,379      Globe.render               1,142
+    getProgramParameter     2,504      PrimitiveCollection.update 1,106
+    Primitive.update        2,147      bufferData                 1,034
+    LabelCollection.update  1,933      DataSourceDisplay.update     776
+
+88% named. There is no single cause: shaders are 12%, the border primitive plus
+its uploads about 15%, labels 9%. Two specific things fall out of it:
+
+* **One chunk of twelve labels costs 1,526-2,146 ms on the device**, and it is
+  the first chunk only -- Cesium builds the glyph atlas there. `LABEL_CHUNK` is
+  sized by a comment in app.js reading "A dozen labels is ~10 ms on a real
+  device". That number is wrong by 150x and is now corrected in place.
+* `JSON.parse` on the main thread, 375 ms over 30 calls, worst 315 ms. Not the
+  borders -- those are in a worker. It is `ws.onmessage`, the live feed.
+
+This is the real issue 51 and it is bigger than anyone thought. Not fixed here.
+Also unconfirmed on real hardware: the emulator translates GL through gfxstream,
+which inflates uploads the way SwiftShader does, just less. Don's S24 is the
+only honest answer left.
+
+**Note on the console-error check.** It fails intermittently with a single
+unnamed 404. Instrumenting every response over a 40 s boot found 0 non-OK
+responses, so it is an external tile server (ESRI or RainViewer) missing a
+tile, not an asset this repo ships. Do not go looking for it in `dist/`.
