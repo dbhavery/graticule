@@ -26,10 +26,9 @@ PORT = sys.argv[1] if len(sys.argv) > 1 else "8744"
 BASE = f"http://127.0.0.1:{PORT}/"
 DEVICE = {"width": 412, "height": 915}
 
-# What the build writes. Both levels hold the same NUMBER OF LINES, because
-# Douglas-Peucker never drops an endpoint, so a line count cannot tell them
-# apart and positions are the only honest measure.
-OVERVIEW_POS = 157_607
+# Boot draws RASTER TILES and no geometry at all, so the honest boot assertion
+# is that positions is exactly zero and two tile layers are up. Descending
+# swaps to the full-detail vectors.
 DETAIL_POS = 428_427
 TOL = 0.03
 
@@ -72,12 +71,19 @@ async def main() -> None:
 
         fetched: list[str] = []
         pg.on("request", lambda r: fetched.append(r.url)
-              if "borders" in r.url else None)
+              if ("borders" in r.url or "border_tiles" in r.url) else None)
 
         print(f"== boot at orbit ==\n   {BASE}")
         await pg.goto(BASE, wait_until="load")
-        got = await wait_positions(pg, OVERVIEW_POS)
-        b = await borders(pg)
+        # Wait on the RASTER layers being up, not on a position count: at orbit
+        # the honest number of border vertices is zero.
+        b = {}
+        for _ in range(60):
+            await pg.wait_for_timeout(1000)
+            b = await borders(pg)
+            if b.get("raster") == 2:
+                break
+        got = b.get("positions", -1)
 
         def hit(sub: str) -> int:
             return sum(1 for u in fetched if sub in u)
@@ -86,13 +92,17 @@ async def main() -> None:
         print("   border files fetched: "
               + ", ".join(sorted({u.rsplit('/', 1)[-1] for u in fetched})))
 
-        chk(near(got, OVERVIEW_POS),
-            f"boot draws the OVERVIEW ({got:,} positions, expected ~{OVERVIEW_POS:,})")
-        chk(not near(got, DETAIL_POS),
-            f"and that is distinguishable from the detail ({DETAIL_POS:,}), so the "
-            f"check above can fail")
-        chk(hit("overview") >= 2,
-            f"both overview files were fetched ({hit('overview')})")
+        chk(b.get("mode") == "raster" and b.get("raster") == 2,
+            f"boot draws RASTER tiles, both layers up "
+            f"(mode={b.get('mode')}, layers={b.get('raster')})")
+        chk(got == 0,
+            f"and uploads NO border geometry at all ({got:,} positions) -- this is "
+            f"the ~120 MB and 2,147 ms of Primitive.update the change exists to "
+            f"remove")
+        chk(hit("border_tiles.manifest.json") >= 1 and hit("border_tiles/") >= 4,
+            f"the manifest and real tiles were fetched "
+            f"({hit('border_tiles/')} tiles), so 0 positions means 'raster is "
+            f"drawing' and not 'nothing is drawing'")
         chk(hit("ne_state_borders.geojson") == 0
             and hit("ne_country_borders.geojson") == 0,
             "and neither DETAIL file was fetched at all, which is the 300 MB of "
@@ -117,8 +127,9 @@ async def main() -> None:
             f"the detail file was fetched, once it was needed "
             f"({hit('ne_state_borders.geojson')})")
         chk(got2 > got,
-            f"which is more geometry than the overview, not less "
-            f"({got2:,} vs {got:,})")
+            f"which is more geometry than the raster carried ({got2:,} vs {got:,})")
+        chk(b2.get("mode") == "vector",
+            f"and the app says it switched paths (mode={b2.get('mode')})")
 
         await br.close()
 

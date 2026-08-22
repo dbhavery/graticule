@@ -422,15 +422,45 @@ const BORDER_CLAMP = new URLSearchParams(location.search).get('clamp') !== 'off'
  * exactly that expression. A wider window swaps to detail from higher up.
  */
 const borderCache = {
-  countries: { overview: null, detail: null },
-  states: { overview: null, detail: null },
+  countries: { detail: null },
+  states: { detail: null },
 };
 const BORDER_FILES = {
-  countries: { overview: '/static/data/ne_country_borders.overview.geojson',
-               detail: '/static/data/ne_country_borders.geojson' },
-  states: { overview: '/static/data/ne_state_borders.overview.geojson',
-            detail: '/static/data/ne_state_borders.geojson' },
+  countries: { detail: '/static/data/ne_country_borders.geojson' },
+  states: { detail: '/static/data/ne_state_borders.geojson' },
 };
+
+/* ---- The far view is a RASTER, not geometry -------------------------------
+ *
+ * The overview used to be 157,607 positions of vector line, and Cesium's
+ * PolylineGeometry turns every position into FOUR fat vertices -- position,
+ * prev, next, expand and st, each split high/low for precision. Measured at
+ * ~352 bytes per position, it was ~120 MB of GPU upload and 2,147 ms of
+ * `Primitive.update` on the device, paid on EVERY boot, for lines that at
+ * orbit are a hairline (issues.md 69, 70).
+ *
+ * scripts/build_border_tiles.py bakes the same Census and Natural Earth line
+ * work into transparent tiles. The globe already samples imagery; adding a
+ * layer costs one texture per visible tile and nothing on the main thread.
+ * Accuracy is unchanged -- the tiles are rendered from the full-detail lines,
+ * so they are as accurate as their own pixels -- and the vector path below
+ * still takes over on descent, where only a handful of lines are in view.
+ *
+ * What is given up is restyling at runtime. Both layers were one colour
+ * (#cbd5e1) and nothing ever changed it, so the colour is baked. Opacity and
+ * the on/off toggles still work: they are layer.alpha and layer.show.
+ *
+ * The pyramid stops at level 6 because borders are a 1-D feature in a 2-D
+ * grid and the tiles they touch still grow ~2.5x per level: L6 is 1,522 state
+ * tiles, L7 is 4,507, L8 is 11,551 and 18,000 files weighs more than the
+ * GeoJSON it replaced. L6 is 256 px over 2.8125 degrees, so it is sub-pixel
+ * while the screen shows more than ~1.2 km per pixel, and BORDER_RASTER_MAX_L
+ * is what borderDetailAltM() derives the handoff from.
+ */
+const BORDER_TILE_BASE = '/static/data/border_tiles';
+const BORDER_TILE_MANIFEST = '/static/data/border_tiles.manifest.json';
+const BORDER_RASTER_MAX_L = 6;
+const BORDER_TILE_PX = 256;
 const BORDER_OVERVIEW_TOL_M = 500;
 
 // How the lines currently on screen were actually built, which is not the same
@@ -442,9 +472,24 @@ function borderDrapeWanted() {
   return BORDER_CLAMP && terrainIsReal;
 }
 
+/* The altitude at which the raster stops being sub-pixel and the vectors have
+ * to take over.
+ *
+ * A level-L geographic tile spans 360/(2*2^L) degrees across BORDER_TILE_PX
+ * pixels, so its ground resolution at the equator is that arc in metres over
+ * 256. Cesium's 60 degree field of view puts about 1.155*h metres across a
+ * canvas of W pixels. Set the two equal and solve for h: below this the tile
+ * is being magnified and the border goes soft, above it the raster is finer
+ * than the screen.
+ *
+ * At L6 on a 1,236 px canvas that is ~1.29 Mm, against the 535 km the vector
+ * overview used to hand off at. Higher is the point: the whole descent above
+ * it now costs no geometry at all. */
 function borderDetailAltM() {
   const w = (viewer && viewer.canvas && viewer.canvas.width) || 411;
-  return BORDER_OVERVIEW_TOL_M * w / 1.155;
+  const metresPerTilePx = (2 * Math.PI * 6378137 / (2 * 2 ** BORDER_RASTER_MAX_L))
+                          / BORDER_TILE_PX;
+  return metresPerTilePx * w / 1.155;
 }
 
 function borderDetailWanted() {
@@ -454,6 +499,111 @@ function borderDetailWanted() {
   // the detail is up it stays up until well above where it came in.
   const alt = borderDetailAltM();
   return bordersDetailedNow ? h <= alt * 1.5 : h <= alt;
+}
+
+/* ---- The raster layers ----------------------------------------------------
+ *
+ * Borders are a 1-D feature, so most tiles in the grid are empty: at L6 only
+ * 1,522 of 8,192 hold any state line. Asking for the other 6,670 would be
+ * thousands of 404s, a console full of errors and a retry storm, so the build
+ * writes a manifest of which tiles exist and this returns a shared transparent
+ * pixel for the rest. That is the whole reason this is a custom provider
+ * rather than a UrlTemplateImageryProvider.
+ */
+const borderTileLayers = { countries: null, states: null };
+let _borderManifest = null;
+let _blankTile = null;
+
+/* One transparent canvas, reused for every tile the manifest says is empty.
+ * Sized to the real tile so Cesium never rescales it, and returned as a
+ * PROMISE: requestImage's contract is a thenable or undefined, and handing
+ * back a bare canvas throws `a.then is not a function` inside the render loop,
+ * which stops rendering altogether rather than dropping one tile. */
+function blankTile() {
+  if (!_blankTile) {
+    const c = document.createElement('canvas');
+    c.width = c.height = BORDER_TILE_PX;
+    _blankTile = c;
+  }
+  return Promise.resolve(_blankTile);
+}
+
+function makeBorderTileProvider(key, have) {
+  const scheme = new Cesium.GeographicTilingScheme();
+  return {
+    tilingScheme: scheme,
+    rectangle: scheme.rectangle,
+    tileWidth: BORDER_TILE_PX,
+    tileHeight: BORDER_TILE_PX,
+    maximumLevel: BORDER_RASTER_MAX_L,
+    minimumLevel: 0,
+    tileDiscardPolicy: undefined,
+    credit: undefined,
+    hasAlphaChannel: true,
+    errorEvent: new Cesium.Event(),
+    ready: true,
+    readyPromise: Promise.resolve(true),
+    getTileCredits: () => [],
+    pickFeatures: () => undefined,
+    requestImage(x, y, level) {
+      const rows = have[String(level)];
+      if (!rows || !rows.has(y * (2 * 2 ** level) + x)) return blankTile();
+      return Cesium.Resource.fetchImage({
+        url: `${BORDER_TILE_BASE}/${key}/${level}/${x}/${y}.png`,
+      // A tile that fails to load must not take the layer down with it; an
+      // empty pixel is the same thing the manifest would have said.
+      }).catch(() => blankTile());
+    },
+  };
+}
+
+/* Single-flight. buildCountries and buildStates both need the rasters and both
+ * start before either finishes, so a plain `if (_borderManifest) return` guard
+ * lets both through and adds every layer twice. */
+let _borderRasterOnce = null;
+function buildBorderRasters() {
+  if (!viewer) return Promise.resolve();
+  if (!_borderRasterOnce) {
+    _borderRasterOnce = _buildBorderRasters().catch((e) => {
+      // Let the next caller try again rather than leaving a rejected promise
+      // cached forever, which would mean no borders for the whole session.
+      _borderRasterOnce = null;
+      console.error('Border rasters failed to load:', e);
+    });
+  }
+  return _borderRasterOnce;
+}
+
+async function _buildBorderRasters() {
+  const res = await fetch(BORDER_TILE_MANIFEST);
+  if (!res.ok) throw new Error(`${BORDER_TILE_MANIFEST} -> HTTP ${res.status}`);
+  const doc = await res.json();
+  _borderManifest = {};
+  let tiles = 0;
+  for (const [key, levels] of Object.entries(doc)) {
+    _borderManifest[key] = {};
+    for (const [lvl, keys] of Object.entries(levels)) {
+      _borderManifest[key][lvl] = new Set(keys);
+      tiles += keys.length;
+    }
+  }
+  for (const key of ['countries', 'states']) {
+    if (borderTileLayers[key] || !_borderManifest[key]) continue;
+    const layer = new Cesium.ImageryLayer(
+      makeBorderTileProvider(key, _borderManifest[key]));
+    layer.alpha = borderAlpha(key);
+    layer.show = borderShown[key];
+    // Not `__scenery`: these ARE an overlay on the base map, and counting them
+    // as scenery would be a lie to baseHasOverlay(). But they must not trigger
+    // the muted grade either -- a border line is not a data field competing
+    // with the imagery underneath it.
+    layer.__borders = true;
+    viewer.imageryLayers.add(layer);
+    borderTileLayers[key] = layer;
+  }
+  console.log(`Border rasters up: ${tiles.toLocaleString()} tiles indexed, `
+              + `0 vertices uploaded`);
+  publishBorderState();
 }
 
 /* Fetch the detail file once, the first time the camera goes low enough.
@@ -639,14 +789,35 @@ function borderAlpha(key) {
   return key === 'countries' ? settings.opCountries : settings.opStates;
 }
 
+/* What is on screen, for the suites and for anyone in a console.
+ *
+ * `positions` is 0 whenever the raster is carrying the view, which is now the
+ * normal state at orbit and is the whole point of the change. A test that
+ * gated on positions being non-zero was gating on the defect, so `raster` says
+ * how many tile layers are up and `mode` says which path is drawing. */
+function publishBorderState(clamp) {
+  const raster = ['countries', 'states'].filter((k) => borderTileLayers[k]).length;
+  window.__graticule_borders = {
+    draped: !!clamp,
+    mode: bordersDetailedNow ? 'vector' : 'raster',
+    raster,
+    lines: borderLineCounts.countries + borderLineCounts.states,
+    // Line COUNT stopped being a measure of how much border data loaded when
+    // the build started joining contiguous segments: the same geometry went
+    // from 11,378 lines to 4,236 without losing a vertex. Anything checking
+    // that the VECTORS are really there should read positions instead.
+    positions: borderVertexCounts.countries + borderVertexCounts.states,
+  };
+}
+
 async function buildBorderPrimitive(key) {
   const slot = borderCache[key];
   const style = BORDER_LINE_STYLE[key];
   if (!viewer || !slot || !style) return 0;
-  // Detail if it is both wanted and here. Wanting it is not having it: the
-  // fetch is kicked off by syncBorderLod and this must draw something in the
-  // meantime.
-  const cache = (bordersDetailedNow && slot.detail) ? slot.detail : slot.overview;
+  // Detail only. There is no vector overview any more: above the handoff the
+  // borders are raster tiles, so having nothing here is the normal state and
+  // means the raster is carrying the view.
+  const cache = bordersDetailedNow ? slot.detail : null;
   if (!cache) return 0;
   const gen = ++_borderPrimGen[key];
   const clamp = borderDrapeWanted();
@@ -737,15 +908,7 @@ async function buildBorderPrimitive(key) {
 
   borderLineCounts[key] = lineCount;
   borderVertexCounts[key] = buf.length / 3;
-  window.__graticule_borders = {
-    draped: clamp,
-    lines: borderLineCounts.countries + borderLineCounts.states,
-    // Line COUNT stopped being a measure of how much border data loaded when
-    // the build started joining contiguous segments: the same geometry went
-    // from 11,378 lines to 4,236 without losing a vertex. Anything checking
-    // that the borders are really there should read this instead.
-    positions: borderVertexCounts.countries + borderVertexCounts.states,
-  };
+  publishBorderState(clamp);
   syncBorderCount(key);
   return lineCount;
 }
@@ -770,6 +933,9 @@ function syncBorderCount(key) {
 function setBorderLinesShown(key, on) {
   borderShown[key] = on;
   for (const p of borderPrims[key]) if (!p.isDestroyed()) p.show = on;
+  // The raster is the same layer to the user, so the switch has to reach it
+  // or turning States off leaves every state line on screen at orbit.
+  if (borderTileLayers[key]) borderTileLayers[key].show = on;
   viewer?.scene.requestRender();
 }
 
@@ -784,6 +950,9 @@ function setBorderLinesAlpha(key) {
     if (p.isDestroyed() || !p.appearance) continue;
     p.appearance.material.uniforms.color = color;
   }
+  // Same slider, other path. The tile colour is baked, so opacity is all the
+  // raster can honour -- which is exactly what this control is.
+  if (borderTileLayers[key]) borderTileLayers[key].alpha = borderAlpha(key);
   viewer?.scene.requestRender();
 }
 
@@ -917,10 +1086,33 @@ function syncBorderLod() {
       for (const key of ['countries', 'states']) {
         total += await buildBorderPrimitive(key);
       }
-      if (total) {
-        console.log(`Borders re-drawn ${detail ? 'at full detail' : 'from the overview'}`
-                    + `, ${drape ? 'draped over terrain' : 'flat'} (${total} lines)`);
+      // Going UP, the vectors are dropped entirely rather than left hidden:
+      // holding 428,427 positions of primitive off-screen keeps the GPU memory
+      // this change exists to give back.
+      if (!detail) {
+        for (const key of ['countries', 'states']) {
+          _borderPrimGen[key] += 1;                 // supersede any build in flight
+          for (const prim of borderPrims[key]) {
+            if (!prim.isDestroyed()) viewer.scene.primitives.remove(prim);
+          }
+          borderPrims[key] = [];
+          borderLineCounts[key] = 0;
+          borderVertexCounts[key] = 0;
+        }
       }
+      // Exactly one path draws at a time. Both at once is a visible double
+      // line wherever the raster and the vector disagree by a pixel, which is
+      // everywhere the tiles were antialiased.
+      for (const key of ['countries', 'states']) {
+        if (borderTileLayers[key]) {
+          borderTileLayers[key].show = borderShown[key] && !detail;
+        }
+      }
+      publishBorderState(drape);
+      viewer.scene.requestRender();
+      console.log(`Borders now ${detail ? `vector, full detail (${total} lines)`
+                                        : 'raster tiles, 0 vertices'}`
+                  + `, ${drape ? 'draped over terrain' : 'flat'}`);
     } catch (e) {
       console.error('Border rebuild failed; will retry on the next transition:', e);
       bordersDrapedNow = wasDraped;
@@ -3837,11 +4029,11 @@ async function buildCountries() {
     // The lines are parsed and converted in a worker (see the long note at
     // borderCache) and added in chunks; only the small labels file is parsed
     // here. Kicking the worker off first lets the label fetch ride alongside.
-    const linesPromise = fetchBorderLines(BORDER_FILES.countries.overview);
+    // No border GEOMETRY at boot. The far view is a raster tile layer
+    // (see buildBorderRasters); the vectors are fetched only on descent.
+    await buildBorderRasters();
     const labels = await (await fetch('/static/data/ne_country_labels.geojson')).json();
-    borderCache.countries.overview = await linesPromise;
-
-    const built = await buildBorderPrimitive('countries');
+    const built = 0;
 
     // Labels: tasteful — small caps, slate gray, distance-fade so they only
     // assert when zoomed close enough to be useful. Brighter fill + heavier
@@ -3910,11 +4102,11 @@ async function buildStates() {
   try {
     // Same worker + chunked path as the countries; the state file is the big
     // one (6.7 MB, 320k vertices) and is the reason this path exists at all.
-    const linesPromise = fetchBorderLines(BORDER_FILES.states.overview);
+    // No border GEOMETRY at boot. The far view is a raster tile layer
+    // (see buildBorderRasters); the vectors are fetched only on descent.
+    await buildBorderRasters();
     const labels = await (await fetch('/static/data/ne_state_labels.geojson')).json();
-    borderCache.states.overview = await linesPromise;
-
-    const built = await buildBorderPrimitive('states');
+    const built = 0;
 
     // Stashed like the country labels: 1,468 of these was most of the boot
     // stall, and none of them can draw above 2.5 Mm anyway.
@@ -5721,7 +5913,7 @@ function baseHasOverlay() {
   const L = viewer.imageryLayers;
   for (let i = 0; i < L.length; i++) {
     const l = L.get(i);
-    if (l === baseImageryLayer || l.__scenery) continue;
+    if (l === baseImageryLayer || l.__scenery || l.__borders) continue;
     if (l.show && l.alpha > 0.02) return true;
   }
   return false;

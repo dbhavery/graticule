@@ -95,6 +95,7 @@ PROBE = """() => {
     features: feats,
     borderLines: (window.__graticule_borders || {}).lines || 0,
     borderPositions: (window.__graticule_borders || {}).positions || 0,
+    borderRaster: (window.__graticule_borders || {}).raster || 0,
     imagery: v.imageryLayers.length,
     // Starts at a hard-coded 0 in the markup and is only ever written by the
     // /api/nws/alerts handler, so a number here is proof the backend answered.
@@ -185,12 +186,15 @@ async def main() -> None:
             # 11,378, and a threshold on line count would fail on a build that
             # lost nothing. Vertices are the thing that actually arrived.
             #
-            # 100,000 and not 300,000: this page never leaves orbit, so it holds
-            # the 157,607-position OVERVIEW, not the 428,427-position detail.
-            # A threshold above the overview would fail on a working app.
-            chk(st2["borderPositions"] >= 100000,
-                f"while /static still loaded normally ({st2['borderPositions']:,} border "
-                f"positions) -- so the failure above is the BACKEND, not a dead page")
+            # And now not positions either: this page never leaves orbit, where
+            # the borders are RASTER TILES and the vector count is legitimately
+            # zero (issues.md 70). Two tile layers up is the boot-time proof
+            # that /static answered; a positions threshold here would fail on a
+            # working app, which is exactly what it did when the overview was
+            # removed.
+            chk(st2["borderRaster"] == 2,
+                f"while /static still loaded normally ({st2['borderRaster']} border "
+                f"tile layers) -- so the failure above is the BACKEND, not a dead page")
             await pg2.close()
 
             await br.close()

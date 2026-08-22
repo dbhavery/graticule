@@ -2039,3 +2039,73 @@ only honest answer left.
 unnamed 404. Instrumenting every response over a 40 s boot found 0 non-OK
 responses, so it is an external tile server (ESRI or RainViewer) missing a
 tile, not an asset this repo ships. Do not go looking for it in `dist/`.
+
+## 70. The borders are raster tiles now, and boot blocking fell 43% (2026-08-21)
+
+Issue 69 measured the device honestly for the first time and found 20,453 ms of
+boot blocking with no single cause. The borders were the largest app-owned
+share of it: `Primitive.update` 2,147 ms and `bufferData` 1,034 ms, paid on
+every boot, because Cesium's PolylineGeometry expands each of the 157,607
+overview positions into FOUR fat vertices -- position, prev, next, expand, st,
+each split high/low -- at about 352 bytes per position.
+
+Don's call: use something else. So the far view is now a raster.
+
+`scripts/build_border_tiles.py` bakes the same Census and Natural Earth line
+work into transparent tiles on a GeographicTilingScheme. The globe already
+samples imagery, so a border layer costs one texture per visible tile and
+nothing on the main thread.
+
+### Device, same instrument, same 50 s window, one run each
+
+    blocking     20,453 ms  ->  11,707 ms      -43%
+    Primitive.update  2,147 ->     293 ms      -86%
+    bufferData        1,034 ->     184 ms      -82%
+    worst task        1,968 ->   2,217 ms      unchanged in kind (see below)
+
+The cut is bigger than the borders' own share because the geometry was also
+paying downstream: Scene.render 4,379 -> 3,841, PrimitiveCollection.update
+1,106 -> 1,019, and 1,564 fewer drawElements.
+
+**One run each. One boot is a sample, not a measurement** -- this project has
+measured a 1.9x spread on the same build -- and the emulator translates GL
+through gfxstream, so these are directional. Don chose the emulator over
+wiring up the S24, knowing that.
+
+The worst single task did not improve and is now unambiguous:
+`LabelCollection.update`, 1,782 ms, building Cesium's glyph atlas on the first
+chunk of twelve labels. That is issue 69's open item, untouched here.
+
+### Sizing, and why the pyramid stops at level 6
+
+Borders are a 1-D feature in a 2-D grid, so the tiles they touch grow ~2.5x per
+level rather than 4x, and it still runs away: L6 is 2,208 tiles, L7 is 4,507,
+L8 is 11,551. Written as RGBA the L0-L6 pyramid was 23.5 MB. Every pixel is the
+SAME colour at a different coverage, so three of four channels were a constant
+repeated 65,536 times per tile; as an indexed PNG whose palette is 32 copies of
+#cbd5e1 and whose tRNS holds the alpha steps, it is **7.2 MB**, and 32 steps is
+invisible on a hairline.
+
+L6 is 256 px over 2.8125 degrees, so it is sub-pixel while the screen shows
+more than ~1,223 m per pixel. `borderDetailAltM()` derives the handoff from
+that: 436 km on a 412 px canvas, against the 178 km the vector overview used.
+Below it the full-detail vectors take over exactly as before, so city zoom is
+unchanged -- verified by eye at the Four Corners quadripoint, which still
+renders as a clean cross with no double-drawn lines.
+
+APK 21.2 -> 22.6 MB, and the two overview `.geojson` files are dead and moved
+to `_deprecated/2026-08-21/`.
+
+### What this gives up
+
+Runtime restyling. Both layers were one colour and nothing ever changed it, so
+the colour is baked into the tiles. Opacity and the on/off toggles still work:
+they are `layer.alpha` and `layer.show`, and `setBorderLinesShown` /
+`setBorderLinesAlpha` drive both paths.
+
+### Still open
+
+Descending below 436 km still loads and uploads the WHOLE WORLD's 428,427
+vector positions, not just what is in view. It is no longer a boot cost, and it
+is cached for the session, but on a phone it is a stall on first descent. The
+fix is spatial culling of the vector path; not done here.
