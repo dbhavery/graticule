@@ -5293,3 +5293,97 @@ div[data-requires].is-off .wf-item.is-active {
     bottom: calc(var(--sheet-peek) + env(safe-area-inset-bottom, 0px) + 8px);
   }
 }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   QUICK LAYERS                                          added 2026-09-18
+   ═════════════════════════════════════════════════════════════════════════
+   Six tiles, one level, in the chosen direction's card language. They replace
+   nothing: the nine-division nav below is still the complete answer for all
+   38 layers. What they replace is the five-level WALK to the five people
+   actually reach for.
+
+   Each tile is a button that drives the real checkbox further down the pane
+   and reads its state back off it, so there is one source of truth per layer.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+#quick {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.qt {
+  /* min-width:0 on a grid child is not optional here. A grid item defaults to
+     min-width:auto and will not shrink below its content, which is the exact
+     trap that pushed four elements off a 412px screen in this app before. */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 72px;
+  padding: 11px 6px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-med);
+  cursor: pointer;
+  /* No transition. Cesium renders on the main thread and its clock stalls;
+     this app has been caught four times by a state change that went behind an
+     animation and arrived a second late or not at all. A tile that does not
+     visibly turn on when tapped is the complaint this work started from. */
+  transition: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.qt svg {
+  width: 22px; height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+/* The plane is a solid silhouette; stroking it would draw its outline twice. */
+.qt[data-quick="planes"] svg { fill: currentColor; stroke: none; }
+
+.qt span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qt:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.16); }
+.qt:active { background: rgba(255, 255, 255, 0.085); }
+
+/* On is carried by fill, border AND text colour together, not by colour
+   alone: the accent has to survive a viewer who cannot separate it from the
+   surrounding grey. */
+.qt.is-on {
+  background: rgba(92, 214, 255, 0.14);
+  border-color: rgba(92, 214, 255, 0.46);
+  color: var(--accent);
+}
+
+.qt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#quick-more { color: var(--text-mute); }
+#quick-more:hover { color: var(--text-dim); }
+
+@media (max-width: 780px), (max-height: 500px) {
+  /* 44px is the floor for a finger, and these are already taller. The rule is
+     here so a future edit to min-height cannot quietly drop below it. */
+  .qt { min-height: max(76px, var(--hit)); font-size: var(--fs-sm); }
+  .qt svg { width: 24px; height: 24px; }
+}

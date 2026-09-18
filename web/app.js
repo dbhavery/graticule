@@ -13456,6 +13456,88 @@ function initRailScrollEdges() {
   syncRailScrollEdges();
 }
 
+// ---------- Quick layers -----------------------------------------------------
+//
+// Six one-tap tiles for the layers people actually reach for, over a division
+// nav that took five levels to reach any of them.
+//
+// These tiles own NO state. Each one drives the existing
+// `input[data-layer="..."]` checkbox in the division below it, and reads its
+// own appearance back off that same checkbox. That is the whole design: a
+// second control for a layer is only safe when it cannot hold a different
+// answer than the first.
+//
+// The tempting alternative was a second <input data-layer="radar"> up here.
+// Every layer binding in this file resolves by querySelector on that
+// attribute and takes the FIRST match, so a duplicate would have silently
+// re-pointed an unknown number of them at the new element -- and the two
+// would have diverged the first time anything set .checked directly instead
+// of dispatching.
+const QUICK_KEYS = ['radar', 'warnings', 'clouds', 'planes', 'quakes'];
+
+function quickCheckbox(key) {
+  return document.querySelector(`#hud input[data-layer="${key}"]`);
+}
+
+function syncQuickTiles() {
+  const host = document.getElementById('quick');
+  if (!host) return;
+  for (const key of QUICK_KEYS) {
+    const btn = host.querySelector(`.qt[data-quick="${key}"]`);
+    if (!btn) continue;
+    const cb = quickCheckbox(key);
+    // A tile for a layer that is not in the DOM is a control that cannot
+    // work. Hide it rather than leave it looking live and doing nothing --
+    // this app has shipped that defect before.
+    if (!cb) { btn.hidden = true; continue; }
+    btn.hidden = false;
+    btn.classList.toggle('is-on', cb.checked);
+    btn.setAttribute('aria-pressed', cb.checked ? 'true' : 'false');
+  }
+}
+
+function initQuickTiles() {
+  const host = document.getElementById('quick');
+  if (!host) return;
+
+  host.addEventListener('click', (e) => {
+    const more = e.target.closest('#quick-more');
+    if (more) {
+      // "More" is not a seventh layer; it is the way back to the full nav.
+      const modes = document.getElementById('wx-modes');
+      if (modes) {
+        // The sheet has to be open far enough to show what we scroll to,
+        // or this silently scrolls something the user cannot see.
+        if (!document.body.classList.contains('sheet-full')) {
+          document.body.classList.remove('sheet-half');
+          document.body.classList.add('sheet-full');
+        }
+        modes.scrollIntoView({ block: 'start' });
+      }
+      return;
+    }
+    const btn = e.target.closest('.qt[data-quick]');
+    if (!btn) return;
+    const cb = quickCheckbox(btn.dataset.quick);
+    if (!cb) return;
+    cb.checked = !cb.checked;
+    // bubbles, because the layer bindings are delegated off #hud.
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    syncQuickTiles();
+  });
+
+  // Anything that changes a layer anywhere -- the division toggle, a preset,
+  // restored state at boot -- has to be reflected here, or the tile row
+  // becomes the one part of the UI that is confidently wrong.
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.matches && e.target.matches('input[data-layer]')) {
+      syncQuickTiles();
+    }
+  }, true);
+
+  syncQuickTiles();
+}
+
 // ---------- The bottom stack's height ----------------------------------------
 //
 // Publishes the measured height of #botstack as `--botstack-h`, which is what
@@ -14130,6 +14212,7 @@ function initWeatherfrontShell() {
   initRailStatus();
   initRailScrollEdges();
   initBotstackHeight();
+  initQuickTiles();
   initSheet();
   initCommandPalette();
   initLocate();

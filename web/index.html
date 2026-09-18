@@ -250,6 +250,74 @@
            four that answer "what else is out there". Radar leads because it is
            what the app opens on. The grid keeps id="wx-modes" so every existing
            chip binding still finds them. -->
+      <!-- ═════════  QUICK LAYERS  ═════════
+           Reaching a layer took five levels: sheet, tab, division chip, in two
+           of the nine a category header, then the toggle. Nobody navigates
+           five levels to see if it is raining.
+
+           These six are one level. They are not a new control surface -- each
+           one drives the SAME checkbox further down this pane, so there is
+           exactly one source of truth for whether a layer is on, and the
+           division nav below stays the complete answer for the other 32.
+
+           A second <input data-layer="radar"> up here would have been the
+           obvious markup and the wrong one: every binding in app.js resolves a
+           layer by querySelector on that attribute and would have started
+           finding whichever came first in the document. Buttons that proxy to
+           the real checkbox cannot desynchronise, because they hold no state
+           to desynchronise. -->
+      <!-- The heading is load-bearing, not decoration. Without it this row and
+           the division grid below it both showed a control labelled "Radar",
+           eight lines apart, meaning two different things: this one switches
+           the layer ON, that one NAVIGATES to the radar division. Two verbs,
+           one word, one screen. The divisions already carry "Weather" and
+           "Map & world" headings, so naming this row in the same voice is what
+           separates them. "Warnings" rather than "Alerts" for the same reason:
+           there is an NWS Alerts tab directly above, and the layer's own name
+           in the division below is "NWS Warnings". -->
+      <div class="div-sec">Quick layers</div>
+      <div id="quick" role="group" aria-label="Quick layers">
+        <button class="qt" type="button" data-quick="radar" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8.2"/>
+            <path d="M12 12 19 7.5"/>
+          </svg>
+          <span>Radar</span>
+        </button>
+        <button class="qt" type="button" data-quick="warnings" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 4.2 21 19.4H3Z"/><path d="M12 10v4"/><path d="M12 16.6v.2"/>
+          </svg>
+          <span>Warnings</span>
+        </button>
+        <button class="qt" type="button" data-quick="clouds" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M7 18h10a4 4 0 0 0 .4-8 6 6 0 0 0-11.6 1.6A3.6 3.6 0 0 0 7 18Z"/>
+          </svg>
+          <span>Satellite</span>
+        </button>
+        <button class="qt" type="button" data-quick="planes" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M21 14.5 13.8 12V5.6a1.8 1.8 0 0 0-3.6 0V12L3 14.5v2l7.2-2v4L8 20.4V22l4-1.2 4 1.2v-1.6l-2.2-1.4v-4l7.2 2Z"/>
+          </svg>
+          <span>Planes</span>
+        </button>
+        <button class="qt" type="button" data-quick="quakes" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M2 12h3.4l2.2-6.4L11 18.6l2.6-9.2 1.8 4.2h1.8"/>
+            <circle cx="19.4" cy="13.6" r="1.6"/>
+          </svg>
+          <span>Quakes</span>
+        </button>
+        <button class="qt" type="button" id="quick-more">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/>
+            <circle cx="18.5" cy="12" r="1.5"/>
+          </svg>
+          <span>More</span>
+        </button>
+      </div>
+
       <div id="wx-modes">
         <div class="div-sec">Weather</div>
         <div class="div-grid">

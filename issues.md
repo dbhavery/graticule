@@ -2109,3 +2109,51 @@ Descending below 436 km still loads and uploads the WHOLE WORLD's 428,427
 vector positions, not just what is in view. It is no longer a boot cost, and it
 is cached for the session, but on a phone it is a stall on first descent. The
 fix is spatial culling of the vector path; not done here.
+
+---
+
+## 70. Desktop has 4px of horizontal overflow, and the stylesheet defines
+## `#legend` five times
+
+Found 2026-09-18 while verifying the bottom-stack work did not regress desktop.
+Not fixed here, because neither is caused by that change and fixing them inside
+it would have hidden what it did.
+
+**The 4px.** At a pinned 1440x900 layout viewport, `innerWidth` is 1440 and
+`documentElement.scrollWidth` is 1444. Small enough to be invisible and large
+enough to put a scrollbar on a window sized exactly to the content. Not yet
+attributed to an element; the phone case is clean (412 / 412), so whatever it
+is, it lives in a desktop-only rule.
+
+Measure it the way the phone case was measured, which is the only method that
+worked: pin the layout viewport with `Emulation.setDeviceMetricsOverride` over
+CDP, then walk `body *` for any rect whose `right` exceeds `innerWidth`.
+`--window-size` alone is not enough -- Chromium widens the layout viewport to
+fit overflowing content, so the page lays out at the wider size and nothing
+looks like it is overflowing any more. That is exactly how a 412px phone
+reported `innerWidth` 500 and an empty overflow list at the same time.
+
+**Five definitions.** `#legend` is declared at lines 1619, 1725, 1729, 2993 and
+3578, plus the new phone card. They are not variants behind media queries; they
+are successive rewrites of the same element stacked on top of each other, and
+the live appearance is whatever the last one happens to say. It cost real time
+on 2026-09-18: the card was reset to `position: static` and `inset: auto` and
+still painted 42.5px too high, because one of those blocks carries
+`transform: translateY(-50%)` and a transform survives both.
+
+`#hud` has the same shape at 362, 1451, 1827 and 2707.
+
+This is worth a consolidation pass on its own, with a screenshot before and
+after at both breakpoints. It is NOT worth doing inside a feature change, where
+a regression would be indistinguishable from the feature.
+
+**Also noted, deliberately not "fixed":** `detect.mjs` reports 50 em-dashes in
+index.html body text. All but one are standalone `—` placeholder glyphs in data
+readouts, which is the instrument convention for "no reading". They are not
+prose punctuation and must not be bulk-replaced.
+
+**And: the detector runs DEGRADED here.** It reports
+`HTML parser modules unavailable (htmlparser2, css-select, css-tree, domutils)`
+and falls back to regex, so custom properties, selector matching and computed
+contrast are never evaluated. Its findings are an undercount, not a clean bill
+of health. Installing those four modules would make the next pass meaningful.
