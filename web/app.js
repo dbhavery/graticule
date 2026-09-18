@@ -7031,6 +7031,13 @@ function showFrame(i) {
 
   const lbl = document.getElementById('tl-label');
   if (lbl) lbl.textContent = `${hh}:${mm}Z ${relTxt}`;
+
+  // The legend's timestamp describes THIS frame, so it has to move with the
+  // scrub and with playback. Updated here rather than from applyLegendFor,
+  // which only runs when the active field changes -- scrubbing back an hour
+  // would otherwise leave the legend insisting the colours were current.
+  const lgObs = document.getElementById('lg-obs');
+  if (lgObs) lgObs.textContent = legendObservedLabel(currentWxMode());
   // Product over source on the left, time over date on the right.
   setStamp(frame.kind === 'forecast' ? 'RADAR FORECAST' : 'BASE REFLECTIVITY',
            frame.kind === 'forecast' ? 'RainViewer nowcast' : 'RainViewer composite',
@@ -7166,13 +7173,56 @@ function applyLegendFor(mode) {
   el.classList.remove('hidden');
   document.getElementById('lg-title').textContent = scale.title;
   document.getElementById('lg-unit').textContent  = scale.unit;
-  // Vertical, pinned to the right edge of the map, the way every broadcast
-  // radar app draws a colour scale. 0deg runs bottom-to-top, so the stops keep
-  // their low-to-high order and the tick column is reversed to match.
-  document.getElementById('lg-bar').style.background =
-    `linear-gradient(0deg, ${scale.stops.join(', ')})`;
+
+  // The scale is drawn in two different orientations now: a vertical bar on
+  // the right edge on desktop, the way every broadcast radar app draws one,
+  // and a full-width horizontal card in the phone's bottom stack, where it is
+  // the thing that tells someone what the colours on the globe actually mean.
+  //
+  // So JS publishes the DATA and CSS owns the DIRECTION. Writing
+  // `linear-gradient(0deg, ...)` from here hard-coded the vertical case into
+  // the one file that cannot see a media query, and the phone card came out
+  // with its ramp running bottom-to-top inside a 12px-tall box -- which is to
+  // say, one flat colour.
+  //
+  // Stops stay in their natural low-to-high order in both places. Desktop
+  // reverses the tick column in CSS with `column-reverse` rather than here,
+  // which is why this no longer calls .reverse().
+  el.style.setProperty('--lg-stops', scale.stops.join(', '));
   document.getElementById('lg-ticks').innerHTML =
-    scale.ticks.slice().reverse().map((t) => `<span>${t}</span>`).join('');
+    scale.ticks.map((t) => `<span>${t}</span>`).join('');
+
+  // When the field was observed. "What am I looking at" is incomplete without
+  // it: a radar ramp with no timestamp cannot distinguish live from an hour
+  // stale, and the difference is the whole value of the layer.
+  const obs = document.getElementById('lg-obs');
+  if (obs) obs.textContent = legendObservedLabel(mode) || '';
+}
+
+// The valid time of the frame the legend is describing, as a short UTC label,
+// or '' when this mode has no frame loop behind it.
+//
+// TL.frames is the only timestamp in this app that is verifiably the time the
+// data is FOR, rather than the time it was fetched -- setStamp's comment above
+// makes the same point about the readout graphic: "an animating loop that
+// stamps 'now' on a frame from 40 minutes ago is the exact ambiguity the
+// readout exists to remove."
+//
+// Modes with no loop return ''. That renders as nothing at all
+// (`#lg-obs:empty { display: none }`) rather than as a dash, because a dash
+// where a time belongs reads as "stale" when it means "not applicable" -- and
+// on a warning-capable screen those must never look alike.
+function legendObservedLabel(mode) {
+  if (!legendModeIsLive(mode)) return '';
+  const frame = TL.frames[TL.index];
+  if (!frame || typeof frame.time !== 'number') return '';
+  const d = new Date(frame.time * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  // A nowcast frame is a forecast, not an observation, and labelling a
+  // prediction with a bare timestamp claims it was measured.
+  return frame.kind === 'forecast' ? `${hh}${mm}Z fcst` : `${hh}${mm}Z`;
 }
 
 // ---------- WORLD pane -------------------------------------------------------
@@ -11356,13 +11406,28 @@ function gfxPlace(el, cfg) {
   // A saved position from a 1600px monitor means nothing on a phone anyway,
   // and neither does a 2.5x scale on a screen where the graphic is already
   // full width.
+  // A phone gets one placement and it is not negotiable -- but it is no longer
+  // written here. This used to set `bottom: 112px` inline, which is 96px of
+  // sheet peek plus 16, and that number was a claim about how tall everything
+  // between the sheet and this card happened to be on the day it was written.
+  //
+  // It went stale the moment the bottom stack gained the colour-scale legend:
+  // measured 2026-09-18 at 412x915, the FLOOD WARNING card sat at y=711-810
+  // directly over the legend AND the credits, because 112 no longer described
+  // anything. The stylesheet's rule could not correct it -- as the note above
+  // says, an inline style needs !important to beat, and reaching for that only
+  // moves the stale constant into CSS.
+  //
+  // So on a phone this CLEARS every inline placement and gets out of the way.
+  // The stylesheet positions the card off `--botstack-h`, which app.js
+  // measures from the stack itself, so the card follows the legend and the
+  // credits wherever they actually end up. Desktop still gets its saved corner
+  // below, where a drag-positioned graphic genuinely needs inline styles.
   if (isPhone()) {
-    el.style.left = '8px';
-    el.style.right = '8px';
-    el.style.bottom = `${settings.presenting ? 12 : 112}px`;
-    el.style.width = 'auto';
-    el.style.transform = 'none';
-    el.style.transformOrigin = 'bottom left';
+    el.style.left = el.style.right = el.style.top = el.style.bottom = '';
+    el.style.width = '';
+    el.style.transform = '';
+    el.style.transformOrigin = '';
     return;
   }
   el.style.width = '';
@@ -13391,6 +13456,59 @@ function initRailScrollEdges() {
   syncRailScrollEdges();
 }
 
+// ---------- The bottom stack's height ----------------------------------------
+//
+// Publishes the measured height of #botstack as `--botstack-h`, which is what
+// the warning card, the locate button and the toast clear themselves by.
+//
+// This exists because the thing it replaces could not work. Seven elements
+// each positioned themselves off `--sheet-peek` plus a hand-picked constant --
+// credits +6, timeline +8, warning +52, legend +56, locate +16, toast +72 --
+// and every one of those constants is a claim about how tall the others are.
+//
+// #credits is where that fell apart. It is empty markup; Cesium fills it at
+// runtime with however many lines of attribution the active layers require. An
+// empty box measures zero, reserves nothing, and its text grew upward through
+// the warning card. No constant can be right about content that does not exist
+// when the constant is written. So: measure the stack, publish one number, and
+// let the three floaters subtract it.
+//
+// Rounded UP to a whole pixel. A fractional height that rounds down leaves a
+// sub-pixel overlap, which is exactly the hairline kiss between the credit
+// strip and the warning card that started this.
+function syncBotstackHeight() {
+  const el = document.getElementById('botstack');
+  if (!el) return;
+  // display:contents on desktop, so there is no box to measure and nothing
+  // downstream needs one -- the members position themselves there as before.
+  const h = (getComputedStyle(el).display === 'contents')
+    ? 0
+    : Math.ceil(el.getBoundingClientRect().height);
+  document.documentElement.style.setProperty('--botstack-h', `${h}px`);
+}
+
+function initBotstackHeight() {
+  const el = document.getElementById('botstack');
+  if (!el) return;
+  if (window.ResizeObserver) {
+    // Observe the children too, not just the box. Cesium writes into #credits
+    // without changing the wrapper's own border box in the same frame, and the
+    // legend's ramp swaps height when the active field changes units.
+    const ro = new ResizeObserver(syncBotstackHeight);
+    ro.observe(el);
+    for (const c of el.children) ro.observe(c);
+  }
+  window.addEventListener('resize', syncBotstackHeight);
+  window.addEventListener('orientationchange', syncBotstackHeight);
+
+  // Same backstop, and for the same reason as syncRailScrollEdges above: this
+  // app has been caught three times by an observer that landed 450-600ms late
+  // on a frame Cesium was holding. One rect read and one custom-property write
+  // is cheaper than being wrong for half a second while a warning is on screen.
+  setInterval(syncBotstackHeight, 400);
+  syncBotstackHeight();
+}
+
 // ---------- The bottom sheet -------------------------------------------------
 //
 // On a phone the rail is a sheet over the map, at one of three detents. The
@@ -14011,6 +14129,7 @@ function initWeatherfrontShell() {
   initDashboards();
   initRailStatus();
   initRailScrollEdges();
+  initBotstackHeight();
   initSheet();
   initCommandPalette();
   initLocate();

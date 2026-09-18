@@ -1424,6 +1424,26 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   color: var(--text); text-decoration: underline;
 }
 #credits .cesium-credit-expand-link { cursor: pointer; }
+/* ── Why #credits measured zero height for the whole life of this app ──
+   Cesium injects ONE child, `div.cesium-widget-credits`, and its own
+   stylesheet gives that child `position: absolute`. An absolutely positioned
+   child is out of flow, so it contributes nothing to its parent's height: the
+   strip held 18px of real attribution text and reported h=0, w=392.
+
+   That is what let the text climb through the severe-weather card above it.
+   The earlier fix anchored `left` AND `right` to stop the box computing to
+   zero WIDTH, which was the same defect on the other axis, and stopped one
+   step short: nothing ever put the child back in flow.
+
+   Measured 2026-09-18 over CDP at a pinned 412px viewport: parent h=0, child
+   h=18, `position: absolute`. Static here, so the parent finally sizes to the
+   credits it is legally required to show. `#credits` + class outranks
+   Cesium's bare class, so this needs no !important. */
+#credits .cesium-widget-credits {
+  position: static;
+  display: block;
+}
+
 /* Cesium ships its own inline styles on these; keep them from stacking. */
 #credits .cesium-credit-textContainer,
 #credits .cesium-credit-logoContainer { display: inline; }
@@ -1626,7 +1646,12 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 .lg-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
 #lg-title { font-size: var(--fs-micro); letter-spacing: var(--tr-wide); color: var(--text-mute); }
 #lg-unit { font-size: var(--fs-micro); color: var(--text-dim); }
-#lg-bar { height: 9px; border-radius: var(--r-sm); }
+/* Direction lives in CSS; the stops come from JS as --lg-stops. The vertical
+   desktop bar runs 0deg (bottom-to-top), the phone card runs 90deg. */
+#lg-bar {
+  height: 9px; border-radius: var(--r-sm);
+  background: linear-gradient(0deg, var(--lg-stops, transparent 0%, transparent 100%));
+}
 #lg-ticks { display: flex; justify-content: space-between; margin-top: 3px; font-size: var(--fs-micro); color: var(--text-mute); }
 
 /* ---- WORLD pane ---- */
@@ -3008,8 +3033,14 @@ body.is-presenting #rail-open { display: none; }
 #lg-unit { font-family: var(--mono); }
 .lg-scale { display: flex; align-items: stretch; gap: 6px; }
 #lg-bar { width: 10px; height: 232px; border-radius: var(--r-sm); }
+/* `column-reverse`, and JS no longer reverses the tick array to match.
+   applyLegendFor used to write `linear-gradient(0deg, ...)` directly and hand
+   back a pre-reversed tick list, which hard-coded this one orientation into
+   the file that cannot see a media query. The phone's horizontal card then
+   rendered its ramp bottom-to-top inside a 12px box -- one flat colour.
+   JS publishes --lg-stops; each orientation picks its own angle and order. */
 #lg-ticks {
-  display: flex; flex-direction: column; justify-content: space-between;
+  display: flex; flex-direction: column-reverse; justify-content: space-between;
   margin: 0; font-size: var(--fs-micro); color: var(--text-mute);
   text-align: left;
 }
@@ -4989,4 +5020,276 @@ div[data-requires].is-off .wf-item.is-active {
      choice does not appear. `Present` stays: hiding the chrome to get the
      whole screen back is MORE useful on a phone, not less. */
   #panebar { display: none; }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   THE BOTTOM STACK, AND THE INFORMATION LAYER          added 2026-09-18
+   ═════════════════════════════════════════════════════════════════════════
+
+   Direction: the category standard, played straight, chosen by Don on
+   2026-09-18 after seeing four worlds rendered against the real globe. Dark
+   glass, rounded cards, a blue accent, chips and tiles -- executed at full
+   fidelity, no irony, no smuggled quirk. Craft bar: Windy, RadarScope and
+   MyRadar for carrying many layers without becoming a control panel; Google
+   Maps, onX and Gaia GPS for chrome that never obscures the map.
+
+   Plus the one thing the category does not ship. Don, verbatim: "D has only
+   buttons. Some info graphics are needed to tell the user what they are
+   looking at. Like the colored severity bar." The canon is all control and no
+   explanation, and a person who cannot read radar must still be able to learn
+   what red means without leaving the map.
+
+   ── Why a stack at all ──────────────────────────────────────────────────
+   Seven elements used to position themselves independently off `--sheet-peek`
+   plus a hand-picked offset. Each was guessing where the other six were, and
+   every guess broke the moment any of them changed height. #credits is the
+   proof: it is empty markup that Cesium fills at runtime, so it measured
+   ZERO HEIGHT, reserved no space, and its injected attribution climbed
+   straight through the warning card sitting at peek + 52.
+
+   Arithmetic cannot reserve space for content that does not exist yet.
+   Layout can. So the members become children of one flex column, in reading
+   order, and a hidden child collapses and the rest close up.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* Desktop keeps every existing rule untouched. `display: contents` removes the
+   wrapper from layout entirely, so each child still positions against the
+   viewport exactly as it did before this element existed. */
+#botstack { display: contents; }
+
+@media (max-width: 780px), (max-height: 500px) {
+
+  /* Presentation mode hides the sheet, so there is no peek to clear. Zeroing
+     the token drops the whole stack -- and everything measuring off it -- to
+     the bottom edge in one move. This replaces gfxPlace's old
+     `settings.presenting ? 12 : 112`, which was the same idea expressed as two
+     magic numbers in JavaScript that no other element could see. */
+  body.is-presenting { --sheet-peek: 0px; }
+
+  #botstack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    position: fixed;
+    left: 0; right: 0;
+    bottom: calc(var(--sheet-peek) + env(safe-area-inset-bottom, 0px) + 8px);
+    z-index: 34;
+    padding: 0 10px;
+    /* The map has to stay draggable between the cards. */
+    pointer-events: none;
+  }
+  #botstack > * { pointer-events: auto; }
+
+  /* Members stop positioning themselves. This is the whole fix: every
+     `bottom: calc(var(--sheet-peek) + N)` in the members is now dead, and the
+     column decides where they sit. */
+  #botstack > #timeline,
+  #botstack > #legend,
+  #botstack > #credits {
+    position: static;
+    inset: auto;
+    width: auto; max-width: none;
+    margin: 0;
+    /* `transform: none` is not decoration. The desktop legend centres itself
+       on the right edge with `top: 50%; transform: translateY(-50%)`, and a
+       transform survives both `position: static` and `inset: auto` -- it is
+       paint-time, not layout. Measured: the card reported the correct flex
+       position and then painted 42.5px higher, straight through the transport
+       above it. The column had laid out correctly and the screen still lied. */
+    transform: none;
+  }
+
+  /* ---- Attribution. A licence condition, so it is legible, not hidden. ----
+     It keeps `pointer-events: auto` from the rule above because Cesium's
+     expander link must stay reachable or credits get suppressed. Being a real
+     child of a real column, it now reserves its own height however many lines
+     Cesium writes into it. */
+  #botstack > #credits {
+    font-size: 10px;
+    line-height: 1.45;
+    text-align: left;
+    color: var(--text-mute);
+    opacity: 0.82;
+    padding: 0 4px;
+    order: 99;                       /* always the floor of the stack */
+  }
+
+  /* ---- The information layer ---- */
+  #botstack > #legend {
+    display: block;
+    background: rgba(14, 17, 23, 0.90);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 16px;
+    padding: 11px 14px 10px;
+    box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.85);
+  }
+  #botstack > #legend.hidden { display: none; }
+
+  /* The desktop legend is a vertical bar with rotated text: `writing-mode:
+     vertical-rl` on .lg-head and #lg-title, a 180deg rotation, a 11px x 300px
+     bar and a column tick list, set across three separate #legend blocks
+     earlier in this file. Every one of those has to be undone here explicitly.
+     Setting `display: block` on the card does not reach any of them. */
+  #botstack > #legend .lg-head {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 9px;
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+    transform: none;
+  }
+  #botstack > #legend #lg-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    writing-mode: horizontal-tb;
+    transform: none;
+    max-height: none;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-med);
+    letter-spacing: var(--tr-wide);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #botstack > #legend #lg-unit {
+    flex: none;
+    font-size: var(--fs-micro);
+    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 999px;
+    padding: 1px 7px;
+  }
+  #botstack > #legend #lg-obs {
+    flex: none;
+    font-size: var(--fs-micro);
+    color: var(--text-mute);
+    font-variant-numeric: tabular-nums;
+  }
+  #botstack > #legend #lg-obs:empty { display: none; }
+
+  #botstack > #legend #lg-unit { writing-mode: horizontal-tb; }
+
+  #botstack > #legend .lg-scale { display: block; }
+  #botstack > #legend #lg-bar {
+    width: auto;
+    height: 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    /* 90deg, low on the left. The desktop bar runs 0deg. Same stops. */
+    background: linear-gradient(90deg, var(--lg-stops, transparent 0%, transparent 100%));
+  }
+  #botstack > #legend #lg-ticks {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    margin-top: 5px;
+    font-size: var(--fs-micro);
+    color: var(--text-mute);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- The transport, in the same card language ----
+     Two rows, because one is a lie at 392px. Transport, then the scrub track
+     across the full width. Laid out as areas rather than source order so the
+     track can span without moving anything in the markup. */
+  #botstack > #timeline {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    grid-template-areas:
+      "prev play next label"
+      "track track track track";
+    align-items: center;
+    gap: 6px 8px;
+    background: rgba(14, 17, 23, 0.90);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 16px;
+    padding: 8px 12px 10px;
+    box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.85);
+  }
+  #botstack > #timeline.hidden { display: none; }
+  #botstack > #timeline > #tl-prev  { grid-area: prev; }
+  #botstack > #timeline > #tl-play  { grid-area: play; }
+  #botstack > #timeline > #tl-next  { grid-area: next; }
+  #botstack > #timeline > #tl-track { grid-area: track; min-width: 0; }
+
+  /* The scrub track is 44px tall on a phone (--hit) and its drawn line sits at
+     the vertical centre. `.tl-end` anchors at `top: 14px`, so on a touch-sized
+     track the line ran straight THROUGH "-2h 06m" and read as a strikethrough.
+     The span labels belong under the line, not on it. */
+  #botstack > #timeline .tl-end {
+    top: auto;
+    bottom: 1px;
+  }
+  /* The NOW / LATEST marker labels itself from the marker's own position, so
+     with no nowcast publishing the marker sits at the right end of the loop
+     and its centred label was cut in half by the card edge -- it rendered as
+     "L...EST". Anchoring the label's RIGHT edge to the marker keeps it inside
+     the track whenever the marker is late in the loop, which is the only time
+     it can overflow; a marker early in the loop has the whole track to its
+     right and nothing to collide with. */
+  #botstack > #timeline #tl-now::after {
+    left: auto;
+    right: 0;
+    transform: none;
+    top: -12px;
+  }
+  #botstack > #timeline > #tl-label {
+    grid-area: label;
+    text-align: right;
+    justify-self: end;
+    font-size: var(--fs-xs);
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* ---- The warning card joins the card language ----
+     It was a full-bleed square panel sitting 8px off each edge while every
+     other surface in the stack is inset 10 with a 16px radius, which read as
+     two different apps stacked on top of each other. It is not a stack member
+     -- it floats above, off the measured height -- but it has to look like
+     one. */
+  #gfx .gfx-warning {
+    left: 10px; right: 10px;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.85);
+  }
+
+  /* ── Everything that must clear the stack ─────────────────────────────
+     `--botstack-h` is MEASURED, by a ResizeObserver in app.js, not guessed.
+     That is the difference between this and what it replaces: one number,
+     observed from the thing itself, instead of seven constants describing a
+     layout nobody re-measured after it changed.
+
+     The fallback is 0px and it is deliberate. If the observer never runs,
+     these land at the sheet peek -- overlapping the stack, which is visible
+     and reportable -- rather than floating in the middle of the map, which
+     looks intentional and hides the failure. */
+  #gfx .gfx-warning {
+    bottom: calc(var(--sheet-peek) + var(--botstack-h, 0px)
+                 + env(safe-area-inset-bottom, 0px) + 18px);
+  }
+  #locate-btn {
+    bottom: calc(var(--sheet-peek) + var(--botstack-h, 0px)
+                 + env(safe-area-inset-bottom, 0px) + 18px);
+  }
+  #toast {
+    bottom: calc(var(--sheet-peek) + var(--botstack-h, 0px)
+                 + env(safe-area-inset-bottom, 0px) + 78px);
+  }
+  /* The docked alerts panel is a full surface, not a stack member; it sits
+     directly on the sheet and the stack rides above it. */
+  #alerts-panel {
+    bottom: calc(var(--sheet-peek) + env(safe-area-inset-bottom, 0px) + 8px);
+  }
 }

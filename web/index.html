@@ -55,8 +55,15 @@
        It used to be a `document.createElement('div')` passed straight into the
        Viewer options and never appended to anything, so Cesium wrote fourteen
        credits into a node that was not on the page and none of them was ever
-       seen (issues.md 66). Keep this element in the document. -->
-  <div id="credits" aria-label="Data sources"></div>
+       seen (issues.md 66). Keep this element in the document.
+
+       MOVED 2026-09-18 into #botstack, near the legend. It used to live here
+       and position itself with `bottom: calc(var(--sheet-peek) + 6px)`, one of
+       seven elements each guessing where the other six were. Being empty until
+       Cesium fills it, it measured ZERO HEIGHT, so its injected text grew
+       upward straight through the warning card sitting at peek + 52. An
+       element cannot reserve space it does not know it needs; the stack
+       reserves it by laying out instead. -->
 
   <!-- Where am I.
        The first thing anyone does with a weather app on a phone is find out
@@ -741,28 +748,7 @@
        product on the globe rather than only radar. setStamp() feeds it. -->
 
   <!-- ─────────  RADAR / SATELLITE TIMELINE  ───────── -->
-  <div id="timeline" class="hidden">
-    <button id="tl-prev"  class="tl-btn" aria-label="Previous frame">◀</button>
-    <button id="tl-play"  class="tl-btn tl-play" aria-label="Play/pause">▶</button>
-    <button id="tl-next"  class="tl-btn" aria-label="Next frame">▶|</button>
-    <div id="tl-track">
-      <div id="tl-fill"></div>
-      <div id="tl-now" data-label="NOW" title="now"></div>
-      <input type="range" id="tl-range" min="0" max="0" step="1" value="0">
-      <!-- The ends of the loop. The track carried a NOW marker and nothing
-           else, so the one thing it never said was how far back the loop
-           reaches or how far the nowcast runs -- the span you are scrubbing. -->
-      <span id="tl-from" class="tl-end mono"></span>
-      <span id="tl-to" class="tl-end tl-end-r mono"></span>
-    </div>
-    <span id="tl-label" class="mono">—</span>
-    <select id="tl-speed" class="tl-speed" aria-label="Playback speed"
-            title="Playback speed">
-      <option value="600">1x</option>
-      <option value="300">2x</option>
-      <option value="150">4x</option>
-    </select>
-  </div>
+  <!-- #timeline MOVED 2026-09-18 into #botstack, below. -->
 
   <!-- The floating draw / panes / basemap strip that used to sit at the top
        right of the map is gone: drawing and panes are icons in the rail head,
@@ -804,16 +790,74 @@
     <button id="cb-done" class="tool-btn is-primary" title="Finish selecting">Done</button>
   </div>
 
-  <!-- ─────────  COLOUR SCALE LEGEND  ───────── -->
-  <!-- Vertical, on the right edge of the map, the way every broadcast radar
-       app draws it. The bar and the tick column are siblings inside .lg-scale
-       so the labels line up with the gradient rather than sitting under it. -->
-  <div id="legend" class="hidden">
-    <div class="lg-head"><span id="lg-unit" class="mono">dBZ</span><span id="lg-title">REFLECTIVITY</span></div>
-    <div class="lg-scale">
-      <div id="lg-bar"></div>
-      <div id="lg-ticks" class="mono"></div>
+  <!-- ═════════  THE BOTTOM STACK  ═════════
+       Seven elements used to position themselves independently off
+       `--sheet-peek` plus a hand-picked offset: credits +6, timeline +8,
+       warning +52, legend +56, locate +16, toast +72. Each was guessing where
+       the other six were, and the guesses were wrong the moment any of them
+       changed height. The credit strip is empty until Cesium fills it at
+       runtime, so it measured zero and its text climbed through the warning
+       card.
+
+       This is one stack that lays out. Order here is reading order, top to
+       bottom: what is happening, when, what the colours mean, who the data
+       belongs to. A hidden child collapses to nothing and the rest close up,
+       which is the behaviour the arithmetic was trying and failing to fake.
+
+       On desktop the wrapper is `display: contents`, so it disappears from
+       layout entirely and every child positions exactly as it did before.
+       It only becomes a flex column at the phone breakpoint. -->
+  <div id="botstack">
+
+    <div id="timeline" class="hidden">
+      <button id="tl-prev"  class="tl-btn" aria-label="Previous frame">◀</button>
+      <button id="tl-play"  class="tl-btn tl-play" aria-label="Play/pause">▶</button>
+      <button id="tl-next"  class="tl-btn" aria-label="Next frame">▶|</button>
+      <div id="tl-track">
+        <div id="tl-fill"></div>
+        <div id="tl-now" data-label="NOW" title="now"></div>
+        <input type="range" id="tl-range" min="0" max="0" step="1" value="0">
+        <!-- The ends of the loop. The track carried a NOW marker and nothing
+             else, so the one thing it never said was how far back the loop
+             reaches or how far the nowcast runs -- the span you are scrubbing. -->
+        <span id="tl-from" class="tl-end mono"></span>
+        <span id="tl-to" class="tl-end tl-end-r mono"></span>
+      </div>
+      <span id="tl-label" class="mono">—</span>
+      <select id="tl-speed" class="tl-speed" aria-label="Playback speed"
+              title="Playback speed">
+        <option value="600">1x</option>
+        <option value="300">2x</option>
+        <option value="150">4x</option>
+      </select>
     </div>
+
+    <!-- ─────────  COLOUR SCALE LEGEND  ─────────
+         Don, 2026-09-18: "D has only buttons. Some info graphics are needed to
+         tell the user what they are looking at. Like the colored severity bar."
+
+         That is this element's job and it was not doing it. It was a 172px
+         chip in the corner that hid itself, so the one thing on screen that
+         explains what the colours on the globe MEAN was the easiest thing to
+         miss. A person who cannot read radar has to be able to learn what red
+         means without leaving the map.
+
+         It is now a full-width information card: the field being drawn, the
+         units, when it was observed, and the ramp with its numerals. -->
+    <div id="legend" class="hidden">
+      <div class="lg-head">
+        <span id="lg-title">REFLECTIVITY</span>
+        <span id="lg-unit" class="mono">dBZ</span>
+        <span id="lg-obs" class="mono"></span>
+      </div>
+      <div class="lg-scale">
+        <div id="lg-bar"></div>
+        <div id="lg-ticks" class="mono"></div>
+      </div>
+    </div>
+
+    <div id="credits" aria-label="Data sources"></div>
+
   </div>
 
   <!-- ─────────  HOVER TOOLTIP  ───────── -->
