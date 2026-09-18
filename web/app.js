@@ -13567,6 +13567,23 @@ function syncBotstackHeight() {
     ? 0
     : Math.ceil(el.getBoundingClientRect().height);
   document.documentElement.style.setProperty('--botstack-h', `${h}px`);
+
+  // The warning card is NOT a stack member -- it floats above the stack, off
+  // that same measured height -- so anything that has to clear the WARNING
+  // needs its height too. Only the locate button does, and on device it was
+  // landing squarely on top of the card's right-hand end.
+  //
+  // Published as its own variable rather than folded into --botstack-h,
+  // because the two mean different things: the stack's height is what sits
+  // ABOVE the sheet, and this is what sits above the stack. Folding them would
+  // have pushed the card up by its own height as well.
+  //
+  // Zero when there is no warning, so the button drops back down on its own.
+  const warn = document.querySelector('#gfx .gfx-warning');
+  const visible = warn && !warn.classList.contains('hidden') &&
+                  getComputedStyle(warn).display !== 'none';
+  const wh = visible ? Math.ceil(warn.getBoundingClientRect().height) : 0;
+  document.documentElement.style.setProperty('--gfxwarn-h', `${wh}px`);
 }
 
 function initBotstackHeight() {
@@ -13579,6 +13596,25 @@ function initBotstackHeight() {
     const ro = new ResizeObserver(syncBotstackHeight);
     ro.observe(el);
     for (const c of el.children) ro.observe(c);
+
+    // The warning card is created on demand by gfxEl(), so there is nothing to
+    // observe at boot. Watch #gfx for the card arriving, then observe the card
+    // itself -- a longer warning name wraps to a second line and changes its
+    // height without #gfx changing at all.
+    const gfx = document.getElementById('gfx');
+    if (gfx && window.MutationObserver) {
+      const seen = new WeakSet();
+      const attach = () => {
+        const warn = gfx.querySelector('.gfx-warning');
+        if (warn && !seen.has(warn)) { seen.add(warn); ro.observe(warn); }
+        syncBotstackHeight();
+      };
+      new MutationObserver(attach).observe(gfx, {
+        childList: true, subtree: true, attributes: true,
+        attributeFilter: ['class', 'style'],
+      });
+      attach();
+    }
   }
   window.addEventListener('resize', syncBotstackHeight);
   window.addEventListener('orientationchange', syncBotstackHeight);
