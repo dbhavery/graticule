@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Graticule — overnight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{color-scheme:dark}
+body{
+  margin:0;background:#101215;color:#e9ecef;
+  font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;padding:0 0 90px;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+h1{font-size:31px;font-weight:700;letter-spacing:-.02em;margin:46px 0 10px}
+.sub{color:#8c949e;max-width:74ch;margin:0 0 6px}
+.sub b{color:#e9ecef;font-weight:600}
+.meta{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:#6b727b;margin-top:16px}
+h2{font-size:21px;font-weight:650;letter-spacing:-.01em;margin:52px 0 6px;
+   padding-top:26px;border-top:1px solid rgba(255,255,255,.10)}
+h3{font-size:15px;font-weight:600;margin:26px 0 6px;color:#cfd5dc}
+p{margin:0 0 12px;color:#aab2bb;max-width:78ch}
+p b,li b{color:#e9ecef;font-weight:600}
+code{font-family:"JetBrains Mono",monospace;font-size:12.5px;
+     background:rgba(255,255,255,.07);padding:1px 6px;border-radius:3px;color:#dbe1e8}
+ul{margin:0 0 14px;padding-left:20px;color:#aab2bb;max-width:78ch}
+li{margin-bottom:7px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px;margin:22px 0}
+figure{margin:0}
+figure img{display:block;width:100%;height:auto;border-radius:12px;
+           border:1px solid rgba(255,255,255,.11);background:#000}
+figcaption{font-size:12.5px;color:#8c949e;margin-top:9px}
+figcaption b{color:#e9ecef}
+.tag{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.09em;
+     text-transform:uppercase;padding:2px 8px;border-radius:999px;margin-bottom:8px}
+.bad{background:rgba(220,70,60,.16);color:#ff9b8f;border:1px solid rgba(220,70,60,.4)}
+.good{background:rgba(40,190,120,.15);color:#6ee7a8;border:1px solid rgba(40,190,120,.38)}
+.ask{background:rgba(255,170,40,.14);color:#ffc266;border:1px solid rgba(255,170,40,.36)}
+table{border-collapse:collapse;width:100%;max-width:760px;margin:16px 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 14px 8px 0;border-bottom:1px solid rgba(255,255,255,.09)}
+th{color:#8c949e;font-weight:600;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase}
+td{color:#c3cad2;font-variant-numeric:tabular-nums}
+td.n{font-family:"JetBrains Mono",monospace;color:#e9ecef}
+.commits td:first-child{font-family:"JetBrains Mono",monospace;color:#8ab4f8;white-space:nowrap}
+.note{border-left:2px solid rgba(255,255,255,.18);padding:2px 0 2px 16px;margin:18px 0;color:#9aa3ac}
+@media(max-width:780px){.wrap{padding:0 16px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Graticule, overnight</h1>
+<p class="sub">You picked <b>D, with additions</b>. Here is what landed, what I found on the way, and the one thing I want you to decide with your eyes rather than let me decide for you.</p>
+<p class="sub">Every screenshot below is real: the phone frames are the shipping APK running on the emulator, the desktop frame is the app at 1440&times;900. Nothing here is a mockup.</p>
+<p class="meta">5 commits pushed to dev &middot; seed 62a73d06 &middot; APK 20.5 MB &middot; verified on Medium_Phone_API_36.1 &middot; reviewed by a fresh pass, disposition FIX, all findings closed</p>
+
+<h2>The bug that started this is gone</h2>
+<p>The attribution strip printed through the severe-weather card. You saw it last night: <b>"ARTHUR COUNTIES"</b> buried under the Google credits.</p>
+
+<div class="cols">
+  <figure>
+    <span class="tag bad">Before</span>
+    <img src="shots/before_band.jpg" alt="Credits printing through the warning card">
+    <figcaption><b>Before.</b> The county name and the Google attribution occupy the same pixels. Two elements, neither aware of the other.</figcaption>
+  </figure>
+  <figure>
+    <span class="tag good">After</span>
+    <img src="shots/after_band.jpg" alt="The bottom stack laid out cleanly">
+    <figcaption><b>After.</b> Warning, transport, colour scale, attribution. Four rows, no collisions, on the real device.</figcaption>
+  </figure>
+</div>
+
+<h3>Why it happened, because the cause matters more than the fix</h3>
+<p>Seven elements each positioned themselves off the sheet height plus a number somebody picked by eye: credits +6, timeline +8, warning +52, legend +56, locate +16, toast +72. <b>Every one of those numbers is a claim about how tall the other six are.</b></p>
+<p>The credit strip proved it. It is empty markup that Cesium fills in <i>after</i> the page loads, and Cesium positions what it injects absolutely, so the strip held 18 pixels of legally required text and <b>measured zero</b>. It reserved no space, so its text climbed upward through the warning.</p>
+<p class="note">A number written today cannot be right about content that arrives tomorrow. Arithmetic cannot reserve space. Layout can.</p>
+<p>So the seven became one column that lays out, and the three things that float above it clear it by a height that is <b>measured</b>, not guessed. The proof that the chain works: fixing the credits took them from 0 to 18px, the measured stack height moved 159 to 177 — exactly +18 — and the locate button stepped up 18px on its own without anyone telling it to.</p>
+
+<h2>Your addition, built</h2>
+<p>You said D has only buttons and needs information graphics. That is now the colour scale, and it is a real card rather than a chip hiding in the corner: <b>what field is drawn, its units, the time that frame is actually valid for, and the ramp with its dBZ numbers.</b></p>
+<p>The timestamp matters more than it looks. A radar ramp with no time cannot tell live from an hour stale, and that difference is the whole value of the layer. A forecast frame is labelled <code>fcst</code>, because putting a bare timestamp on a prediction claims somebody measured it.</p>
+
+<div class="cols">
+  <figure>
+    <img src="shots/after_device.jpg" alt="The app on the phone">
+    <figcaption><b>The phone, whole.</b> Warning card, transport, the colour scale, attribution, sheet peek. The ramp is the only saturated thing on screen that is not weather.</figcaption>
+  </figure>
+  <figure>
+    <img src="shots/quick.jpg" alt="Quick layer tiles">
+    <figcaption><b>Quick layers.</b> Reaching a layer took five levels. These five are one tap. They hold no state of their own, so they cannot disagree with the switches below them.</figcaption>
+  </figure>
+</div>
+
+<h3>The naming trap I walked into</h3>
+<p>My first version put a tile called <b>Radar</b> eight lines above a division chip called <b>Radar</b>. One switches the layer on. The other navigates. Two verbs, one word, one screen. The <b>Quick layers</b> heading is what separates them, and <b>Alerts</b> became <b>Warnings</b> because there is an NWS Alerts tab directly above it.</p>
+
+<h2>Desktop did not move</h2>
+<figure>
+  <img src="shots/desktop.jpg" alt="Desktop layout at 1440x900">
+  <figcaption>The wrapper is <code>display: contents</code> above phone width, so it vanishes from layout and every desktop rule resolves exactly as before. The vertical dBZ scale on the right still reads high at the top: the colour data moved from JavaScript into CSS so each orientation picks its own direction from the same stops.</figcaption>
+</figure>
+
+<h2>The severity colour now explains itself</h2>
+<p>You said <b>"like the colored severity bar."</b> The ramp got a legend. The alert card's colour got nothing — and it turns out that was the more serious of the two.</p>
+<p>That colour is the <b>official NWS product colour</b>. NWS assigns Flood Warning <b>green</b>. So the card was rendering the words "FLOOD WARNING" in green. Correct for a forecaster who knows the palette. To everyone else, and your audience is explicitly everyone, <b>green on a warning reads as all-clear.</b></p>
+<p>I did not invent a new colour system — there is no honest way to overrule a national standard on a weather map. Instead the colour stops carrying the meaning <i>alone</i>: four pips filled to rank, the class in a word, and the line that says what it asks you to do.</p>
+
+<div class="cols">
+  <figure>
+    <span class="tag bad">First build, wrong</span>
+    <img src="shots/urg_wrong.jpg" alt="Urgency key showing STATEMENT on a flash flood warning">
+    <figcaption>A <b>Flash Flood Warning</b> labelled "STATEMENT &middot; Information only", with all four pips filled. Shipped to the device before I caught it.</figcaption>
+  </figure>
+  <figure>
+    <span class="tag good">Fixed</span>
+    <img src="shots/urg_right.jpg" alt="Urgency key showing WARNING correctly">
+    <figcaption>Four pips, <b>WARNING</b>, and what to do about it. A count of pips survives colour blindness and a bad screen.</figcaption>
+  </figure>
+</div>
+
+<p class="note">Worth knowing how that got through. I read a value called <code>p</code> as a 1&ndash;4 severity rank because that is what its fallback branch returns. The real table computes it as a <b>draw-order priority across all 111 NWS products</b>, so it runs to 111. When I grepped the surrounding code to check, it printed values 1 to 4 and <b>agreed with me</b> — because those were the fallback's numbers, not the table's. The only thing that disagreed was the screenshot.</p>
+
+<h2>The review, and two findings I threw out</h2>
+<p>A fresh reviewer with no memory of my reasoning went over the build. It returned <b>fix</b>, not rebuild, with eight material findings. Five were right and are fixed. Two were wrong and I checked rather than complied.</p>
+<ul>
+  <li><b>"The credit link is unclickable on desktop."</b> It is not. A child element re-enables pointer events its parent disabled, and line 1420 does exactly that. Hit-tested the live DOM: the click lands on the link.</li>
+  <li><b>"The sheet covers 93% of the map, so the one-tap win is thrown away."</b> It measured a state <b>my own test script created</b> by forcing the sheet fully open. A real tap goes to the half detent: <b>57% of the map stays visible</b>, and the Quick Layers tiles sit entirely inside it.</li>
+</ul>
+<p>The five it got right: the severity key above, a 6px overprint I caused on desktop, a rule that has never worked, a state desync in my own code, and the accent needing to be written down. All fixed and verified.</p>
+
+<h3>The one that stung</h3>
+<p>A rule hiding the 1 / 2 / 4 map selector on phones, with a paragraph explaining exactly why, <b>has never once worked.</b> A selector elsewhere in the file is more specific and silently beat it. A documented intention the stylesheet quietly overruled, for as long as it has existed. Now fixed and measured: <code>display: flex</code> &rarr; <code>none</code> at 412px.</p>
+
+<h2><span class="tag ask">Your call</span>The accent colour, and a problem with it</h2>
+<p>D's mockup used blue. The app currently uses cyan. I did not switch a token used in 700 places overnight with no way for you to look at it first.</p>
+<p>But while checking, I found something that applies to <b>both</b>: the reflectivity ramp's low end <b>is cyan and blue</b>, roughly 5 to 25 dBZ. So the chrome and light rain are drawn from the same part of the spectrum either way.</p>
+
+<div class="cols">
+  <figure>
+    <img src="shots/accent_cyan.jpg" alt="Cyan accent">
+    <figcaption><b>1. Cyan</b> <code>#5cd6ff</code><br>What it is today. Brightest of the three, and closest to the 5&ndash;15 dBZ band.</figcaption>
+  </figure>
+  <figure>
+    <img src="shots/accent_blue.jpg" alt="Blue accent">
+    <figcaption><b>2. Blue</b> <code>#3b82f6</code><br>What D's mockup used. Calmer, sits around 20&ndash;25 dBZ. The tile label loses a little contrast.</figcaption>
+  </figure>
+  <figure>
+    <img src="shots/accent_neutral.jpg" alt="Neutral accent">
+    <figcaption><b>3. Neutral</b> <code>#e8edf3</code><br>No collision with weather at all, because it takes no colour from the ramp. But the filled chip becomes the brightest block on screen.</figcaption>
+  </figure>
+</div>
+
+<p><b>My recommendation: blue, with one change.</b> You chose D and blue is D, and the collision is survivable because chrome-blue is small and hard-edged while data-blue is large and soft. But no filled chip should ever be the brightest thing in the frame, so the active chip becomes a tinted fill rather than a solid block. That keeps your pick and the promise that the weather leads.</p>
+<p>Say <b>1</b>, <b>2</b>, or <b>3</b>, or overrule me.</p>
+
+<h2>What shipped</h2>
+<table class="commits">
+  <tr><th>Commit</th><th>What</th></tr>
+  <tr><td>e2c714e</td><td>The bottom stack lays out instead of guessing; the legend explains itself</td></tr>
+  <tr><td>e4171c8</td><td>Quick layers: the five people reach for are one tap, not five levels</td></tr>
+  <tr><td>899f8a8</td><td>The locate button clears the warning card, measured not assumed</td></tr>
+  <tr><td>5bacd04</td><td>The direction contract recorded in the markup, where a build cannot lose it</td></tr>
+  <tr><td>84b2e1f</td><td>Finish-review fixes: the severity colour now explains itself</td></tr>
+</table>
+<p>Plus <code>DESIGN.md</code>, written from what actually got built rather than what was intended, and <code>issues.md</code> 70 for what was deliberately left.</p>
+
+<h2>What I did not do, and why</h2>
+<ul>
+  <li><b>Did not switch the accent.</b> Above. Your call, not mine to make while you were asleep.</li>
+  <li><b>Did not merge the three tabs into the division chips.</b> That is a navigation rewrite, and shipping one overnight with no way for you to try it is a worse trade than leaving it. Quick layers solves the common path; the tab merge is still open.</li>
+  <li><b>Did not consolidate the stylesheet.</b> <code>#legend</code> is defined five times and <code>#hud</code> four, successive rewrites stacked on each other. That cost me real time last night and it deserves its own pass with before/after screenshots, not a quiet cleanup buried inside a feature. Logged as issues.md 70.</li>
+  <li><b>Did not chase 4px.</b> Desktop has 4 pixels of horizontal overflow. Phone is clean. Logged.</li>
+</ul>
+
+<h3>Two things about the tools, not the app</h3>
+<ul>
+  <li>The design skill's own documented command, <code>node .claude/skills/impeccable/scripts/...</code>, is a <b>silent no-op</b> on this machine. That path is a junction, so the script's own "am I the main program?" check fails and it exits successfully having done nothing. Run through the real path it worked immediately.</li>
+  <li>The design detector runs <b>degraded</b> here: four parser modules are missing, so it never evaluates custom properties, selector matching or colour contrast. It reported 11 issues and none in the new code, but that is an undercount, not a clean bill of health.</li>
+</ul>
+
+<p class="meta">All five commits are on dev and pushed. The APK on the emulator is the build in these screenshots.</p>
+
+</div>
+</body>
+</html>
