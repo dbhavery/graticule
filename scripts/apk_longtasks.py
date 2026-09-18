@@ -49,7 +49,16 @@ MAX_TOTAL_BLOCKING_MS = 2500
 
 async def run(ws_url: str, seconds: int) -> dict:
     import websockets
-    async with websockets.connect(ws_url, max_size=256 * 1024 * 1024) as ws:
+    # ping_interval=None, and it is not optional. The devtools websocket is
+    # answered BY the page's main thread, so the library's 20 s keepalive is a
+    # ceiling on the very thing being measured: a build that blocks for longer
+    # than one ping kills the connection and reports nothing instead of
+    # reporting a large number. Measured 2026-09-17 -- this app survived it
+    # (worst task 14.2 s) and the build it was being compared against did not,
+    # so the instrument was silently able to measure only the faster of the
+    # two. An instrument with a shorter fuse than the defect cannot see it.
+    async with websockets.connect(ws_url, max_size=256 * 1024 * 1024,
+                                  ping_interval=None) as ws:
         n = 0
 
         async def call(method: str, params: dict | None = None):

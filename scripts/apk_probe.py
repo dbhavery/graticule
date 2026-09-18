@@ -28,7 +28,11 @@ import sys
 import time
 import urllib.request
 
-APP_ID = "dev.dbhavery.graticule"
+# Overridable so that ONE instrument can measure two different APKs. Comparing
+# this app against another build is only meaningful if the same file does both
+# readings; a second copy of this script with the package name edited is a
+# second instrument wearing the same name.
+APP_ID = os.environ.get("GRATICULE_PROBE_APP_ID") or "dev.dbhavery.graticule"
 PORT = 9222
 
 ADB = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk",
