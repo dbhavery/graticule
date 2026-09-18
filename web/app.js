@@ -11500,6 +11500,83 @@ function gfxRenderReadout(cfg) {
   el.appendChild(cols);
 }
 
+/* The one thing on the alert card that nothing explained.
+ *
+ * `warnStyle()` returns the OFFICIAL NWS product colour, which is correct and
+ * unreadable at the same time. NWS assigns Flood Warning green, so the card
+ * rendered "FLOOD WARNING" in green -- and to anyone who has not memorised the
+ * NWS palette, green on a warning reads as all-clear. Don's audience is
+ * "global activity enthusiasts / everyone", which is exactly the group that
+ * has not memorised it.
+ *
+ * The fix is not a new colour system. The NWS colours are right for the people
+ * who know them and there is no honest way to overrule a national standard on
+ * a weather map. The fix is to stop making colour carry the meaning ALONE:
+ * say the class in words, and rank it, so the card is legible to both
+ * audiences at once.
+ *
+ * The class is read from the product NAME, which is the NWS convention: the
+ * last word of "Flash Flood Warning" is what tells you what to do about it.
+ *
+ * NOT from `warnStyle().p`. That looks like a 1-4 severity rank in the
+ * fallback branch, and it is not -- the table computes
+ * `p: NWS_EVENT_ORDER.length - i`, a DRAW-ORDER priority across all 111 NWS
+ * products, so it runs to 111. Reading it as severity shipped a FLASH FLOOD
+ * WARNING card labelled "STATEMENT / Information only." with all four pips
+ * filled, which is worse than no key at all. Caught only by looking at the
+ * device; a grep of the surrounding source showed p values 1-4 and agreed
+ * with the mistake, because those were the fallback's literals.
+ */
+const URGENCY = {
+  4: { word: 'WARNING',   say: 'Happening now or about to. Act.' },
+  3: { word: 'WATCH',     say: 'Conditions are favourable. Be ready.' },
+  2: { word: 'ADVISORY',  say: 'Expect inconvenience, not danger.' },
+  1: { word: 'STATEMENT', say: 'Information only.' },
+};
+
+function urgencyRank(evt) {
+  const s = String(evt || '');
+  // "Tornado Emergency" and "Flash Flood Emergency" carry no "Warning" in the
+  // name and are the most severe products NWS issues.
+  if (/Emergency/i.test(s)) return 4;
+  if (/Warning/i.test(s))   return 4;
+  if (/Watch/i.test(s))     return 3;
+  if (/Advisory/i.test(s))  return 2;
+  return 1;
+}
+
+function gfxUrgencyKey(evt) {
+  const rank = urgencyRank(evt);
+  const u = URGENCY[rank] || URGENCY[1];
+  const wrap = document.createElement('div');
+  wrap.className = 'gfx-urg';
+
+  // Four pips, filled up to this alert's rank. A colour-blind reader, or one
+  // who has never seen an NWS product before, gets the severity from a count.
+  const pips = document.createElement('span');
+  pips.className = 'gfx-urg-pips';
+  pips.setAttribute('aria-hidden', 'true');
+  for (let i = 1; i <= 4; i += 1) {
+    const pip = document.createElement('i');
+    if (i <= rank) pip.className = 'is-on';
+    pips.appendChild(pip);
+  }
+  wrap.appendChild(pips);
+
+  const word = document.createElement('span');
+  word.className = 'gfx-urg-word';
+  word.textContent = u.word;
+  wrap.appendChild(word);
+
+  const say = document.createElement('span');
+  say.className = 'gfx-urg-say';
+  say.textContent = u.say;
+  wrap.appendChild(say);
+
+  wrap.setAttribute('aria-label', `${u.word}. ${u.say}`);
+  return wrap;
+}
+
 function gfxRenderWarning(cfg) {
   const f = cfg.on ? gfxTopAlert() : null;
   const el = gfxShell('warning', cfg, !!f);
@@ -11518,6 +11595,7 @@ function gfxRenderWarning(cfg) {
 
   el.innerHTML = '';
   el.appendChild(gfxAccentBar());
+  el.appendChild(gfxUrgencyKey(p.event));
   const body = document.createElement('div');
   body.className = 'gfx-cols';
   body.appendChild(gfxCol(
@@ -13506,12 +13584,17 @@ function initQuickTiles() {
       // "More" is not a seventh layer; it is the way back to the full nav.
       const modes = document.getElementById('wx-modes');
       if (modes) {
-        // The sheet has to be open far enough to show what we scroll to,
-        // or this silently scrolls something the user cannot see.
-        if (!document.body.classList.contains('sheet-full')) {
-          document.body.classList.remove('sheet-half');
-          document.body.classList.add('sheet-full');
-        }
+        // Go through sheetGo, NOT by setting the classes here. The detent is
+        // owned by SHEET.at and the classes are its rendering; writing the
+        // class directly left the index stale, so the next tap on the handle
+        // stepped from the detent the sheet used to be at. One owner per piece
+        // of state, and this is not it.
+        //
+        // Full, deliberately: "More" is the request to see all 38 layers, and
+        // a detent that shows half of them answers a question nobody asked.
+        // The map stays visible at every other detent, and a tap on the handle
+        // still cycles peek -> half -> full from here.
+        sheetGo(SHEET.detents.indexOf('full'));
         modes.scrollIntoView({ block: 'start' });
       }
       return;
@@ -13584,6 +13667,23 @@ function syncBotstackHeight() {
                   getComputedStyle(warn).display !== 'none';
   const wh = visible ? Math.ceil(warn.getBoundingClientRect().height) : 0;
   document.documentElement.style.setProperty('--gfxwarn-h', `${wh}px`);
+
+  // The credit strip's own height, published on BOTH breakpoints.
+  //
+  // Making the injected Cesium node `position: static` gave this element real
+  // height for the first time -- which is the fix -- and on desktop that
+  // height had nowhere to go. The strip grew upward from `bottom: 8px` into
+  // the transport sitting at `bottom: 18px`: measured 2026-09-18 at 1440x900,
+  // #credits y875-892 against #tl-label y853-881, a 6px overprint. It was
+  // invisible before only because a zero-height box cannot collide with
+  // anything.
+  //
+  // So the desktop transport clears it by the measured value rather than by a
+  // new constant. Attribution is a licence condition; when it needs more room
+  // it takes it, and the chrome above moves.
+  const cr = document.getElementById('credits');
+  const ch = cr ? Math.ceil(cr.getBoundingClientRect().height) : 0;
+  document.documentElement.style.setProperty('--credits-h', `${ch}px`);
 }
 
 function initBotstackHeight() {

@@ -3049,7 +3049,12 @@ body.is-presenting #rail-open { display: none; }
 #timeline {
   left: calc(var(--rail-w) + 20px); right: 20px;
   width: auto; transform: none;
-  bottom: 18px;
+  /* Clears the credit strip by its MEASURED height, not by a new constant.
+     The strip only started having height on 2026-09-18, when the injected
+     Cesium node was put back in flow; before that a zero-height box could not
+     collide with anything, which is why `18px` looked correct for so long.
+     Measured at 1440x900: #credits y875-892 over #tl-label y853-881. */
+  bottom: calc(18px + var(--credits-h, 0px));
   background: none; border: 0; backdrop-filter: none;
   padding: 0;
   gap: 10px;
@@ -5018,8 +5023,15 @@ div[data-requires].is-off .wf-item.is-active {
      control that cannot produce a usable result, and it was taking a row of
      the sheet to say so. One map is the only honest option here, so the
      choice does not appear. `Present` stays: hiding the chrome to get the
-     whole screen back is MORE useful on a phone, not less. */
-  #panebar { display: none; }
+     whole screen back is MORE useful on a phone, not less.
+
+     `#rail-tools #panebar`, not `#panebar`. The plain selector was written
+     here and never won: line 2827 sets `display: flex` at two IDs, and a
+     media query adds NO specificity, so the 412px screen kept showing MAPS
+     1 / 2 / 4 for as long as this rule has existed. The paragraph above was
+     right and the selector was losing silently, which is the worst pairing --
+     a documented intention that the stylesheet quietly overrules. */
+  #rail-tools #panebar { display: none; }
 }
 
 /* ═════════════════════════════════════════════════════════════════════════
@@ -5392,4 +5404,69 @@ div[data-requires].is-off .wf-item.is-active {
      here so a future edit to min-height cannot quietly drop below it. */
   .qt { min-height: max(76px, var(--hit)); font-size: var(--fs-sm); }
   .qt svg { width: 24px; height: 24px; }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   THE URGENCY KEY                                       added 2026-09-18
+   ═════════════════════════════════════════════════════════════════════════
+   Don asked for information graphics that say what you are looking at, and
+   named the severity bar specifically. The colour scale got a legend; the
+   alert card's colour got nothing, and its colour is the OFFICIAL NWS product
+   colour -- which means the card rendered "FLOOD WARNING" in green, because
+   green is what NWS assigns Flood Warning. To anyone who has not memorised
+   that palette, and the audience for this app is explicitly everyone, green
+   on a warning reads as all-clear.
+
+   Colour keeps its NWS meaning. It just stops carrying the meaning alone:
+   four pips filled to rank, the class in a word, and the line that says what
+   the class asks a person to do. A count survives colour blindness, a bad
+   screen, and never having seen an NWS product before.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+.gfx-urg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 0;
+  font-family: var(--sans);
+  min-width: 0;
+}
+.gfx-urg-pips { display: inline-flex; gap: 3px; flex: none; }
+.gfx-urg-pips i {
+  width: 5px; height: 11px; border-radius: 1.5px;
+  background: rgba(255, 255, 255, 0.16);
+  display: block;
+}
+.gfx-urg-pips i.is-on { background: var(--gfx-accent); }
+.gfx-urg-word {
+  flex: none;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-xwide);
+  color: var(--gfx-accent);
+}
+.gfx-urg-say {
+  flex: 1 1 auto;
+  /* A grid/flex child holding a sentence will not shrink below its content
+     without this, which is the trap that pushed four elements off a 412px
+     screen in this app before. */
+  min-width: 0;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The broadcast styles hide their accent bar; the key goes with it, because
+   those layouts are authored for a 16:9 frame where the presenter narrates. */
+.gfx[data-style="2"] .gfx-urg,
+.gfx[data-style="3"] .gfx-urg { display: none; }
+
+@media (max-width: 780px), (max-height: 500px) {
+  /* The phone is the judging surface and this is the line that does the
+     explaining, so it gets the readable size, not the compact one. */
+  .gfx-urg { padding: 9px 14px 0; gap: 9px; }
+  .gfx-urg-word, .gfx-urg-say { font-size: var(--fs-xs); }
+  .gfx-urg-pips i { width: 6px; height: 13px; }
 }
