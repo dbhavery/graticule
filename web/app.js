@@ -3740,19 +3740,58 @@ async function maybeAttachOsmBuildings(cfg) {
   }
 }
 
+/* Google's Photorealistic 3D Tiles reach this app by two different routes, and
+   for a long time it only knew the expensive one.
+
+   A direct Google Map Tiles key is metered per session. Cesium ion also hosts
+   the same global tileset as asset 2275207, and an ion Community token reaches
+   it inside that plan's quota. So an ion token alone -- which this app already
+   asks for, and already uses for imagery and OSM Buildings -- is enough for
+   the photorealistic globe. Before this, `photoreal3d` was dark for anyone who
+   had not also set up Google billing, which is very nearly everyone.
+
+   Direct first when a Google key exists, because that route is the one whose
+   terms allow commercial use; ion is the fallback and the default. Each route
+   gets its own try, so a failure on the first does not skip the second. */
+const ION_GOOGLE_PHOTOREALISTIC_ASSET = 2275207;
+
 async function maybeAttachGoogle3DTiles(cfg) {
-  if (!cfg.google_maps_api_key) return;
-  try {
-    googleTileset = await Cesium.Cesium3DTileset.fromUrl(
-      `https://tile.googleapis.com/v1/3dtiles/root.json?key=${cfg.google_maps_api_key}`,
-      { showCreditsOnScreen: true }
-    );
-    googleTileset.show = false;
-    viewer.scene.primitives.add(googleTileset);
-    console.log('Google 3D Tiles tileset attached');
-    enable3DLayer('photoreal3d');
-  } catch (e) {
-    console.warn('Google 3D Tiles unavailable:', e);
+  const googleKey = String(cfg.google_maps_api_key || '').trim();
+  const ionToken = String(cfg.cesium_ion_token || '').trim();
+  if (!googleKey && !ionToken) return;
+
+  const routes = [];
+  if (googleKey) {
+    routes.push({
+      name: 'Google direct',
+      open: () => Cesium.Cesium3DTileset.fromUrl(
+        `https://tile.googleapis.com/v1/3dtiles/root.json?key=${googleKey}`,
+        { showCreditsOnScreen: true }
+      ),
+    });
+  }
+  if (ionToken) {
+    routes.push({
+      name: 'Cesium ion',
+      open: async () => Cesium.Cesium3DTileset.fromUrl(
+        await Cesium.IonResource.fromAssetId(ION_GOOGLE_PHOTOREALISTIC_ASSET,
+                                             { accessToken: ionToken }),
+        { showCreditsOnScreen: true }
+      ),
+    });
+  }
+
+  for (const route of routes) {
+    try {
+      googleTileset = await route.open();
+      googleTileset.show = false;
+      viewer.scene.primitives.add(googleTileset);
+      console.log(`Photorealistic 3D Tiles attached via ${route.name}`);
+      enable3DLayer('photoreal3d');
+      return;
+    } catch (e) {
+      console.warn(`Photorealistic 3D Tiles unavailable via ${route.name}:`, e);
+    }
   }
 }
 
@@ -3768,8 +3807,23 @@ function enable3DLayer(layer) {
 function toggleBuildings(on) {
   if (osmBuildingsTileset) fadeTileset(osmBuildingsTileset, on ? 0 : 1, on ? 1 : 0);
 }
+/* Photorealistic 3D Tiles carry their own terrain AND their own imagery, so
+   they are a REPLACEMENT for the globe surface, not a layer on top of it.
+   Cesium keeps drawing the ellipsoid regardless, and the globe wins wherever
+   the two disagree, so leaving it on means the tileset streams, bills, credits
+   Google on screen -- and is never the thing you are looking at. That was the
+   symptom: the layer read as "on", the attribution appeared, and the view was
+   still blurred base imagery.
+
+   Hiding the globe costs the layers that live ON the globe surface, and in
+   this app that is the border raster tiles and anything clamped to ground.
+   That is the right trade at the altitude this layer is for: at city scale a
+   state line is not what you came to see, and it comes straight back when the
+   layer goes off. */
 function togglePhotoreal3D(on) {
-  if (googleTileset) fadeTileset(googleTileset, on ? 0 : 1, on ? 1 : 0);
+  if (!googleTileset) return;
+  fadeTileset(googleTileset, on ? 0 : 1, on ? 1 : 0);
+  if (viewer?.scene?.globe) viewer.scene.globe.show = !on;
 }
 
 // ---------- Night Lights (NASA Black Marble via GIBS) -----------------------

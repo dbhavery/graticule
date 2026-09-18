@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -1016,7 +1017,21 @@ def run_server(port: int, host: str | None = None) -> None:
     needs 0.0.0.0. That is opt-in through GRATICULE_HOST or the `host`
     argument, so turning it on is a decision somebody made rather than a
     default somebody inherited.
+
+    `.env` is loaded HERE, not only in main.py. It used to be loaded only by
+    the pywebview launcher, so every other way of starting this server -- the
+    one the Android build talks to, a bare `run_server()`, anything under
+    scripts/ -- came up with every key blank and no complaint. The app then
+    degraded exactly as designed, to Esri imagery with no photorealistic tiles
+    and no OSM Buildings, which is indistinguishable from having no keys at
+    all. A real Cesium ion token and a real Google Maps key sat in `.env` for
+    weeks doing nothing because of it.
+
+    `load_dotenv()` does not overwrite a variable that is already set, so
+    scripts/run_keyless.py still wins: it exports the keys as empty strings
+    BEFORE this runs, and empty counts as set.
     """
+    load_dotenv()
     bind = host or os.getenv("GRATICULE_HOST", "127.0.0.1")
     if bind not in ("127.0.0.1", "localhost"):
         logger.warning(f"Serving on {bind}:{port} -- reachable from the network")
