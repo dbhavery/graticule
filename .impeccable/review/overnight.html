@@ -135,27 +135,34 @@ td.n{font-family:"JetBrains Mono",monospace;color:#e9ecef}
 <h3>The one that stung</h3>
 <p>A rule hiding the 1 / 2 / 4 map selector on phones, with a paragraph explaining exactly why, <b>has never once worked.</b> A selector elsewhere in the file is more specific and silently beat it. A documented intention the stylesheet quietly overruled, for as long as it has existed. Now fixed and measured: <code>display: flex</code> &rarr; <code>none</code> at 412px.</p>
 
-<h2><span class="tag ask">Your call</span>The accent colour, and a problem with it</h2>
-<p>D's mockup used blue. The app currently uses cyan. I did not switch a token used in 700 places overnight with no way for you to look at it first.</p>
-<p>But while checking, I found something that applies to <b>both</b>: the reflectivity ramp's low end <b>is cyan and blue</b>, roughly 5 to 25 dBZ. So the chrome and light rain are drawn from the same part of the spectrum either way.</p>
+<h2><span class="tag good">Settled</span>The accent is white</h2>
+<p>You picked white, over the cyan that was shipping and the blue in D&rsquo;s comp. It is now in the code, in <code>DESIGN.md</code>, and in the direction contract at the top of <code>index.html</code>, marked closed so a later session does not &ldquo;correct&rdquo; it back to a hue.</p>
+<p><b>It turned out to be the right answer for a reason I had not fully argued.</b> I told you blue was survivable because chrome-blue is small and hard-edged while data-blue is large and soft. True, but it was a defence, not a case. White needs no defence: the reflectivity ramp spans most of the colour wheel, so <b>every</b> hue is also a measurement somewhere on that scale. White is the one value a dark globe leaves unclaimed. The contract has always promised that the ramp is the only saturated field on screen; until now that sentence was not literally true.</p>
 
 <div class="cols">
   <figure>
-    <img src="shots/accent_cyan.jpg" alt="Cyan accent">
-    <figcaption><b>1. Cyan</b> <code>#5cd6ff</code><br>What it is today. Brightest of the three, and closest to the 5&ndash;15 dBZ band.</figcaption>
+    <img src="shots/accent_white_device.jpg" alt="The app on the emulator with a white accent">
+    <figcaption><b>On the device.</b> The one saturated thing in the frame is the radar. The card&rsquo;s orange is the official NWS product colour, carrying meaning, not decoration.</figcaption>
   </figure>
   <figure>
-    <img src="shots/accent_blue.jpg" alt="Blue accent">
-    <figcaption><b>2. Blue</b> <code>#3b82f6</code><br>What D's mockup used. Calmer, sits around 20&ndash;25 dBZ. The tile label loses a little contrast.</figcaption>
-  </figure>
-  <figure>
-    <img src="shots/accent_neutral.jpg" alt="Neutral accent">
-    <figcaption><b>3. Neutral</b> <code>#e8edf3</code><br>No collision with weather at all, because it takes no colour from the ramp. But the filled chip becomes the brightest block on screen.</figcaption>
+    <img src="shots/accent_white_desktop.jpg" alt="Desktop at 1440 wide with a white accent">
+    <figcaption><b>Desktop.</b> Selected chips are a tint plus a bright border plus white text, never a solid white block.</figcaption>
   </figure>
 </div>
 
-<p><b>My recommendation: blue, with one change.</b> You chose D and blue is D, and the collision is survivable because chrome-blue is small and hard-edged while data-blue is large and soft. But no filled chip should ever be the brightest thing in the frame, so the active chip becomes a tinted fill rather than a solid block. That keeps your pick and the promise that the weather leads.</p>
-<p>Say <b>1</b>, <b>2</b>, or <b>3</b>, or overrule me.</p>
+<p><b>What it costs, and what pays for it.</b> White sits a half-step from the body text colour, so <b>nothing can be &ldquo;on&rdquo; just by being coloured any more.</b> Every active control now differs from its resting state on three channels at once &mdash; fill, border weight and text tone &mdash; and would still read correctly in greyscale. That is written into the contract as a rule, because the first time someone adds a control and only changes its colour, it will be invisible.</p>
+<p>The change also retired <b>25 hardcoded cyan values</b> scattered through the stylesheet into four tokens. The next accent decision is one line instead of a sweep.</p>
+
+<h2><span class="tag good">Fixed</span>Three things white exposed that cyan was hiding</h2>
+<p>All three are the same defect as the overnight bug: an element positioned by a constant that stands in for another element&rsquo;s size.</p>
+<div class="cols">
+  <figure>
+    <img src="shots/accent_white_band.jpg" alt="The transport and legend on the device">
+    <figcaption><b>The scrubber handle now touches its own track.</b> It shared a <code>-8px</code> offset with the small rail sliders while its own track is 44px tall, so the handle floated 20px above the line it rides, attached to nothing. Visible in every phone screenshot ever taken of this app.</figcaption>
+  </figure>
+</div>
+<p><b>&ldquo;LATEST&rdquo; printed underneath that handle.</b> When no nowcast is published &mdash; which is most of the time &mdash; the marker sits at the end of the track, which is exactly where the handle parks. It restated the handle&rsquo;s own position and collided with it. It now appears only when there are forecast frames to its right, which is the only time it says anything.</p>
+<p><b>On desktop the locate button covered the frame&rsquo;s time</b> &mdash; 13px of <code>00:10Z -15m</code>, the one number the scrubber exists to report &mdash; and 5px of the legally required attribution line. Four things share that corner and each picked its own offset. It is now one stack: feed strip over button over credits, each clearing the next by a token or a measured height. Measured before and after, not eyeballed.</p>
 
 <h2>What shipped</h2>
 <table class="commits">
@@ -165,13 +172,13 @@ td.n{font-family:"JetBrains Mono",monospace;color:#e9ecef}
   <tr><td>899f8a8</td><td>The locate button clears the warning card, measured not assumed</td></tr>
   <tr><td>5bacd04</td><td>The direction contract recorded in the markup, where a build cannot lose it</td></tr>
   <tr><td>84b2e1f</td><td>Finish-review fixes: the severity colour now explains itself</td></tr>
+  <tr><td>7963b4e</td><td>The accent is white; hue stops carrying state, and three defects it exposed</td></tr>
 </table>
 <p>Plus <code>DESIGN.md</code>, written from what actually got built rather than what was intended, and <code>issues.md</code> 70 for what was deliberately left.</p>
 
 <h2>What I did not do, and why</h2>
 <ul>
-  <li><b>Did not switch the accent.</b> Above. Your call, not mine to make while you were asleep.</li>
-  <li><b>Did not merge the three tabs into the division chips.</b> That is a navigation rewrite, and shipping one overnight with no way for you to try it is a worse trade than leaving it. Quick layers solves the common path; the tab merge is still open.</li>
+    <li><b>Did not merge the three tabs into the division chips.</b> That is a navigation rewrite, and shipping one overnight with no way for you to try it is a worse trade than leaving it. Quick layers solves the common path; the tab merge is still open.</li>
   <li><b>Did not consolidate the stylesheet.</b> <code>#legend</code> is defined five times and <code>#hud</code> four, successive rewrites stacked on each other. That cost me real time last night and it deserves its own pass with before/after screenshots, not a quiet cleanup buried inside a feature. Logged as issues.md 70.</li>
   <li><b>Did not chase 4px.</b> Desktop has 4 pixels of horizontal overflow. Phone is clean. Logged.</li>
 </ul>
