@@ -2557,6 +2557,102 @@ function nearestPlaceLabel(lat, lon) {
   return km <= PLACE_NEAR_KM ? where : `${formatDistanceKm(km)} from ${where}`;
 }
 
+/* ---- Getting a fix ------------------------------------------------------
+   Measured on the emulator, against a device whose OS had a valid fix and
+   whose permissions were granted: `navigator.geolocation.getCurrentPosition`
+   inside the Capacitor WebView returned code 3, Timeout expired, after the
+   full 20 seconds. The raw web API is not the supported path on Android --
+   a WebView routes it through Play Services network location, which is
+   exactly what a bare emulator does not have. `@capacitor/geolocation` has
+   been a dependency of this app the whole time and was never called.
+
+   So: plugin first on native, web API otherwise. And a hard outer deadline on
+   both, because the plugin call did not fail on this emulator, it HUNG --
+   no resolve, no reject, forever. A button that spins for the rest of the
+   session is worse than one that says it could not get a fix. */
+const FIX_TIMEOUT_MS = 12_000;
+
+function isNativeShell() {
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform
+            && window.Capacitor.isNativePlatform());
+}
+
+function webFix(highAccuracy, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error('no geolocation')); return; }
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({
+        lat: p.coords.latitude, lon: p.coords.longitude,
+        accuracy: p.coords.accuracy, via: 'web',
+      }),
+      reject,
+      { enableHighAccuracy: highAccuracy, timeout: timeoutMs, maximumAge: 60_000 },
+    );
+  });
+}
+
+function getPositionOnce({ highAccuracy = true, timeoutMs = FIX_TIMEOUT_MS } = {}) {
+  const plugin = isNativeShell()
+    && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation;
+
+  const attempt = plugin
+    ? plugin.getCurrentPosition({
+        enableHighAccuracy: highAccuracy,
+        timeout: timeoutMs,
+        maximumAge: 60_000,
+      }).then((p) => ({
+        lat: p.coords.latitude, lon: p.coords.longitude,
+        accuracy: p.coords.accuracy, via: 'plugin',
+      })).catch((err) => {
+        // A refused permission is an answer, not a malfunction: retrying the
+        // same question through a second API would only prompt again.
+        if (err && (err.code === 1 || /denied|permission/i.test(err.message || ''))) {
+          throw err;
+        }
+        // Anything else -- a plugin that is not registered, a Play Services
+        // that will not answer -- is worth one try through the web API before
+        // telling the user it cannot be done.
+        return webFix(highAccuracy, timeoutMs);
+      })
+    : webFix(highAccuracy, timeoutMs);
+
+  /* The backstop, for the case the plugin neither resolves nor rejects. It
+     has to allow for BOTH tries when there is a plugin, or the deadline fires
+     during the web fallback and the fallback may as well not exist. */
+  const budget = (plugin ? 2 * timeoutMs : timeoutMs) + 1_500;
+  const deadline = new Promise((_, reject) => setTimeout(
+    () => reject(Object.assign(new Error('fix timed out'), { timedOut: true })),
+    budget));
+
+  return Promise.race([attempt, deadline]);
+}
+
+/* What the user should be told when a fix does not arrive. A denied
+   permission is a decision and gets a different sentence from a failure. */
+function fixErrorMessage(err) {
+  if (err && err.code === 1) {
+    return 'Location is off for Graticule. You can still set your area from the map.';
+  }
+  return 'Could not get a location fix. You can set your area from the map instead.';
+}
+
+/* The point under the middle of the screen. The always-available way to say
+   where you are: it needs no permission, no satellites and no Play Services,
+   and on a globe you are already looking at it is one gesture. */
+function mapCentrePoint() {
+  if (!viewer) return null;
+  const canvas = viewer.scene.canvas;
+  const cart = pickGlobe(new Cesium.Cartesian2(
+    canvas.clientWidth / 2, canvas.clientHeight / 2));
+  if (!cart) return null;                 // looking at space, not at the globe
+  const carto = Cesium.Cartographic.fromCartesian(cart);
+  if (!carto) return null;
+  return {
+    lat: Cesium.Math.toDegrees(carto.latitude),
+    lon: Cesium.Math.toDegrees(carto.longitude),
+  };
+}
+
 function alertRadiusKm() {
   const v = Number(settings.alertRadiusKm);
   return Number.isFinite(v) && v > 0 ? v : ALERT_RADIUS_DEFAULT_KM;
@@ -2591,6 +2687,7 @@ function initHomeArea() {
   const nameEl   = document.getElementById('home-name');
   const subEl    = document.getElementById('home-sub');
   const gpsBtn   = document.getElementById('home-use-gps');
+  const mapBtn   = document.getElementById('home-use-map');
   const clearBtn = document.getElementById('home-clear');
   const slider   = document.getElementById('alert-radius');
   const valEl    = document.getElementById('alert-radius-val');
@@ -2615,11 +2712,14 @@ function initHomeArea() {
         const near = rankedHazards().filter((x) => x.inArea).length;
         // Age only once it means something. "fix 0m old" is noise, and the
         // number matters exactly when the fix is stale enough to distrust.
+        // A place picked off the map has no age worth reporting -- it is
+        // where the user said they are, and that does not go stale.
         const ageH = h.at ? (Date.now() - h.at) / 3.6e6 : null;
-        const age = ageH != null && ageH > 0.08 ? `${formatAge(ageH)} old` : '';
+        const how = h.source === 'map' ? 'set from the map'
+          : (ageH != null && ageH > 0.08) ? `fix ${formatAge(ageH)} old` : '';
         subEl.textContent =
           `${near} hazard${near === 1 ? '' : 's'} within ${radiusLabel(alertRadiusKm())}`
-          + (age ? ` · fix ${age}` : '');
+          + (how ? ` · ${how}` : '');
       }
     }
     if (clearBtn) clearBtn.disabled = !h;
@@ -2635,27 +2735,32 @@ function initHomeArea() {
     gfxRender();
   });
 
-  gpsBtn?.addEventListener('click', () => {
-    if (!navigator.geolocation) { toast('This device cannot report a location'); return; }
+  gpsBtn?.addEventListener('click', async () => {
     gpsBtn.disabled = true;
     gpsBtn.textContent = 'Locating…';
-    const reset = () => { gpsBtn.disabled = false; gpsBtn.textContent = 'Use my location'; };
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        reset();
-        setHome(pos.coords.latitude, pos.coords.longitude, { source: 'gps' });
-        paint();
-        // The label arrives after the county table loads, so repaint then too.
-        loadCountyIndex().then(() => setTimeout(paint, 60));
-      },
-      (err) => {
-        reset();
-        toast(err.code === err.PERMISSION_DENIED
-          ? 'Location is off for Graticule. Alerts stay ranked nationwide.'
-          : 'Could not get a location fix. Try again with a clearer view of the sky.');
-      },
-      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 },
-    );
+    try {
+      const fix = await getPositionOnce({ highAccuracy: true });
+      setHome(fix.lat, fix.lon, { source: 'gps' });
+      paint();
+      // The label arrives after the area index loads, so repaint then too.
+      loadCountyIndex().then(() => setTimeout(paint, 60));
+    } catch (err) {
+      toast(fixErrorMessage(err));
+    } finally {
+      gpsBtn.disabled = false;
+      gpsBtn.textContent = 'Use my location';
+    }
+  });
+
+  mapBtn?.addEventListener('click', () => {
+    const c = mapCentrePoint();
+    if (!c) {
+      toast('Point the globe at the place you want, then try again.');
+      return;
+    }
+    setHome(c.lat, c.lon, { source: 'map' });
+    paint();
+    loadCountyIndex().then(() => setTimeout(paint, 60));
   });
 
   clearBtn?.addEventListener('click', () => {
@@ -12179,6 +12284,11 @@ function gfxHazardTitle(h) {
     case 'volcanoes':  return `${p.name || 'VOLCANO'} · ACTIVE`.toUpperCase();
     case 'launches':   return `LAUNCH · ${p.name || 'SCHEDULED'}`.toUpperCase();
     case 'tfrs':       return `FLIGHT RESTRICTION · ${p.type || ''}`.trim().toUpperCase();
+    // The `severe` feed carries the NWS product name; falling through to
+    // KIND_LABEL printed the card as "SEVERE WX", which names the feed
+    // rather than the thing that is about to happen to you.
+    case 'severe':     return String(p.event || p.headline || 'SEVERE WEATHER').toUpperCase();
+    case 'tsunamis':   return String(p.event || p.headline || 'TSUNAMI ALERT').toUpperCase();
     default:           return String(KIND_LABEL[h.kind] || h.event || 'ALERT').toUpperCase();
   }
 }
@@ -14503,49 +14613,35 @@ const LOCATE_ALTITUDE_M = 140_000;   // county-scale: a storm and its neighbours
 
 let _locating = false;
 
-function locateMe() {
+async function locateMe() {
   if (_locating || !viewer) return;
-  if (!navigator.geolocation) {
-    toast('This device cannot report a location');
-    return;
-  }
   const btn = document.getElementById('locate-btn');
   _locating = true;
   btn?.classList.add('is-busy');
   btn?.setAttribute('aria-busy', 'true');
 
-  const done = () => {
+  try {
+    const fix = await getPositionOnce({ highAccuracy: true });
+    // A fix is worth keeping. This is the only moment the app is certain where
+    // the user is, and alerting needs that answer long after the GPS has gone
+    // cold -- or has been declined on the next launch.
+    setHome(fix.lat, fix.lon, { source: 'gps' });
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(fix.lon, fix.lat, LOCATE_ALTITUDE_M),
+      duration: 1.6,
+    });
+    showHere(fix.lat, fix.lon, fix.accuracy);
+    // On a phone the sheet is usually covering the map you just flew to.
+    if (isPhone() && SHEET.at > 0) sheetGo(0);
+  } catch (err) {
+    // A denied permission is a decision, not a fault, and either way the app
+    // is not stuck: the map centre can set the area without any of this.
+    toast(fixErrorMessage(err));
+  } finally {
     _locating = false;
     btn?.classList.remove('is-busy');
     btn?.removeAttribute('aria-busy');
-  };
-
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      done();
-      const { latitude, longitude } = pos.coords;
-      // A fix is worth keeping. This is the only moment the app is certain
-      // where the user is, and alerting needs that answer long after the GPS
-      // has gone cold.
-      setHome(latitude, longitude, { source: 'gps' });
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, LOCATE_ALTITUDE_M),
-        duration: 1.6,
-      });
-      showHere(latitude, longitude, pos.coords.accuracy);
-      // On a phone the sheet is usually covering the map you just flew to.
-      if (isPhone() && SHEET.at > 0) sheetGo(0);
-    },
-    (err) => {
-      done();
-      // PERMISSION_DENIED is a decision, not a fault: say what it means for
-      // the app and stop, rather than repeating the browser's error text.
-      toast(err.code === err.PERMISSION_DENIED
-        ? 'Location is off for Graticule. Turn it on in Settings to jump to where you are.'
-        : 'Could not get a location fix. Try again with a clearer view of the sky.');
-    },
-    { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 },
-  );
+  }
 }
 
 let hereEntity = null;
@@ -14626,7 +14722,7 @@ function watchForUserCameraInput() {
 }
 
 async function initStartAtLocation() {
-  if (!settings.startAtLocation || !navigator.geolocation || !viewer) return;
+  if (!settings.startAtLocation || !viewer) return;
 
   watchForUserCameraInput();
 
@@ -14635,29 +14731,33 @@ async function initStartAtLocation() {
     if (st && st.state === 'denied') return;
   } catch {
     // Permissions API missing or geolocation not queryable. Fall through and
-    // let getCurrentPosition be the thing that asks.
+    // let the fix itself be the thing that asks.
   }
 
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const { latitude, longitude } = pos.coords;
-      // Saved even if the user has already taken the camera: the fix answers
-      // "where are you", which is true regardless of where they are looking.
-      setHome(latitude, longitude, { source: 'gps' });
-      if (!viewer || _userMovedCamera) return;   // they took the wheel while we waited
-      // The North America lock owns the camera when it is on, and would drag
-      // the view straight back off the user's location.
-      settings.lockNorthAmerica = false;
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, START_LOCATION_ALT_M),
-        duration: 2.2,
-      });
-      showHere(latitude, longitude, pos.coords.accuracy);
-      window.__graticule_started_at_location = true;
-    },
-    () => { /* denied, timed out, or no fix. The North America frame stands. */ },
-    { enableHighAccuracy: false, timeout: START_LOCATION_TIMEOUT_MS, maximumAge: 300_000 },
-  );
+  let fix;
+  try {
+    fix = await getPositionOnce({
+      highAccuracy: false, timeoutMs: START_LOCATION_TIMEOUT_MS,
+    });
+  } catch {
+    // Denied, timed out, or no fix. The North America frame stands, and the
+    // saved area from a previous session -- if there is one -- is untouched.
+    return;
+  }
+
+  // Saved even if the user has already taken the camera: the fix answers
+  // "where are you", which stays true regardless of where they are looking.
+  setHome(fix.lat, fix.lon, { source: 'gps' });
+  if (!viewer || _userMovedCamera) return;   // they took the wheel while we waited
+  // The North America lock owns the camera when it is on, and would drag the
+  // view straight back off the user's location.
+  settings.lockNorthAmerica = false;
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(fix.lon, fix.lat, START_LOCATION_ALT_M),
+    duration: 2.2,
+  });
+  showHere(fix.lat, fix.lon, fix.accuracy);
+  window.__graticule_started_at_location = true;
 }
 
 function initSheet() {

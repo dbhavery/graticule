@@ -1204,6 +1204,11 @@
             <div class="sm-place-sub" id="home-sub">Alerts are ranked nationwide until you set a location.</div>
             <div class="sm-place-btns">
               <button type="button" class="sm-btn" id="home-use-gps">Use my location</button>
+              <!-- Needs no permission, no satellites and no Play Services.
+                   Measured: the raw web geolocation API times out inside the
+                   Android WebView even with a valid OS fix, so the map is not
+                   a nicety, it is the path that always works. -->
+              <button type="button" class="sm-btn" id="home-use-map">Use map centre</button>
               <button type="button" class="sm-btn" id="home-clear">Clear</button>
             </div>
           </div>
