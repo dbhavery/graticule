@@ -29,8 +29,35 @@
   --text:      #e6ecf3;
   --text-dim:  #a8b3c2;
   --text-mute: #8892a3;
-  --accent:    #5cd6ff;
-  --accent-ink:#04141c;   /* text on an accent fill */
+  /* ---- Accent ---------------------------------------------------------------
+     WHITE, Don's call 2026-09-18, replacing #5cd6ff. This is the one decision
+     in the redesign that was held open for him, and it is now closed: do not
+     "restore" the cyan.
+
+     The reason it is right is not taste. Every accent hue this app tried was
+     also a data colour: cyan is radar (--c-radar, --c-ships), and blue is the
+     5-25 dBZ low end of the reflectivity ramp. Chrome and data were arguing in
+     the same language. White is the one value on a dark globe that no weather
+     field claims, so the ramp is now the only saturated thing on screen, which
+     is exactly what the direction contract in index.html promises.
+
+     What it costs: white accent is a half-step from --text, so HUE CAN NO
+     LONGER CARRY STATE. Anything that was "on" only because it was cyan is now
+     invisible. Every active state below therefore differs on three channels at
+     once - fill, border weight, and text tone - and would still read correctly
+     in greyscale. Keep it that way.
+
+     And the fill rule: no chip is ever solid white. A filled control must never
+     be the brightest object in the frame when the frame contains weather. Solid
+     --accent belongs only to marks smaller than a fingertip (thumbs, knobs,
+     brand diamonds) and to a single primary action. Everything else that reads
+     as "selected" uses --accent-fill. */
+  --accent:      #ffffff;
+  --accent-ink:  #06090f;                  /* text on a solid accent fill */
+  --accent-fill: rgba(255, 255, 255, 0.18);/* the "on" state of a chip or tab  */
+  --accent-line: rgba(255, 255, 255, 0.55);/* border at accent weight          */
+  --accent-glow: rgba(255, 255, 255, 0.20);/* halo, focus ring, inset wash     */
+  --accent-wash: rgba(255, 255, 255, 0.08);/* faintest accent tint             */
 
   --c-planes:     #ffd14a;
   --c-ships:      #4dd2ff;
@@ -67,6 +94,10 @@
   --ok:   #22cc66;
   --warn: #d6802b;
   --bad:  #cc3322;
+
+  /* 48px is Material's floor for a control somebody presses while walking.
+     It lives here because the desktop transport reserves room for it. */
+  --locate-size: 48px;
 
   --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
   --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -321,9 +352,9 @@ html, body {
 .hdr-toggle:hover { color: var(--text); border-color: var(--panel-border); }
 .hdr-toggle[aria-pressed=true] {
   color: var(--text);
-  background: rgba(77,210,255,0.10);
-  border-color: rgba(77,210,255,0.45);
-  box-shadow: 0 0 0 1px rgba(77,210,255,0.18) inset;
+  background: var(--accent-wash);
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 1px var(--accent-glow) inset;
 }
 .hdr-dot {
   width: 6px; height: 6px; border-radius: 50%;
@@ -652,8 +683,15 @@ html, body {
   line-height: 1.5;
   white-space: pre-wrap;
 }
-.dt-link { color: var(--accent); text-decoration: none; }
-.dt-link:hover { text-decoration: underline; }
+/* White accent means a link can no longer be told from prose by colour,
+   so the underline is permanent and hover thickens it. */
+.dt-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-line);
+  text-underline-offset: 2px;
+}
+.dt-link:hover { text-decoration-color: var(--accent); }
 
 /* A value from a fixed set is a chip, and the colour comes from the data. */
 .dt-chip {
@@ -927,7 +965,7 @@ body:has(#panel:not(.hidden)) #compass { opacity: 0; pointer-events: none; }
   justify-content: space-between;
   gap: 12px;
 }
-.ctx-item:hover { background: rgba(77, 210, 255, 0.10); color: var(--text); }
+.ctx-item:hover { background: var(--accent-wash); color: var(--text); }
 .ctx-item .ctx-meta { color: var(--text-mute); font-family: var(--mono); font-size: var(--fs-xs); }
 .ctx-sep { height: 1px; margin: 4px 8px; background: var(--panel-rule); }
 
@@ -1192,7 +1230,7 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   align-self: center;
   transition: color 120ms, background 120ms, border-color 120ms;
 }
-.settings-btn:hover { color: var(--accent); border-color: var(--panel-border); background: rgba(77,210,255,0.08); }
+.settings-btn:hover { color: var(--accent); border-color: var(--panel-border); background: var(--accent-wash); }
 
 #settings-overlay {
   position: absolute;
@@ -1283,8 +1321,8 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   font-size: var(--fs-base);
   cursor: pointer;
 }
-.sm-radio:has(input:checked) { background: rgba(77, 210, 255, 0.08); border-color: rgba(77, 210, 255, 0.4); }
-.sm-check:has(input:checked)  { background: rgba(77, 210, 255, 0.08); border-color: rgba(77, 210, 255, 0.4); }
+.sm-radio:has(input:checked) { background: var(--accent-wash); border-color: var(--accent-line); }
+.sm-check:has(input:checked)  { background: var(--accent-wash); border-color: var(--accent-line); }
 .sm-radio input, .sm-check input { accent-color: var(--accent); cursor: pointer; }
 .sm-hint {
   margin-left: auto;
@@ -1335,7 +1373,7 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   color: var(--accent);
   font-size: var(--fs-sm);
   text-decoration: none;
-  border-bottom: 1px solid rgba(92, 214, 255, 0.35);
+  border-bottom: 1px solid var(--accent-line);
   padding-bottom: 1px;
 }
 .sm-about-links a:hover { border-bottom-color: var(--accent); }
@@ -1496,7 +1534,7 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 .hud-tab.is-active {
   color: var(--accent);
   border-bottom-color: var(--accent);
-  background: rgba(77, 210, 255, 0.07);
+  background: var(--accent-wash);
 }
 
 #hud-scroll { flex: 1 1 auto; position: relative; min-height: 0; display: flex; }
@@ -1521,9 +1559,9 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 }
 .chip:hover { color: var(--text); border-color: rgba(255,255,255,0.16); }
 .chip.is-active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #041016;
+  background: var(--accent-fill);
+  border-color: var(--accent-line);
+  color: var(--accent);
   font-weight: 600;
 }
 .mode-body { display: none; }
@@ -1548,7 +1586,7 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
   width: 10px; height: 10px; border-radius: 50%;
   background: var(--text-mute); transition: transform 160ms ease, background 160ms ease;
 }
-.sw input:checked + .sw-t { background: rgba(77,210,255,0.35); }
+.sw input:checked + .sw-t { background: var(--accent-fill); }
 .sw input:checked + .sw-t::after { transform: translateX(12px); background: var(--accent); }
 .sw input:checked ~ .sw-l { color: var(--text); }
 .sw-l { flex: 1; }
@@ -1607,13 +1645,14 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
    frames past it are unmistakable. */
 #tl-fill {
   position: absolute; left: 0; height: 3px; border-radius: var(--r-sm);
-  background: linear-gradient(90deg, rgba(77,210,255,0.25), rgba(77,210,255,0.75));
+  background: linear-gradient(90deg, rgba(255,255,255,0.22), rgba(255,255,255,0.72));
   pointer-events: none;
 }
 #tl-now {
   position: absolute; top: 1px; width: 1px; height: 16px;
   background: var(--c-launches); opacity: 0.85; pointer-events: none;
 }
+#tl-now.hidden { display: none; }
 #tl-now::after {
   content: attr(data-label); position: absolute; top: -11px; left: 50%;
   transform: translateX(-50%); font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
@@ -1625,7 +1664,7 @@ body.live-feed-on #alerts-panel { bottom: 200px; }
 }
 #tl-range::-webkit-slider-thumb {
   appearance: none; width: 11px; height: 11px; border-radius: 50%;
-  background: var(--accent); border: 2px solid #04141c; cursor: pointer;
+  background: var(--accent); border: 2px solid var(--accent-ink); cursor: pointer;
 }
 #tl-label { font-size: var(--fs-sm); color: var(--text-dim); flex: 0 0 auto; min-width: 92px; text-align: right; }
 .tl-speed {
@@ -1727,7 +1766,7 @@ input[type=range]::-webkit-slider-thumb {
   width: 11px; height: 11px;
   border-radius: 50%;
   background: var(--accent);
-  border: 2px solid #04141c;
+  border: 2px solid var(--accent-ink);
   cursor: pointer;
 }
 input[type=range]::-webkit-slider-runnable-track {
@@ -1802,7 +1841,7 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 /* Only the draw group lights up while drawing. The old rule outlined the
    basemap buttons too, which implied they were part of the mode. */
-#drawbar.is-drawing { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(77,210,255,0.25); }
+#drawbar.is-drawing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
 
 /* Caption sets what the group is for; the glyphs alone never did. */
 .bar-cap {
@@ -1816,7 +1855,7 @@ input[type=range]::-webkit-slider-runnable-track {
   padding: 5px 7px; border-radius: var(--r-sm); cursor: pointer;
 }
 .tool-btn:hover { color: var(--text); background: rgba(255,255,255,0.07); }
-.tool-btn.is-active { color: #041016; background: var(--accent); }
+.tool-btn.is-active { background: var(--accent-fill); border-color: var(--accent-line); color: var(--accent); }
 /* Round, and only round thing in the chrome: a colour value, not a mode. */
 .tool-swatch {
   width: 16px; height: 16px; border-radius: 50%;
@@ -1832,7 +1871,7 @@ input[type=range]::-webkit-slider-runnable-track {
   padding: 4px 7px; cursor: pointer;
 }
 .theme-btn:hover { color: var(--text-dim); }
-.theme-btn.is-active { background: var(--accent); border-color: var(--accent); color: #041016; }
+.theme-btn.is-active { background: var(--accent-fill); border-color: var(--accent-line); color: var(--accent); }
 
 /* Compass would collide with the toolbar; drop it below. */
 #compass { top: 112px; }
@@ -2122,7 +2161,7 @@ input[type=range]::-webkit-slider-runnable-track {
   padding: 5px 4px; border-radius: var(--r-sm); cursor: pointer;
 }
 .seg-b:hover { color: var(--text-dim); }
-.seg-b.is-active { background: var(--accent); color: #041016; }
+.seg-b.is-active { background: var(--accent-fill); border-color: var(--accent-line); color: var(--accent); }
 
 #modelcompare {
   position: absolute; left: 296px; right: 16px; bottom: 66px; z-index: 14;
@@ -2170,7 +2209,7 @@ input[type=range]::-webkit-slider-runnable-track {
   background: var(--panel-bg-strong);
   border: 1px solid var(--accent);
   border-radius: var(--r-sm);
-  box-shadow: 0 0 0 1px rgba(77, 210, 255, 0.18), 0 8px 26px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px var(--accent-glow), 0 8px 26px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
 }
 #countybar.hidden { display: none; }
@@ -2196,7 +2235,7 @@ input[type=range]::-webkit-slider-runnable-track {
   letter-spacing: var(--tr-tight);
 }
 #countybar .tool-btn.is-primary {
-  background: var(--accent); color: #041016; border-color: var(--accent);
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
 }
 #countybar .tool-btn[disabled] { opacity: 0.4; cursor: default; }
 #countybar .tool-btn[disabled]:hover { background: none; color: var(--text-dim); }
@@ -2831,7 +2870,10 @@ body.is-presenting #rail-open { display: none; }
 }
 #rail-tools #drawbar.is-drawing { box-shadow: none; }
 #rail-tools #drawbar.is-drawing .tool-btn[aria-pressed="true"] {
-  color: var(--accent); background: rgba(77, 210, 255, 0.14);
+  /* Same three channels as every other "on" state. It used to carry the
+     border implicitly, because cyan text was already unmistakable. */
+  color: var(--accent); background: var(--accent-fill);
+  border-color: var(--accent-line);
 }
 .rt-sep { width: 1px; height: 16px; background: var(--rail-edge); margin: 0 4px; }
 
@@ -2865,7 +2907,7 @@ body.is-presenting #rail-open { display: none; }
   transition: background 140ms ease, color 140ms ease;
 }
 .div-grid .chip.is-active {
-  background: var(--accent); color: #04141c; border: 0;
+  background: var(--accent-fill); border-color: var(--accent-line); color: var(--accent);
 }
 
 /* ---- Control rows: label left, value right, hairline between ---- */
@@ -2967,7 +3009,7 @@ body.is-presenting #rail-open { display: none; }
   transition: background 120ms ease, color 120ms ease;
 }
 .wf-seg-b:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
-.wf-seg-b.is-active { background: var(--accent); color: #04141c; }
+.wf-seg-b.is-active { background: var(--accent-fill); border-color: var(--accent-line); color: var(--accent); }
 .wf-seg-b:disabled { opacity: 0.3; cursor: default; }
 
 /* ---- Pane padding ---- */
@@ -2988,8 +3030,8 @@ body.is-presenting #rail-open { display: none; }
   transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 .dash-open:hover {
-  background: rgba(77, 210, 255, 0.1);
-  border-color: rgba(77, 210, 255, 0.35);
+  background: var(--accent-wash);
+  border-color: var(--accent-line);
   color: var(--text);
 }
 
@@ -3047,7 +3089,13 @@ body.is-presenting #rail-open { display: none; }
 
 /* ---- Transport: three round buttons over a dotted scrub track ---- */
 #timeline {
-  left: calc(var(--rail-w) + 20px); right: 20px;
+  left: calc(var(--rail-w) + 20px);
+  /* The locate button is fixed to this same corner at z-index 35 and the
+     transport reached under it: #tl-label ran x1286-1385 against a button at
+     x1372-1420, so the frame's time -- the one number the scrubber exists to
+     report -- was 13px beneath an opaque circle. Reserve the button's width
+     from its own token plus a gutter. */
+  right: calc(20px + var(--locate-size) + 12px);
   width: auto; transform: none;
   /* Clears the credit strip by its MEASURED height, not by a new constant.
      The strip only started having height on 2026-09-18, when the injected
@@ -3091,8 +3139,16 @@ body.is-presenting #rail-open { display: none; }
 .tl-speed { backdrop-filter: blur(8px); }
 
 /* The feed strip shared the bottom-right corner with the transport. The
-   transport now spans the map, so the strip moves above it. */
-#feedstrip { bottom: 60px; }
+   transport now spans the map, so the strip moves above it.
+
+   Four things live in this corner -- credits, transport, locate button, this
+   strip -- and each one used to pick its own offset. Stack them: the strip
+   clears the locate button, which clears the credits, which are measured.
+   60px was right only while the button sat lower and the credits were a
+   zero-height box. */
+#feedstrip {
+  bottom: calc(20px + var(--credits-h, 0px) + var(--locate-size) + 10px);
+}
 
 /* Bottom-centre lanes clear the docked rail. */
 #scenebar, #countybar { left: calc(50% + var(--rail-w) / 2); }
@@ -3488,8 +3544,8 @@ body.is-presenting #rail-status { display: none; }
   display: inline-flex; align-items: center; gap: 5px;
   appearance: none; cursor: pointer;
   padding: 2px 5px 2px 7px;
-  background: rgba(77, 210, 255, 0.10);
-  border: 1px solid rgba(77, 210, 255, 0.26);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-glow);
   border-radius: 2px;
   color: var(--text);
   font-family: var(--sans); font-size: var(--fs-micro);
@@ -3568,7 +3624,7 @@ body.is-presenting #rail-status { display: none; }
   padding: 7px 9px; border-radius: var(--r-sm);
   cursor: pointer;
 }
-.pal-row.is-sel { background: rgba(77, 210, 255, 0.13); }
+.pal-row.is-sel { background: var(--accent-fill); }
 .pal-kind {
   flex: 0 0 66px;
   font-size: var(--fs-micro); letter-spacing: var(--tr-wide);
@@ -3778,7 +3834,7 @@ body.is-presenting .tl-end { display: none; }
   --rail-w: 340px;
   --rail-edge:  rgba(255, 255, 255, 0.10);
   --rail-hover: rgba(255, 255, 255, 0.07);
-  --rail-sel:   rgba(92, 214, 255, 0.14);
+  --rail-sel:   rgba(255, 255, 255, 0.12);
   /* One surface + one border for every control at rest, so "is this a button"
      never needs a hover to answer. */
   --ctl-bg:      rgba(255, 255, 255, 0.045);
@@ -3850,7 +3906,7 @@ body { font-size: var(--fs-base); letter-spacing: var(--tr-tight); }
   padding: 0 var(--sp-2);
 }
 .tool-btn:hover { background: var(--ctl-bg-hi); border-color: var(--ctl-border-hi); color: var(--text); }
-.tool-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tool-btn[aria-pressed="true"] { background: var(--accent-fill); border-color: var(--accent-line); color: var(--accent); }
 .tool-btn.is-wide {
   margin-left: auto;
   font-size: var(--fs-xs); font-weight: var(--fw-med);
@@ -3890,8 +3946,8 @@ body { font-size: var(--fs-base); letter-spacing: var(--tr-tight); }
   background: var(--ctl-bg-hi); border-color: var(--ctl-border-hi); color: var(--text);
 }
 .div-grid .chip.is-active {
-  background: var(--accent); border-color: var(--accent);
-  color: var(--accent-ink); font-weight: 700;
+  background: var(--accent-fill); border-color: var(--accent-line);
+  color: var(--accent); font-weight: 700;
 }
 
 /* ---- Panes ---- */
@@ -4051,7 +4107,7 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
   line-height: 1.15;
 }
 .seg-b:hover:not(.is-active) { background: var(--ctl-bg-hi); color: var(--text); }
-.seg-b.is-active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.seg-b.is-active { background: var(--accent-fill); border-color: var(--accent-line); color: var(--accent); font-weight: 700; }
 
 .theme-btn {
   min-height: var(--hit); padding: 0 var(--sp-2);
@@ -4072,14 +4128,14 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
   padding: 0 var(--sp-3);
   font-size: var(--fs-sm); font-weight: var(--fw-med);
   background: var(--rail-sel);
-  border: 1px solid rgba(92, 214, 255, 0.42);
+  border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
   color: var(--text);
   letter-spacing: var(--tr-tight);
   cursor: pointer;
 }
 .dash-open::after { content: '\203A'; font-size: var(--fs-lg); color: var(--accent); }
-.dash-open:hover { background: rgba(92, 214, 255, 0.22); border-color: var(--accent); }
+.dash-open:hover { background: var(--accent-fill); border-color: var(--accent); }
 
 /* ---- Notes and hints ---- */
 .pane-note, .wf-hint, .db-note {
@@ -4212,7 +4268,7 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
    as a leftover. */
 .sw-t { width: 30px; height: 17px; }
 .sw-t::after { width: 13px; height: 13px; top: 2px; left: 2px; }
-.sw input:checked + .sw-t { background: rgba(92, 214, 255, 0.4); }
+.sw input:checked + .sw-t { background: var(--accent-fill); }
 .sw input:checked + .sw-t::after { transform: translateX(13px); }
 .sw input:focus-visible + .sw-t { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -4463,7 +4519,7 @@ select.wf-row-v:hover, select.ctl-sel:hover, .sm-btn:hover {
 /* ---- Settings modal ink ----
    `.sm-hint` and `.sm-section-label` sat on --text-mute, which clears AA on
    the rail but not on the modal's own rows: those carry an rgba(255,255,255,
-   0.03) fill, and a checked one carries rgba(77,210,255,0.08) on top, lifting
+   0.03) fill, and a checked one carries var(--accent-wash) on top, lifting
    the surface enough to drop the same grey to 3.54:1. The surface is still
    dark, so the ink goes LIGHTER, not darker. */
 #settings-modal .sm-hint,
@@ -4825,7 +4881,14 @@ div[data-requires].is-off .wf-item.is-active {
   #hud input[type="range"], #tl-range { height: var(--hit); }
   #tl-track { height: var(--hit); }
   #hud input[type="range"]::-webkit-slider-thumb,
-  #tl-range::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8px; }
+  #tl-range::-webkit-slider-thumb { width: 20px; height: 20px; }
+  /* The thumb is laid out against the TOP of its runnable track, so the offset
+     that centres it is (track - thumb) / 2 and it is different for these two.
+     They shared `margin-top: -8px`, which is right for the 4px rail tracks and
+     put the scrubber's thumb 20px above the line it is supposed to ride: it
+     floated in the card with nothing under it. Cyan hid this; white does not. */
+  #hud input[type="range"]::-webkit-slider-thumb { margin-top: -8px; }
+  #tl-range::-webkit-slider-thumb { margin-top: 12px; }   /* (44 - 20) / 2 */
   #tl-range::-webkit-slider-runnable-track { height: var(--hit); }
 
   /* ---- Map chrome ---- */
@@ -4961,7 +5024,10 @@ div[data-requires].is-off .wf-item.is-active {
   right: 12px;
   bottom: calc(var(--sheet-peek, 96px) + 16px + env(safe-area-inset-bottom, 0px));
   z-index: 35;
-  width: 48px; height: 48px;
+  /* A token, because the desktop timeline has to reserve exactly this much
+     room on its right and a second hand-typed 48 is how these two drift
+     apart. Runtime height still gets measured; a declared square does not. */
+  width: var(--locate-size); height: var(--locate-size);
   display: grid; place-items: center;
   border-radius: 50%;
   border: 1px solid var(--ctl-border);
@@ -4982,7 +5048,15 @@ div[data-requires].is-off .wf-item.is-active {
 /* On a desktop the sheet does not exist, so the token above resolves to
    nothing useful and the button would sit on the bottom edge. */
 @media (min-width: 781px) and (min-height: 501px) {
-  #locate-btn { bottom: 20px; right: 20px; }
+  /* And it clears the credit strip by the strip's MEASURED height, the same
+     way #timeline does. At 20px flat the button's box was y832-880 and the
+     credits y875-892: five pixels of legally required attribution under an
+     opaque circle. The phone stack was rebuilt for exactly this reason; the
+     desktop corner had the same three elements making the same assumption. */
+  #locate-btn {
+    right: 20px;
+    bottom: calc(20px + var(--credits-h, 0px));
+  }
 }
 
 /* ---- Transient message ----
@@ -5247,11 +5321,21 @@ div[data-requires].is-off .wf-item.is-active {
      the track whenever the marker is late in the loop, which is the only time
      it can overflow; a marker early in the loop has the whole track to its
      right and nothing to collide with. */
+  /* Measured at 412px: the track box is 44px tall and its drawn line sits at
+     top 21px, but the marker is `top: 1px; height: 16px` and so ended at 17 --
+     a tick that never touched the line it marks, floating four pixels clear of
+     it. Span the line instead of stopping short of it. */
+  #botstack > #timeline #tl-now {
+    top: 12px;
+    height: 22px;
+  }
   #botstack > #timeline #tl-now::after {
     left: auto;
     right: 0;
     transform: none;
-    top: -12px;
+    /* Clear of the 20px scrub thumb, which is centred on the same line and can
+       sit at the same x as the marker whenever you scrub to the now frame. */
+    top: -26px;
   }
   #botstack > #timeline > #tl-label {
     grid-area: label;
@@ -5386,8 +5470,8 @@ div[data-requires].is-off .wf-item.is-active {
    alone: the accent has to survive a viewer who cannot separate it from the
    surrounding grey. */
 .qt.is-on {
-  background: rgba(92, 214, 255, 0.14);
-  border-color: rgba(92, 214, 255, 0.46);
+  background: var(--accent-fill);
+  border-color: var(--accent-line);
   color: var(--accent);
 }
 

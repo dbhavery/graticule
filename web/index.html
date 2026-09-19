@@ -53,14 +53,21 @@
  OWN-WORLD: dark glass cards, 16px radius, 1px white-at-9% borders, blur(20),
  one accent. The reflectivity ramp is the only saturated field on screen, so
  the weather is the brightest thing in the frame and the chrome never is.
- ACCENT: #5cd6ff, and this is a DEVIATION from the chosen direction's comp,
- which used #3b82f6. Recorded so a later session does not "correct" it. The
- reflectivity ramp spans nearly the whole colour wheel, so no accent escapes
- it; #3b82f6 sits inside the ramp's own 20-35 dBZ band, which would invite a
- user to read a button as a data value, while #5cd6ff is lighter and less
- saturated at chrome scale and is what 700 existing sites already agree on.
- Standing rule while this holds: no filled accent block may ever be the
- brightest element in the frame.
+ ACCENT: WHITE. Don chose it on 2026-09-18 from three candidates rendered on
+ the real app, over #5cd6ff (what was shipping) and #3b82f6 (the comp's own).
+ It is CLOSED. Do not restore a hue.
+ The reason is that the reflectivity ramp spans nearly the whole colour wheel,
+ so no chrome hue escapes it: #3b82f6 sits inside the ramp's 20-35 dBZ band and
+ #5cd6ff sits in its 5-25 dBZ low end, and either one invites a user to read a
+ button as a data value. White is the only value on a dark globe that no
+ weather field claims, which is what finally makes the OWN-WORLD line above
+ literally true.
+ It costs the hue channel: white is a half-step from --text, so no state may be
+ carried by colour alone any more. Every active control differs on fill, border
+ weight and text tone at once, and must still read in greyscale.
+ Standing rule, now load-bearing: no filled accent block may ever be the
+ brightest element in the frame. Solid --accent is for marks smaller than a
+ fingertip and for one primary action; selected chips take --accent-fill.
  STORY: a person opens it, sees weather, and learns what the colours mean
  without leaving the map.
  FIRST VIEWPORT: full-bleed globe; a floating warning card; then one bottom
@@ -1018,7 +1025,7 @@
       <circle cx="30" cy="30" r="27" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
       <!-- Tilt horizon disk (rotates with camera pitch) -->
       <g class="cmp-tilt" id="cmp-tilt">
-        <line x1="6" y1="30" x2="54" y2="30" stroke="rgba(77,210,255,0.35)" stroke-width="1"/>
+        <line x1="6" y1="30" x2="54" y2="30" stroke="rgba(255,255,255,0.38)" stroke-width="1"/>
       </g>
       <!-- Compass rose (rotates with camera heading) -->
       <g class="cmp-rose" id="cmp-rose">

@@ -6942,6 +6942,11 @@ function positionNowMarker() {
   el.dataset.label = hasForecast ? 'NOW' : 'LATEST';
   el.title = hasForecast ? 'now: observed to the left, nowcast to the right'
                          : 'the newest observed frame; no nowcast is published right now';
+  // With no nowcast the boundary IS the end of the track, which is exactly
+  // where the scrub thumb parks by default -- the marker restates the thumb's
+  // own position and prints "LATEST" underneath it. A marker only carries
+  // information when there are forecast frames to its right to divide off.
+  el.classList.toggle('hidden', !hasForecast);
   labelTimelineEnds();
 }
 

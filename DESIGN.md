@@ -14,10 +14,12 @@ colors:
   text: "#e6ecf3"
   text-dim: "#a8b3c2"
   text-mute: "#8892a3"
-  accent: "#5cd6ff"
-  accent-ink: "#04141c"
-  accent-wash: "rgba(92, 214, 255, 0.14)"
-  accent-edge: "rgba(92, 214, 255, 0.46)"
+  accent: "#ffffff"
+  accent-ink: "#06090f"
+  accent-fill: "rgba(255, 255, 255, 0.18)"
+  accent-line: "rgba(255, 255, 255, 0.55)"
+  accent-glow: "rgba(255, 255, 255, 0.20)"
+  accent-wash: "rgba(255, 255, 255, 0.08)"
   ok: "#22cc66"
   warn: "#d6802b"
   bad: "#cc3322"
@@ -83,7 +85,8 @@ components:
     padding: "11px 6px 10px"
     height: "72px"
   tile-on:
-    backgroundColor: "{colors.accent-wash}"
+    backgroundColor: "{colors.accent-fill}"
+    borderColor: "{colors.accent-line}"
     textColor: "{colors.accent}"
     rounded: "{rounded.tile}"
   chip:
@@ -92,8 +95,9 @@ components:
     rounded: "{rounded.sm}"
     padding: "7px 14px"
   chip-active:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.accent-ink}"
+    backgroundColor: "{colors.accent-fill}"
+    borderColor: "{colors.accent-line}"
+    textColor: "{colors.accent}"
     rounded: "{rounded.sm}"
   unit-pill:
     backgroundColor: "{colors.control-hi}"
@@ -133,16 +137,28 @@ instrument-grade without requiring instrument literacy.
 
 ### Primary
 
-`accent` `#5cd6ff` marks the single active thing: the selected division, an
-enabled layer, a focus ring. `accent-wash` and `accent-edge` are its
-low-emphasis pair for filled states.
+`accent` is **white**, and it marks the single active thing: the selected
+division, an enabled layer, a focus ring.
 
-**Open question, deliberately unresolved:** the reflectivity ramp's low end is
-cyan and blue (roughly 5–25 dBZ), so the chrome accent and light rain are drawn
-from the same region of the spectrum. Cyan `#5cd6ff`, blue `#3b82f6` and a
-neutral `#e8edf3` were rendered against the live app for comparison. Until this
-is decided, **no filled accent block may be the brightest element in the
-frame.**
+**Settled 2026-09-18 by Don, from three candidates rendered on the live app.**
+The question it answers: the reflectivity ramp spans most of the colour wheel,
+so every chrome hue is also a data value. Cyan `#5cd6ff` sits in the ramp's
+5–25 dBZ low end and blue `#3b82f6` in its 20–35 dBZ band, and either one
+invites a reader to take a button for a measurement. White is the one value a
+dark globe leaves unclaimed, so the ramp is now the only saturated field on
+screen.
+
+What it costs, and the rule that pays for it: white is a half-step from
+`text`, so **hue can no longer carry state.** Every active control differs
+from its resting state on three channels at once — fill, border weight and
+text tone — and must still read in greyscale. `accent-fill` plus `accent-line`
+plus `accent` text is that pattern; it is not decoration.
+
+And the fill rule, which this makes load-bearing rather than advisory: **no
+filled accent block may be the brightest element in the frame.** Solid
+`accent` belongs only to marks smaller than a fingertip — slider thumbs, the
+switch knob, the brand diamond — and to a single primary action. Anything
+that reads as "selected" takes `accent-fill`.
 
 ### Neutral
 

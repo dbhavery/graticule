@@ -2157,3 +2157,29 @@ prose punctuation and must not be bulk-replaced.
 and falls back to regex, so custom properties, selector matching and computed
 contrast are never evaluated. Its findings are an undercount, not a clean bill
 of health. Installing those four modules would make the next pass meaningful.
+
+## 71. The NWS warning card is clipped mid-word at the sheet's half detent
+
+Found 2026-09-18 while checking the white accent on a 412x915 phone. Tapping
+`#rail-head` once takes the sheet to `sheet-half`, and the warning card, which
+is positioned `bottom: calc(var(--sheet-peek) + 52px)`, does not move: the
+sheet's top edge crosses it and cuts "EXPIRES 6:15 PM (48M)" through the middle
+of the line. `--sheet-peek` is the peek height and nothing recomputes it for the
+other two detents, so the card is anchored to a number that stops being true the
+moment the sheet opens.
+
+Not fixed here because the fix is a product decision, not a layout one, and it
+changes what somebody sees while a severe thunderstorm warning is active:
+
+- ride up with the sheet, so the card is always fully visible and the map gets
+  squeezed from both ends;
+- stand down at half and full, the way `#legend` already does behind
+  `.gfx-superseded`, on the argument that an open sheet means the user is
+  driving the controls and will close it;
+- stay put and let the sheet cover it cleanly, which needs the card's own
+  bottom to be a measured `--sheet-h` rather than `--sheet-peek`, so it is
+  covered edge-to-edge instead of sliced.
+
+Whichever one, the anchor has to become a measured height. This is the same
+defect family as issue 70's bottom stack and the desktop corner fixed on
+2026-09-18: a constant standing in for another element's runtime size.
