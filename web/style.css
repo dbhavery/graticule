@@ -4785,7 +4785,14 @@ div[data-requires].is-off .wf-item.is-active {
        from an explicit `width: 100vw` below instead, which is what it needed
        all along. */
     --rail-w: 0px;
-    --sheet-peek: 96px;
+    /* The peek detent shows the sheet's head and nothing else. 96px was tuned
+       against a head whose subtitle wrapped to two lines; the moment the head
+       said something shorter, the 45px tab row rose into the window and was
+       sliced at the fold -- measured 891-936 in a 915px viewport, 24 pixels of
+       half a row of tabs. So it is measured from the head at runtime, like
+       every other height in the bottom stack, and 96px is only the value that
+       holds until the first measurement lands. */
+    --sheet-peek: var(--rail-head-h, 96px);
   }
 
   /* The globe takes the whole screen, including under the notch and the home

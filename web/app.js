@@ -3304,7 +3304,15 @@ function noteFeed(layer) {
 function setCount(layer, n) {
   const el = document.getElementById(`count-${layer}`);
   if (el) el.textContent = String(n);
+  // The closed sheet prints live counts, so a feed answering changes what it
+  // says. Only when it is actually showing them: syncRailTitle bails to the
+  // division name in every other state, and this fires per layer refresh.
+  if (OVERVIEW_LIVE) syncRailTitle();
 }
+
+/* Set by syncRailTitle so setCount does not have to re-derive the same three
+   conditions on every feed tick. */
+let OVERVIEW_LIVE = false;
 
 /* The layer switches are markup, not a rendered list, so looking one up is a
  * lookup and not a search. It was a search: `input[data-layer="x"]` ran 27
@@ -7411,15 +7419,59 @@ const TAB_SUB = {
   broadcast: 'The graphics that stay on screen in presentation mode',
 };
 
+/* What the closed sheet says the app is.
+
+   Don, 2026-09-18, on whether the weather-first framing is a problem beyond
+   the alert card: "yes". On a phone the sheet's head IS the first line anybody
+   reads, and at the peek detent it read "RADAR -- Where it is raining, now and
+   30 minutes out". That is a correct description of the radar division and a
+   wrong description of Graticule, which at that same moment was tracking
+   aircraft, ships, earthquakes, volcanoes, orbits, fires and launches.
+
+   Rather than write a tagline claiming breadth, the closed sheet COUNTS it.
+   Live numbers are not a claim, they are the thing itself, and they change as
+   the planet does. Open the sheet and it goes back to naming where you are,
+   which is what a header is for once you are inside something. */
+function railOverviewLine() {
+  const bits = [];
+  const near = homePoint() ? rankedHazards().filter((h) => h.inArea).length : 0;
+  if (near) bits.push(`${near} near you`);
+
+  // Read the feeds, not the scene: these count what is being watched, which
+  // is the point being made, not what happens to be drawn.
+  const count = (k) => Object.keys(layerData[k] || {}).length;
+  const air = count('planes');
+  const sea = count('ships');
+  const quakes = count('quakes');
+  const orbit = count('satellites');
+  if (air)    bits.push(`${air.toLocaleString()} aircraft`);
+  if (sea)    bits.push(`${sea.toLocaleString()} ships`);
+  if (quakes) bits.push(`${quakes.toLocaleString()} quakes`);
+  if (orbit)  bits.push(`${orbit.toLocaleString()} in orbit`);
+
+  // Before any feed has answered there is nothing to count, and an empty line
+  // is worse than a plain sentence.
+  if (!bits.length) return 'Weather, aircraft, ships, quakes and orbits, live';
+  return bits.slice(0, 3).join(' · ');
+}
+
 function syncRailTitle() {
   const el = document.getElementById('rail-title');
   const sub = document.getElementById('rail-sub');
   if (!el) return;
-  el.textContent = RAIL_TAB === 'alerts'    ? 'NWS ALERTS'
-                 : RAIL_TAB === 'broadcast' ? 'BROADCAST'
+
+  // The overview belongs to the closed sheet on a phone only. On a desktop the
+  // rail is always open, so the head is always "where am I".
+  const overview = isPhone() && SHEET.at === 0 && RAIL_TAB === 'data';
+  OVERVIEW_LIVE = overview;
+  el.textContent = overview                   ? 'LIVE NOW'
+                 : RAIL_TAB === 'alerts'      ? 'NWS ALERTS'
+                 : RAIL_TAB === 'broadcast'   ? 'BROADCAST'
                  : (DIVISION_TITLE[RAIL_DIV] || 'DATA');
   if (sub) {
-    sub.textContent = TAB_SUB[RAIL_TAB] || DIVISION_SUB[RAIL_DIV] || '';
+    sub.textContent = overview
+      ? railOverviewLine()
+      : (TAB_SUB[RAIL_TAB] || DIVISION_SUB[RAIL_DIV] || '');
   }
 }
 
@@ -14270,7 +14322,8 @@ function initRailScrollEdges() {
 // re-pointed an unknown number of them at the new element -- and the two
 // would have diverged the first time anything set .checked directly instead
 // of dispatching.
-const QUICK_KEYS = ['radar', 'warnings', 'clouds', 'planes', 'quakes'];
+const QUICK_KEYS = ['radar', 'warnings', 'clouds', 'planes', 'quakes',
+                    'ships', 'fires', 'satellites'];
 
 function quickCheckbox(key) {
   return document.querySelector(`#hud input[data-layer="${key}"]`);
@@ -14361,6 +14414,21 @@ function initQuickTiles() {
 // sub-pixel overlap, which is exactly the hairline kiss between the credit
 // strip and the warning card that started this.
 function syncBotstackHeight() {
+  /* The peek detent is exactly the sheet's head, so it is measured from the
+     head rather than guessed. It was 96px, tuned against a head whose subtitle
+     wrapped to two lines; when the closed sheet started printing a shorter
+     line the tab row rose into the window and got sliced at the fold. Every
+     other height in this stack is measured; this one was the last constant. */
+  const head = document.getElementById('rail-head');
+  if (head) {
+    const hh = Math.ceil(head.getBoundingClientRect().height);
+    // Guard against a pre-layout zero, which would collapse the sheet and take
+    // the bottom stack down with it.
+    if (hh > 24) {
+      document.documentElement.style.setProperty('--rail-head-h', `${hh}px`);
+    }
+  }
+
   const el = document.getElementById('botstack');
   if (!el) return;
   // display:contents on desktop, so there is no box to measure and nothing
@@ -14415,6 +14483,11 @@ function initBotstackHeight() {
     const ro = new ResizeObserver(syncBotstackHeight);
     ro.observe(el);
     for (const c of el.children) ro.observe(c);
+
+    // The sheet's head drives the peek height, and its subtitle changes with
+    // the detent, the tab and the live counts -- any of which can rewrap it.
+    const head = document.getElementById('rail-head');
+    if (head) ro.observe(head);
 
     // The warning card is created on demand by gfxEl(), so there is nothing to
     // observe at boot. Watch #gfx for the card arriving, then observe the card
@@ -14478,6 +14551,8 @@ function sheetGo(i) {
   document.body.classList.toggle('sheet-full', name === 'full');
   const head = document.getElementById('rail-head');
   if (head) head.setAttribute('aria-expanded', String(name !== 'peek'));
+  // Closed, the head says what the app is; open, it says where you are.
+  syncRailTitle();
   // The sheet covers a different amount of map at each detent, and the scroll
   // edges are computed from a box whose height just changed.
   syncRailScrollEdges();

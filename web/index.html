@@ -68,11 +68,24 @@
  Standing rule, now load-bearing: no filled accent block may ever be the
  brightest element in the frame. Solid --accent is for marks smaller than a
  fingertip and for one primary action; selected chips take --accent-fill.
- STORY: a person opens it, sees weather, and learns what the colours mean
- without leaving the map.
- FIRST VIEWPORT: full-bleed globe; a floating warning card; then one bottom
- stack in reading order -- transport, colour-scale legend, attribution -- above
- the sheet peek. Quick layers are one tap inside the sheet, not five levels.
+ STORY: a person opens it, sees what is happening where they are, and learns
+ what the colours mean without leaving the map.
+ NOT A WEATHER APP, and this is a correction Don made on 2026-09-18: "this app
+ is like a swiss army knife and has a ton of different uses, not just weather",
+ and yes, the first viewport was saying otherwise. It opened with a RADAR
+ heading reading "where it is raining" while the same session was tracking
+ 2,778 aircraft, 4,023 ships, 797 earthquakes and 1,346 objects in orbit.
+ Weather still leads, because radar is the most-reached-for layer and
+ pretending otherwise would be its own dishonesty. What is no longer allowed is
+ for weather to be the ONLY thing the first screen admits to. The closed sheet
+ counts the planet instead of describing it, the quick row is a cross-section
+ rather than a weather menu, and the alert card ranks all nine hazard classes
+ together.
+ FIRST VIEWPORT: full-bleed globe; a floating hazard card carrying its distance
+ from the user; then one bottom stack in reading order -- transport,
+ colour-scale legend, attribution -- above the sheet peek, whose height is the
+ sheet head's measured height and not a constant. Quick layers are one tap
+ inside the sheet, not five levels.
  FORM: the standing exit, the category canon, chosen by Don on 2026-09-18 over
  three dealt alternatives and over the roll's own assignment (index 3, the FAA
  sectional). Craft bar: Windy, RadarScope, MyRadar; Google Maps, onX, Gaia GPS.
@@ -308,6 +321,14 @@
            separates them. "Warnings" rather than "Alerts" for the same reason:
            there is an NWS Alerts tab directly above, and the layer's own name
            in the division below is "NWS Warnings". -->
+      <!-- The row is also the app's own answer to "what is this".
+           It was Radar / Warnings / Satellite / Planes / Quakes / More: three
+           weather tiles out of five, in an app that was tracking aircraft,
+           ships, orbits and fires at the same moment. Don, 2026-09-18: "this
+           app is like a swiss army knife and has a ton of different uses, not
+           just weather." Radar stays first because it is the most-reached-for
+           layer and pretending otherwise would be its own kind of dishonesty;
+           what changed is that it is no longer the only kind of thing here. -->
       <div class="div-sec">Quick layers</div>
       <div id="quick" role="group" aria-label="Quick layers">
         <button class="qt" type="button" data-quick="radar" aria-pressed="false">
@@ -327,7 +348,12 @@
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M7 18h10a4 4 0 0 0 .4-8 6 6 0 0 0-11.6 1.6A3.6 3.6 0 0 0 7 18Z"/>
           </svg>
-          <span>Satellite</span>
+          <!-- "Clouds", not "Satellite". The tile labels were written to
+               match the division names, and SATELLITE is the right name for
+               the GOES imagery division -- but an orbital "Satellites" tile
+               now sits one row below it, and two tiles a thumb apart cannot
+               be told apart by a plural. This one shows cloud tops; say so. -->
+          <span>Clouds</span>
         </button>
         <button class="qt" type="button" data-quick="planes" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -341,6 +367,26 @@
             <circle cx="19.4" cy="13.6" r="1.6"/>
           </svg>
           <span>Quakes</span>
+        </button>
+        <button class="qt" type="button" data-quick="ships" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4 14.6h16l-2.4 5H6.4Z"/><path d="M6.6 14.6V8.4h10.8v6.2"/>
+            <path d="M12 8.4V4.6"/>
+          </svg>
+          <span>Ships</span>
+        </button>
+        <button class="qt" type="button" data-quick="fires" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3.2c3.4 3.6 5.6 6.2 5.6 9.4A5.6 5.6 0 0 1 6.4 12.6c0-1.8.8-3.2 2-4.6.2 1.6 1 2.4 1.8 2.6-.4-2.6.6-5.2 1.8-7.4Z"/>
+          </svg>
+          <span>Fires</span>
+        </button>
+        <button class="qt" type="button" data-quick="satellites" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="2.4"/>
+            <ellipse cx="12" cy="12" rx="9.6" ry="4.2" transform="rotate(-28 12 12)"/>
+          </svg>
+          <span>Satellites</span>
         </button>
         <button class="qt" type="button" id="quick-more">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
