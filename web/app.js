@@ -1124,8 +1124,32 @@ function syncBorderLod() {
 const RENDER_EPOCH = 2;
 const EPOCH_KEYS = ['hdr', 'atmosIntensity'];
 
+/* The starting radius for "near me", and only the starting one -- Don asked
+   for a chooser rather than a number this file decides. 80 km is about 50
+   miles: a cluster of counties, roughly the reach of one NWS forecast office,
+   and far enough that a storm moving at highway speed is still half an hour
+   out when it first appears. Declared here because `settings` reads it. */
+const ALERT_RADIUS_DEFAULT_KM = 80;
+
+/* The rungs of the chooser. Two ladders rather than one converted ladder:
+   "50 km" shown to a US reader is "31 mi", and a chooser whose stops read
+   6, 16, 31, 62, 155 is one nobody can aim. The stored setting is always km;
+   the ladder only decides which round numbers are offered and what the label
+   says, so switching units snaps to the nearest rung of the other ladder
+   instead of silently changing what the user picked into a ragged number. */
+const RADIUS_LADDER = {
+  us:     [10, 25, 50, 100, 250, 500, 1000].map((mi) => mi * 1.609344),
+  metric: [10, 25, 50, 100, 250, 500, 1000],
+};
+
 const settings = Object.assign({
   units: 'us',
+  // ---- Where you are -------------------------------------------------------
+  // null until a fix or a manual pick. Persisted, because alerting that only
+  // works while the GPS is warm stops working the moment permission is
+  // declined or the app is reopened somewhere with no sky.
+  home: null,                       // {lat, lon, label, source, at}
+  alertRadiusKm: ALERT_RADIUS_DEFAULT_KM,
   view: 'globe',
   hoverDelayMs: 500,
   timeFormat: 'utc',                // 'utc' | 'local' | 'both'
@@ -2325,6 +2349,347 @@ function formatAge(hours) {
   return `${(hours / 24).toFixed(1)}d`;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// WHERE YOU ARE, AND WHAT IS ACTUALLY NEAR IT
+//
+// Don, 2026-09-18: "this needs the user's location to alert the correct area",
+// and "this app is like a swiss army knife and has a ton of different uses,
+// not just weather."
+//
+// Both sentences land on the same surface. Before this, the featured warning
+// card called `gfxTopAlert()`, which returned the first entry in
+// `warnFeatures` -- a list sorted only by NWS product-type priority, across
+// the entire United States, with no distance test anywhere in the app. On a
+// phone in Vancouver WA it printed a severe thunderstorm warning for Swain
+// County, North Carolina. It was not wrong about the warning. It was wrong
+// about whose warning it was.
+//
+// And it could only ever show weather, while the app was already holding 797
+// earthquakes, 1,214 volcanoes, 97 TFRs and 15 launches in memory at the same
+// moment. Measured, in a default session, with no layers switched on: the
+// feeds run whether or not anything is drawn, so ranking across all of them
+// costs nothing new.
+//
+// So: one distance function that works for every hazard class, one ranking
+// that puts urgency and proximity in the same order, and a radius the user
+// chooses rather than one this file asserts.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const EARTH_R_KM = 6371.0088;
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_R_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/* Distance from a point to an axis-aligned lon/lat box, 0 when inside.
+   Longitude degrees shrink with latitude, so the east-west leg is scaled by
+   cos(lat); without that, a box in Alaska measures roughly twice as wide as
+   it is. */
+function bboxDistanceKm(lat, lon, w, s, e, n) {
+  const dLat = lat < s ? s - lat : lat > n ? lat - n : 0;
+  const dLon = lon < w ? w - lon : lon > e ? lon - e : 0;
+  if (!dLat && !dLon) return 0;
+  const kmPerDegLat = 111.32;
+  const kmPerDegLon = kmPerDegLat * Math.cos(lat * Math.PI / 180);
+  return Math.hypot(dLat * kmPerDegLat, dLon * Math.abs(kmPerDegLon));
+}
+
+/* Ray casting: is the point inside this ring? GeoJSON rings are [lon, lat]. */
+function pointInRing(lat, lon, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    if ((yi > lat) !== (yj > lat)
+        && lon < ((xj - xi) * (lat - yi)) / ((yj - yi) || 1e-12) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/* 0 inside the polygon, else the distance to its nearest vertex. Nearest
+   VERTEX, not nearest edge: NWS warning polygons are drawn with vertices every
+   few km, so the error is small, and the exact version is a projection per
+   segment on a list that is re-ranked every refresh. */
+function polygonDistanceKm(lat, lon, geometry) {
+  if (!geometry) return null;
+  const polys = geometry.type === 'Polygon' ? [geometry.coordinates]
+    : geometry.type === 'MultiPolygon' ? geometry.coordinates : null;
+  if (!polys) return null;
+  let best = Infinity;
+  for (const poly of polys) {
+    const outer = poly && poly[0];
+    if (!outer || !outer.length) continue;
+    if (pointInRing(lat, lon, outer)) return 0;
+    for (const [plon, plat] of outer) {
+      const d = haversineKm(lat, lon, plat, plon);
+      if (d < best) best = d;
+    }
+  }
+  return Number.isFinite(best) ? best : null;
+}
+
+/* ---- The county table ----------------------------------------------------
+   92% of live NWS alerts carry no polygon at all -- measured at 371 active,
+   28 with geometry. They name their area as a SAME code instead: "008081" is
+   a zero-prefixed FIPS, 08081, Moffat County Colorado. Without this table
+   almost every warning in the country is unrankable.
+
+   Built by scripts/build_county_index.py: 2.8 MB of rings reduced to 245 KB
+   of centroids and bounding boxes. Loaded once, on first use, never on the
+   boot path. */
+const COUNTY = { map: null, places: null, loading: null, failed: false };
+const AREA_INDEX_URL = '/static/data/area_index.json';
+
+async function loadCountyIndex() {
+  if (COUNTY.map || COUNTY.failed) return COUNTY.map;
+  if (COUNTY.loading) return COUNTY.loading;
+  COUNTY.loading = (async () => {
+    try {
+      const res = await fetch(AREA_INDEX_URL);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const doc = await res.json();
+      const rows = doc && doc.counties;
+      if (!rows || !Object.keys(rows).length) {
+        throw new Error('file parsed but held no counties');
+      }
+      COUNTY.map = new Map(Object.entries(rows));
+      COUNTY.places = Array.isArray(doc.places) ? doc.places : [];
+      console.log(`Areas: ${COUNTY.map.size} counties, `
+        + `${COUNTY.places.length} places indexed for alert ranking`);
+    } catch (err) {
+      // Not fatal. Polygon alerts and every non-weather hazard still rank;
+      // zone-only alerts fall back to being treated as unlocatable, which is
+      // the honest answer rather than a guessed position.
+      COUNTY.failed = true;
+      console.warn('Area index unavailable, zone alerts cannot be ranked:', err);
+    } finally {
+      COUNTY.loading = null;
+    }
+    return COUNTY.map;
+  })();
+  return COUNTY.loading;
+}
+
+/* An NWS SAME code is the 5-digit county FIPS with a leading zero. */
+function sameToFips(code) {
+  const s = String(code || '').trim();
+  return s.length === 6 ? s.slice(1) : s.length === 5 ? s : null;
+}
+
+function countyRow(fips) {
+  return (COUNTY.map && COUNTY.map.get(fips)) || null;
+}
+
+// ---- Where the user is ----------------------------------------------------
+
+/* The saved place. Location is a setting, not a session fact: a fix that only
+   exists while the GPS is warm means alerting stops working the moment
+   permission is declined, the sky is blocked, or the app is reopened on a
+   train. The last known position is kept and labelled with its age instead. */
+function homePoint() {
+  const h = settings.home;
+  if (!h || !Number.isFinite(h.lat) || !Number.isFinite(h.lon)) return null;
+  return h;
+}
+
+function setHome(lat, lon, { label = '', source = 'gps' } = {}) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  settings.home = { lat, lon, label, source, at: Date.now() };
+  saveSettings();
+  loadCountyIndex().then(() => {
+    // Name the place from the county table if the caller had no label. It is
+    // the difference between "your area" and "Clark County, WA".
+    if (settings.home && !settings.home.label) {
+      const near = nearestPlaceLabel(lat, lon);
+      if (near) { settings.home.label = near; saveSettings(); }
+    }
+    // Zone-only alerts -- 92% of them -- could not be ranked until the table
+    // arrived, so everything that reads a distance has to be redrawn now.
+    refreshAlerts();
+    gfxRender();
+    HOME_REPAINT?.();
+  });
+  refreshAlerts();
+  gfxRender();
+  HOME_REPAINT?.();
+  return settings.home;
+}
+
+/* What to call the place the user is standing in.
+
+   NOT the county. Asked which county contains Vancouver WA, the bounding-box
+   lookup answered "Multnomah, OR": Portland's box reaches north over the
+   Columbia and its centroid is nearer than Clark County's. That superset
+   property is exactly what makes a bbox right for "could this alert reach me"
+   and wrong for "where am I" -- so the two questions get two answers, and this
+   one is nearest populated place, which is exact and is the word a person
+   actually uses.
+
+   The distance is part of the label whenever it is not small. Out in Dundy
+   County the nearest named town is 90 km off, and printing "McCook, Nebraska"
+   flat would be the app telling somebody they are somewhere they are not. */
+const PLACE_NEAR_KM = 15;
+
+function nearestPlaceLabel(lat, lon) {
+  const places = COUNTY.places;
+  if (!places || !places.length) return '';
+  let best = null, bestD = Infinity;
+  for (const [plon, plat, name, region] of places) {
+    // Cheap squared planar reject first: haversine on 7,342 rows runs on every
+    // fix, and trigonometry is the expensive part.
+    const dx = (plon - lon) * Math.cos(lat * Math.PI / 180);
+    const dy = plat - lat;
+    const q = dx * dx + dy * dy;
+    if (q >= bestD) continue;
+    bestD = q;
+    best = { name, region, plat, plon };
+  }
+  if (!best) return '';
+  const km = haversineKm(lat, lon, best.plat, best.plon);
+  const where = best.region ? `${best.name}, ${best.region}` : best.name;
+  return km <= PLACE_NEAR_KM ? where : `${formatDistanceKm(km)} from ${where}`;
+}
+
+function alertRadiusKm() {
+  const v = Number(settings.alertRadiusKm);
+  return Number.isFinite(v) && v > 0 ? v : ALERT_RADIUS_DEFAULT_KM;
+}
+
+function radiusLadder() {
+  return RADIUS_LADDER[settings.units === 'us' ? 'us' : 'metric'];
+}
+
+/* Which rung the stored km value is nearest to. Derived rather than stored so
+   that a unit switch lands on a round number in the new unit. */
+function radiusIndex() {
+  const ladder = radiusLadder();
+  const km = alertRadiusKm();
+  let best = 0, bestD = Infinity;
+  ladder.forEach((v, i) => {
+    const d = Math.abs(v - km);
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+
+function radiusLabel(km) {
+  if (settings.units === 'us') return `${Math.round(km / 1.609344)} mi`;
+  return `${Math.round(km)} km`;
+}
+
+/* The location panel in Settings. Writes the two things alerting depends on
+   and nothing else, so a denied permission leaves the app exactly as usable
+   as it was -- nationwide ranking -- rather than broken. */
+function initHomeArea() {
+  const nameEl   = document.getElementById('home-name');
+  const subEl    = document.getElementById('home-sub');
+  const gpsBtn   = document.getElementById('home-use-gps');
+  const clearBtn = document.getElementById('home-clear');
+  const slider   = document.getElementById('alert-radius');
+  const valEl    = document.getElementById('alert-radius-val');
+  if (!slider) return;
+
+  const paint = () => {
+    const ladder = radiusLadder();
+    slider.max = String(ladder.length - 1);
+    slider.value = String(radiusIndex());
+    if (valEl) valEl.textContent = radiusLabel(alertRadiusKm());
+
+    const h = homePoint();
+    if (nameEl) {
+      nameEl.textContent = h
+        ? (h.label || `${h.lat.toFixed(3)}, ${h.lon.toFixed(3)}`)
+        : 'Not set';
+    }
+    if (subEl) {
+      if (!h) {
+        subEl.textContent = 'Alerts are ranked nationwide until you set a location.';
+      } else {
+        const near = rankedHazards().filter((x) => x.inArea).length;
+        // Age only once it means something. "fix 0m old" is noise, and the
+        // number matters exactly when the fix is stale enough to distrust.
+        const ageH = h.at ? (Date.now() - h.at) / 3.6e6 : null;
+        const age = ageH != null && ageH > 0.08 ? `${formatAge(ageH)} old` : '';
+        subEl.textContent =
+          `${near} hazard${near === 1 ? '' : 's'} within ${radiusLabel(alertRadiusKm())}`
+          + (age ? ` · fix ${age}` : '');
+      }
+    }
+    if (clearBtn) clearBtn.disabled = !h;
+  };
+
+  slider.addEventListener('input', () => {
+    const ladder = radiusLadder();
+    const i = Math.max(0, Math.min(ladder.length - 1, Number(slider.value) | 0));
+    settings.alertRadiusKm = ladder[i];
+    saveSettings();
+    paint();
+    refreshAlerts();
+    gfxRender();
+  });
+
+  gpsBtn?.addEventListener('click', () => {
+    if (!navigator.geolocation) { toast('This device cannot report a location'); return; }
+    gpsBtn.disabled = true;
+    gpsBtn.textContent = 'Locating…';
+    const reset = () => { gpsBtn.disabled = false; gpsBtn.textContent = 'Use my location'; };
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        reset();
+        setHome(pos.coords.latitude, pos.coords.longitude, { source: 'gps' });
+        paint();
+        // The label arrives after the county table loads, so repaint then too.
+        loadCountyIndex().then(() => setTimeout(paint, 60));
+      },
+      (err) => {
+        reset();
+        toast(err.code === err.PERMISSION_DENIED
+          ? 'Location is off for Graticule. Alerts stay ranked nationwide.'
+          : 'Could not get a location fix. Try again with a clearer view of the sky.');
+      },
+      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 },
+    );
+  });
+
+  clearBtn?.addEventListener('click', () => {
+    settings.home = null;
+    saveSettings();
+    paint();
+    refreshAlerts();
+    gfxRender();
+  });
+
+  // Units own which ladder is showing, so a unit change has to repaint this.
+  document.querySelectorAll('input[name=units]').forEach((r) =>
+    r.addEventListener('change', () => setTimeout(paint, 0)));
+
+  HOME_REPAINT = paint;
+  paint();
+}
+
+/* Set by initHomeArea so a fix arriving from anywhere else -- the locate
+   button, the start-at-location boot path -- can refresh the panel without
+   this module reaching into the settings DOM from four places. */
+let HOME_REPAINT = null;
+
+function formatDistanceKm(km) {
+  if (!Number.isFinite(km)) return '';
+  if (settings.units === 'us') {
+    const mi = km / 1.609344;
+    if (mi < 1) return 'here';
+    return `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`;
+  }
+  if (km < 1) return 'here';
+  return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
+}
+
 // ---------- Alerts & warnings window ---------------------------------------
 
 const ALERT_KINDS = ['tsunamis','severe','hurricanes','tfrs','quakes','volcanoes','launches','news'];
@@ -2372,6 +2737,165 @@ function collectAlerts() {
     out.push(row('launches', id, p));
   }
 
+  return out;
+}
+
+/* ---- One ranked list, every hazard class --------------------------------
+   The app watches eight hazard feeds and NWS warnings. They have nothing in
+   common structurally -- a quake is a point with a magnitude, a warning is a
+   product name against a list of county codes, a launch is a time -- so this
+   flattens all of them to the same shape before anything tries to order them.
+
+   `urgency` is 1-4 on the NWS scale, because that scale is the one the public
+   already reads off a weather app, and everything else is mapped onto it:
+
+     4  WARNING    happening now or about to
+     3  WATCH      conditions favour it
+     2  ADVISORY   expect inconvenience, not danger
+     1  STATEMENT  information only
+
+   `distKm` is null when a hazard cannot be located at all, which is not the
+   same as being far away and must not sort as if it were. */
+
+function hazardUrgency(kind, p) {
+  switch (kind) {
+    case 'tsunamis':   return 4;
+    case 'hurricanes': return 4;
+    case 'severe':     return urgencyRank(p.event || p.headline);
+    case 'quakes': {
+      const m = Number(p.mag) || 0;
+      return m >= 6 ? 4 : m >= 5 ? 3 : m >= 4 ? 2 : 1;
+    }
+    case 'volcanoes':  return p.active === true ? 3 : 1;
+    case 'tfrs':       return 2;
+    case 'launches': {
+      const dt = Math.abs((Date.parse(p.net) - Date.now()) / 3.6e6);
+      return Number.isFinite(dt) && dt < 1 ? 3 : 2;
+    }
+    default:           return 1;
+  }
+}
+
+/* Distance from the saved place to an NWS alert, in three steps, because the
+   feed answers the question three different ways.
+
+     1. A polygon, when there is one (28 of 371 measured). Exact.
+     2. The county bounding boxes its SAME codes name. A bbox CONTAINS its
+        county, so "inside the box" is a superset of "inside the county" --
+        it can include you when you are just outside and can never drop you
+        when you are inside. On a warning system that is the correct direction
+        to be wrong in, and measuring to the county CENTROID instead would put
+        a warning for the county you are standing in 40 km away in somewhere
+        like San Bernardino.
+     3. Nothing. Marine and offshore zones have no county code; they return
+        null and rank as unlocatable rather than as distant. */
+function nwsDistanceKm(feature, from) {
+  if (!feature || !from) return null;
+  const viaPoly = polygonDistanceKm(from.lat, from.lon, feature.geometry);
+  if (viaPoly != null) return viaPoly;
+  const same = (feature.properties
+    && feature.properties.geocode
+    && feature.properties.geocode.SAME) || [];
+  let best = Infinity;
+  for (const code of same) {
+    const row = countyRow(sameToFips(code));
+    if (!row) continue;
+    const d = bboxDistanceKm(from.lat, from.lon, row[2], row[3], row[4], row[5]);
+    if (d < best) best = d;
+  }
+  return Number.isFinite(best) ? best : null;
+}
+
+/* Every live hazard, normalised, with a distance when one can be established.
+   Reads the feeds, not the scene: switching a layer off hides it on the globe
+   and must not stop it warning you. */
+function rankedHazards() {
+  const now = Date.now();
+  const from = homePoint();
+  const out = [];
+
+  for (const kind of ALERT_KINDS) {
+    for (const [id, p] of Object.entries(layerData[kind] || {})) {
+      if (!p) continue;
+      if (kind === 'volcanoes' && p.active !== true) continue;
+      if (kind === 'quakes') {
+        if (typeof p.mag !== 'number' || p.mag < 4) continue;
+        if (!p.time || (now - p.time) / 3.6e6 > 24) continue;
+      }
+      if (kind === 'launches') {
+        const dt = (Date.parse(p.net) - now) / 3.6e6;
+        if (!Number.isFinite(dt) || Math.abs(dt) > 3) continue;
+      }
+      const lat = Number(p.lat), lon = Number(p.lon);
+      const locatable = Number.isFinite(lat) && Number.isFinite(lon);
+      out.push({
+        kind, id, raw: p, feature: null,
+        event: KIND_LABEL[kind] || kind,
+        urgency: hazardUrgency(kind, p),
+        expiresMs: Date.parse(p.expires || p.ends || '') || null,
+        distKm: (from && locatable) ? haversineKm(from.lat, from.lon, lat, lon) : null,
+        lat: locatable ? lat : null,
+        lon: locatable ? lon : null,
+      });
+    }
+  }
+
+  for (const f of (warnFeatures || [])) {
+    const p = (f && f.properties) || {};
+    const exp = Date.parse(p.expires || p.ends || '');
+    if (Number.isFinite(exp) && exp <= now) continue;
+    out.push({
+      kind: 'nws', id: p.id || p['@id'], raw: p, feature: f,
+      event: p.event || 'Alert',
+      urgency: urgencyRank(p.event),
+      expiresMs: Number.isFinite(exp) ? exp : null,
+      distKm: nwsDistanceKm(f, from),
+      lat: null, lon: null,
+    });
+  }
+
+  const radius = alertRadiusKm();
+  for (const h of out) {
+    h.inArea = h.distKm != null && h.distKm <= radius;
+  }
+
+  /* Whether this is allowed to take the top of the screen.
+
+     Found by measuring, not by reasoning: ranked from Vancouver WA, the hero
+     card went to a Temporary Flight Restriction 79 km away, over a Flash
+     Flood Warning. Both orderings are defensible in the abstract and both are
+     wrong here -- "nearest first" hands the most prominent surface in the app
+     to a NOTAM, and "most urgent first" hands it to somebody else's flood.
+
+     So the floor is asymmetric, in the direction that cannot hurt anyone:
+
+       urgency 3-4  always competes, whatever is switched on. You get told
+                    about a tsunami or a tornado whether or not you have ever
+                    opened that layer. Safety is not opt-in.
+       urgency 1-2  competes only if you have that layer on. A flight
+                    restriction matters enormously to a pilot and not at all
+                    to everyone else, and the layer toggle is the app already
+                    knowing which one you are.
+
+     Visibility can only ever RAISE eligibility. Nothing serious is ever
+     hidden because a layer was off. */
+  for (const h of out) {
+    h.heroOk = h.urgency >= 3 || h.kind === 'nws' || isLayerOn(h.kind);
+  }
+
+  /* Near and urgent first. Three tiers, because "unlocatable" is its own
+     answer: a marine warning with no county code is not 12,000 km away, it
+     simply has no position, and sorting it as though it did would bury it
+     under every located hazard on the planet. It ranks on urgency alone,
+     after the things that are genuinely near. */
+  out.sort((a, b) => {
+    if (a.inArea !== b.inArea) return a.inArea ? -1 : 1;
+    if (a.urgency !== b.urgency) return b.urgency - a.urgency;
+    const ad = a.distKm == null ? Infinity : a.distKm;
+    const bd = b.distKm == null ? Infinity : b.distKm;
+    if (ad !== bd) return ad - bd;
+    return (a.expiresMs || 0) - (b.expiresMs || 0);
+  });
   return out;
 }
 
@@ -5329,6 +5853,10 @@ function initSettings() {
   slider('op-aurora',         'opAurora',          '',  (v) => Number(v).toFixed(2), () => applyImageryOpacity('aurora'));
   slider('op-parcels',        'opParcels',         '',  (v) => Number(v).toFixed(2), () => applyImageryOpacity('parcels'));
   slider('fade-ms',           'layerFadeMs',      ' ms', (v) => `${v|0} ms`);
+
+  // Not a `slider()`: the stored value is kilometres while the control is an
+  // index into a unit-dependent ladder, so it owns its own binding.
+  initHomeArea();
 
   checkbox('show-graticule',  'showGraticule',  applyGraticule);
   checkbox('sun-lighting',    'sunLighting',    applySunLighting);
@@ -11300,14 +11828,19 @@ function gfxTimeBlock(cfg) {
 
 /* The alert the banner is about: highest priority, still in force, not
    dismissed. warnFeatures is already sorted by warnStyle().p. */
+/* The one hazard worth the top of the screen.
+   Was: the first entry in warnFeatures, which is sorted by NWS product-type
+   priority across the whole country, so it showed a thunderstorm warning for
+   Swain County NC to a phone in Washington State, and it could only ever show
+   weather. Now it is the head of the unified ranking -- nearest and most
+   urgent across all nine hazard classes -- and the card prints the distance,
+   because a card that shows a distant warning without saying it is distant is
+   the original bug wearing a different mask. */
 function gfxTopAlert() {
-  const now = Date.now();
-  for (const f of warnFeatures) {
-    const p = f.properties || {};
-    if (GFX.dismissed.has(p.id || p['@id'])) continue;
-    const exp = Date.parse(p.expires || p.ends || '');
-    if (Number.isFinite(exp) && exp <= now) continue;
-    return f;
+  for (const h of rankedHazards()) {
+    if (GFX.dismissed.has(h.id)) continue;
+    if (!h.heroOk) continue;          // see the floor in rankedHazards()
+    return h;
   }
   return null;
 }
@@ -11550,8 +12083,9 @@ function urgencyRank(evt) {
   return 1;
 }
 
-function gfxUrgencyKey(evt) {
-  const rank = urgencyRank(evt);
+/* Takes a rank now, not a product name: the card ranks earthquakes and
+   launches alongside NWS products and those have no event string to parse. */
+function gfxUrgencyKey(rank) {
   const u = URGENCY[rank] || URGENCY[1];
   const wrap = document.createElement('div');
   wrap.className = 'gfx-urg';
@@ -11582,17 +12116,84 @@ function gfxUrgencyKey(evt) {
   return wrap;
 }
 
+/* The colour of a hazard that is not an NWS product. NWS keeps its own
+   official palette -- that is a national standard and this app does not get a
+   vote -- but a quake or a launch has no assigned colour, so it borrows the
+   one its own map layer already uses. A reader who has seen the orange dots
+   on the globe meets the same orange on the card. */
+function gfxHazardTone(h) {
+  if (h.kind === 'nws') return warnStyle(h.event).c;
+  const css = getComputedStyle(document.documentElement)
+    .getPropertyValue(`--c-${h.kind}`).trim();
+  return css || 'var(--accent)';
+}
+
+/* "34 km away" or "in your area". The line that was missing, and whose absence
+   was the whole defect: the card showed Swain County NC to a phone in
+   Washington and said nothing about the 3,800 km in between. */
+function gfxWhere(h) {
+  const wrap = document.createElement('div');
+  wrap.className = 'gfx-where';
+  if (!homePoint()) {
+    wrap.classList.add('is-unset');
+    wrap.textContent = 'NATIONWIDE · set your location to rank by distance';
+    return wrap;
+  }
+  if (h.distKm == null) {
+    wrap.classList.add('is-unset');
+    wrap.textContent = 'AREA NOT GIVEN';
+    return wrap;
+  }
+  if (h.inArea) {
+    wrap.classList.add('is-near');
+    wrap.textContent = h.distKm < 1
+      ? 'IN YOUR AREA'
+      : `IN YOUR AREA · ${formatDistanceKm(h.distKm)}`;
+    return wrap;
+  }
+  wrap.classList.add('is-far');
+  wrap.textContent = `${formatDistanceKm(h.distKm)} AWAY`;
+  return wrap;
+}
+
+/* What place this hazard is about, in the words its own feed uses. */
+function gfxHazardArea(h) {
+  if (h.kind === 'nws') {
+    return { text: gfxCounties(h.raw.areaDesc), label: gfxAreaLabel(h.raw) };
+  }
+  const p = h.raw || {};
+  const text = p.place || p.area || p.name
+    || [p.region, p.country].filter(Boolean).join(', ');
+  return { text: text ? String(text).toUpperCase() : '', label: 'LOCATION' };
+}
+
+/* The headline. An NWS product names itself; everything else needs one built,
+   because "EARTHQUAKE" alone does not say whether it matters. */
+function gfxHazardTitle(h) {
+  const p = h.raw || {};
+  switch (h.kind) {
+    case 'nws':        return String(h.event || 'ALERT').toUpperCase();
+    case 'quakes':     return `MAGNITUDE ${Number(p.mag).toFixed(1)} EARTHQUAKE`;
+    case 'hurricanes': return `${p.classification || 'TROPICAL CYCLONE'} ${p.name || ''}`
+                                .trim().toUpperCase();
+    case 'volcanoes':  return `${p.name || 'VOLCANO'} · ACTIVE`.toUpperCase();
+    case 'launches':   return `LAUNCH · ${p.name || 'SCHEDULED'}`.toUpperCase();
+    case 'tfrs':       return `FLIGHT RESTRICTION · ${p.type || ''}`.trim().toUpperCase();
+    default:           return String(KIND_LABEL[h.kind] || h.event || 'ALERT').toUpperCase();
+  }
+}
+
 function gfxRenderWarning(cfg) {
-  const f = cfg.on ? gfxTopAlert() : null;
-  const el = gfxShell('warning', cfg, !!f);
+  const h = cfg.on ? gfxTopAlert() : null;
+  const el = gfxShell('warning', cfg, !!h);
   if (!el) return;
-  const p = f.properties || {};
-  const tone = warnStyle(p.event).c;
-  el.style.setProperty('--gfx-accent', tone);
+  el.style.setProperty('--gfx-accent', gfxHazardTone(h));
 
   const now = Date.now();
-  const exp = Date.parse(p.expires || p.ends || '');
-  const start = Date.parse(p.onset || p.effective || p.sent || '');
+  const p = h.raw || {};
+  const exp = h.expiresMs;
+  const start = Date.parse(p.onset || p.effective || p.sent || '')
+    || Number(p.time) || null;
   const left = gfxCountdown(exp - now);
   const expTxt = Number.isFinite(exp)
     ? `EXPIRES ${new Date(exp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
@@ -11600,19 +12201,20 @@ function gfxRenderWarning(cfg) {
 
   el.innerHTML = '';
   el.appendChild(gfxAccentBar());
-  el.appendChild(gfxUrgencyKey(p.event));
+  el.appendChild(gfxUrgencyKey(h.urgency));
+  el.appendChild(gfxWhere(h));
   const body = document.createElement('div');
   body.className = 'gfx-cols';
   body.appendChild(gfxCol(
-    String(p.event || 'ALERT').toUpperCase(),
+    gfxHazardTitle(h),
     left ? `${expTxt} (${left})` : expTxt,
     'gfx-head gfx-alarm'));
-  const counties = gfxCounties(p.areaDesc);
-  if (counties) {
+  const area = gfxHazardArea(h);
+  if (area.text) {
     const rule = document.createElement('div');
     rule.className = 'gfx-rule';
     body.appendChild(rule);
-    body.appendChild(gfxCol(counties, gfxAreaLabel(p), 'gfx-area'));
+    body.appendChild(gfxCol(area.text, area.label, 'gfx-area'));
   }
   el.appendChild(body);
 
@@ -11636,9 +12238,11 @@ function gfxRenderWarning(cfg) {
   x.className = 'gfx-x';
   x.textContent = '×';
   x.title = 'Dismiss this alert graphic';
-  x.setAttribute('aria-label', `Dismiss ${p.event || 'alert'} graphic`);
+  x.setAttribute('aria-label', `Dismiss ${gfxHazardTitle(h)} graphic`);
   x.addEventListener('click', () => {
-    GFX.dismissed.add(p.id || p['@id']);
+    // h.id is the normalised id: the NWS alert id, or the feed's own key for
+    // every other hazard class. One dismiss set covers all nine.
+    GFX.dismissed.add(h.id);
     gfxRender();
   });
   el.appendChild(x);
@@ -13920,6 +14524,10 @@ function locateMe() {
     (pos) => {
       done();
       const { latitude, longitude } = pos.coords;
+      // A fix is worth keeping. This is the only moment the app is certain
+      // where the user is, and alerting needs that answer long after the GPS
+      // has gone cold.
+      setHome(latitude, longitude, { source: 'gps' });
       viewer.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, LOCATE_ALTITUDE_M),
         duration: 1.6,
@@ -14032,8 +14640,11 @@ async function initStartAtLocation() {
 
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      if (!viewer || _userMovedCamera) return;   // they took the wheel while we waited
       const { latitude, longitude } = pos.coords;
+      // Saved even if the user has already taken the camera: the fix answers
+      // "where are you", which is true regardless of where they are looking.
+      setHome(latitude, longitude, { source: 'gps' });
+      if (!viewer || _userMovedCamera) return;   // they took the wheel while we waited
       // The North America lock owns the camera when it is on, and would drag
       // the view straight back off the user's location.
       settings.lockNorthAmerica = false;

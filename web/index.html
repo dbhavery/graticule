@@ -1194,6 +1194,27 @@
       </header>
       <div class="sm-body">
 
+        <!-- Alerting needs an answer to "where are you". Before this the app
+             ranked every hazard in the country by product type alone and put
+             a North Carolina thunderstorm warning on a phone in Washington. -->
+        <section class="sm-section">
+          <div class="sm-section-label">YOUR AREA</div>
+          <div class="sm-place">
+            <div class="sm-place-name" id="home-name">Not set</div>
+            <div class="sm-place-sub" id="home-sub">Alerts are ranked nationwide until you set a location.</div>
+            <div class="sm-place-btns">
+              <button type="button" class="sm-btn" id="home-use-gps">Use my location</button>
+              <button type="button" class="sm-btn" id="home-clear">Clear</button>
+            </div>
+          </div>
+          <div class="sm-row">
+            <label class="sm-row-lbl" for="alert-radius">Alert radius</label>
+            <input type="range" id="alert-radius" min="0" max="6" step="1" value="3">
+            <span id="alert-radius-val" class="mono">50 mi</span>
+          </div>
+          <div class="sm-note" id="alert-radius-note">Anything inside this ring is ranked ahead of everything else, whatever kind of hazard it is.</div>
+        </section>
+
         <section class="sm-section">
           <div class="sm-section-label">UNITS</div>
           <div class="sm-radiogroup">

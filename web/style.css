@@ -5542,6 +5542,57 @@ div[data-requires].is-off .wf-item.is-active {
   white-space: nowrap;
 }
 
+/* ═════════════════════════════════════════════════════════════════════════
+   WHERE THIS HAZARD IS, RELATIVE TO YOU
+
+   The line that was missing. The card used to print a warning for a county
+   3,800 km away with nothing on it to say so, because the app had no concept
+   of where the reader was standing. Three states, and they must be tellable
+   apart without reading the words -- NEAR carries the hazard's own accent, FAR
+   and UNSET are deliberately grey so that distance never competes with the
+   severity colour above it.
+   ═════════════════════════════════════════════════════════════════════════ */
+.gfx-where {
+  padding: 5px 12px 0;
+  font-family: var(--sans);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-wide);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gfx-where.is-near  { color: var(--gfx-accent); }
+.gfx-where.is-far   { color: var(--text-mute); font-weight: 600; }
+.gfx-where.is-unset { color: var(--text-mute); font-weight: 600; }
+
+/* ---- Settings: your area ---- */
+.sm-place {
+  padding: 2px 0 10px;
+  border-bottom: 1px solid var(--panel-rule);
+  margin-bottom: 10px;
+}
+.sm-place-name {
+  font-family: var(--sans);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text);
+}
+.sm-place-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-mute);
+  margin-top: 3px;
+}
+.sm-place-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.sm-place-btns .sm-btn[disabled] { opacity: 0.4; cursor: default; }
+.sm-note {
+  font-size: var(--fs-xs);
+  color: var(--text-mute);
+  margin-top: 8px;
+  line-height: 1.45;
+}
+
 /* The broadcast styles hide their accent bar; the key goes with it, because
    those layouts are authored for a 16:9 frame where the presenter narrates. */
 .gfx[data-style="2"] .gfx-urg,
