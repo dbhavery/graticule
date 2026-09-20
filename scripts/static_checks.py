@@ -452,6 +452,59 @@ def main() -> None:
         'dist/satellite.min.js"></script>')
     probe = [u for u in re.findall(r'(?:src|href)="(https?://[^"]+)"', probe_index)
              if "cesium.com" in u or "jsdelivr" in u]
+    # ---- the proxy allowlist exists twice, so it has to agree with itself --
+    #
+    # graticule/server.py serves /api/proxy for the desktop build and the test
+    # suites; api/proxy.js serves it on Vercel for the web build. Two copies
+    # of a security boundary is exactly the shape that drifts, and the failure
+    # is silent: a host added to one and not the other works in development
+    # and 403s in production, or worse the other way round.
+    print("\n== the proxy allowlist agrees with itself ==")
+
+    srv = read(ROOT / "graticule" / "server.py")
+    fn = read(ROOT / "api" / "proxy.js")
+
+    def hosts(text: str, opener: str) -> set[str]:
+        block = text.split(opener, 1)
+        if len(block) < 2:
+            return set()
+        return set(re.findall(r'"([a-z0-9.-]+\.[a-z]{2,})"',
+                              block[1].split("})", 1)[0].split("]", 1)[0]))
+
+    py_hosts = hosts(srv, "PROXY_HOSTS = frozenset({")
+    js_hosts = hosts(fn.replace("'", '"'), "const ALLOWED = new Set([")
+    chk(bool(py_hosts) and py_hosts == js_hosts,
+        f"server.py and api/proxy.js allow the same {len(py_hosts)} hosts "
+        f"(only in python: {sorted(py_hosts - js_hosts) or 'none'}; "
+        f"only in js: {sorted(js_hosts - py_hosts) or 'none'})")
+
+    # Both must refuse anything else, and both must refuse plain http, which
+    # is what stops the proxy reaching a private address on its own network.
+    chk('parsed.scheme != "https"' in srv and "target.protocol !== 'https:'" in fn,
+        "both refuse anything that is not https")
+    chk("host not allowed" in srv and "host not allowed" in fn,
+        "and both refuse a host that is not on the list")
+
+    # The feeds' own list is a runtime hint that grows when a direct request
+    # fails, so it may be a SUBSET; what it may never be is a host the proxy
+    # would refuse, because that request can then never succeed anywhere.
+    feeds_js = read(WEB / "feeds.js")
+    m = re.search(r"const NEEDS_PROXY = new Set\(\[(.*?)\]\)", feeds_js, re.S)
+    feed_hosts = set(re.findall(r"'([a-z0-9.-]+\.[a-z]{2,})'", m.group(1) if m else ""))
+    orphans = sorted(feed_hosts - py_hosts)
+    chk(not orphans,
+        f"every host feeds.js would proxy is one the proxy allows ({orphans or 'none'})")
+
+    # CONTROL: three of the four above report an absence, and the parity one
+    # reports equality, which is also what two empty sets look like. Drop a
+    # host from one copy and the comparison has to notice.
+    probe_fn = fn.replace("'api.weather.gov',", "", 1)
+    probe_js = hosts(probe_fn.replace("'", '"'), "const ALLOWED = new Set([")
+    chk(bool(py_hosts) and py_hosts != probe_js
+        and sorted(py_hosts - probe_js) == ["api.weather.gov"],
+        "CONTROL: removing one host from api/proxy.js is reported as drift "
+        f"({sorted(py_hosts - probe_js)})")
+
     bumped = drift({**pins, "cesium": "1.122.0"})
     chk(len(probe) == 1 and len(bumped) == 1,
         f"CONTROL: the scan finds the jsdelivr tag when it is put back ({probe}), "
