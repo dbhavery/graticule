@@ -2047,37 +2047,78 @@ function fadeTileset(tileset, fromA, toA, durationMs = _layerFadeMs(), onDone) {
   requestAnimationFrame(step);
 }
 
+/* Layers that own their own imagery, primitives or providers, and so cannot go
+   through the generic data-source path below.
+   This was a 28-arm `if (layer === ...)` chain, which is how a dead `nightlights`
+   arm survived in it: the markup moved that control to the sky group months ago
+   (`#sky-nightlights`), nothing pointed at the old key any more, and a chain has
+   no way to notice an arm nobody can reach. A table can be compared against the
+   markup, which `assertLayerDispatch` does at boot. */
+const LAYER_TOGGLES = {
+  radar:       (on) => toggleRadar(on),
+  clouds:      (on) => toggleClouds(on),
+  aurora:      (on) => toggleAurora(on),
+  buildings:   (on) => toggleBuildings(on),
+  photoreal3d: (on) => togglePhotoreal3D(on),
+  cables:      (on) => toggleCables(on),
+  radar_site:  (on) => toggleRadarSite(on),
+  spc_outlook: (on) => toggleSpcOutlook(on),
+  model:       (on) => toggleModelField(on),
+  airquality:  (on) => toggleAirQuality(on),
+  metar:       (on) => toggleMetar(on),
+  warnings:    (on) => toggleWarnings(on),
+  lsr:         (on) => toggleLsr(on),
+  cameras:     (on) => toggleCameras(on),
+  spotters:    (on) => toggleSpotters(on),
+  rivers:      (on) => toggleRivers(on),
+  tides:       (on) => toggleTides(on),
+  buoys:       (on) => toggleBuoys(on),
+  terminator:  (on) => toggleTerminator(on),
+  parcels_us:  (on) => toggleParcelsUS(on),
+  parcels_wa:  (on) => toggleParcelsWA(on),
+  countries:   (on) => toggleCountries(on),
+  states:      (on) => toggleStates(on),
+  cities:      (on) => toggleCities(on),
+  airspace:    (on) => toggleAirspace(on),
+};
+
+/* The invariant the chain could not hold: the switches in the markup and the
+   code that answers them have to name the same layers.
+
+   Both directions matter and they fail differently. A key in the table with no
+   switch is dead code, silent forever -- that was `nightlights`. A switch with
+   no table entry and no data source is worse: it looks live, it takes the
+   click, and nothing happens.
+
+   Warns rather than throws. God's Eye View's catalog throws here, which is the
+   right call for a build step; this runs in front of a user mid-flight, and a
+   globe with one inert switch beats a blank screen. The message is written for
+   whoever is reading the console, not for a log scraper. */
+function assertLayerDispatch() {
+  const markup = new Set(
+    [...document.querySelectorAll('input[data-layer]')].map((el) => el.dataset.layer));
+  const dead = Object.keys(LAYER_TOGGLES).filter((k) => !markup.has(k));
+  // `dataSources` is populated as feeds arrive, so a key absent from BOTH the
+  // table and the category map is the real defect; one merely not built yet is
+  // not. CATEGORY is the static list of every layer the feeds can send.
+  const unhandled = [...markup].filter(
+    (k) => !LAYER_TOGGLES[k] && !(k in CATEGORY));
+  if (dead.length) {
+    console.warn(`[layers] handled but no switch exists: ${dead.join(', ')} -- dead code`);
+  }
+  if (unhandled.length) {
+    console.warn(`[layers] switch exists but nothing handles it: ${unhandled.join(', ')} -- inert control`);
+  }
+  return { dead, unhandled };
+}
+
 function bindUI() {
+  assertLayerDispatch();
   document.querySelectorAll('input[data-layer]').forEach((cb) => {
     cb.addEventListener('change', () => {
       const layer = cb.dataset.layer;
       const on = cb.checked;
-      if (layer === 'radar')           toggleRadar(on);
-      else if (layer === 'clouds')     toggleClouds(on);
-      else if (layer === 'aurora')     toggleAurora(on);
-      else if (layer === 'buildings')  toggleBuildings(on);
-      else if (layer === 'photoreal3d')togglePhotoreal3D(on);
-      else if (layer === 'cables')     toggleCables(on);
-      else if (layer === 'nightlights')toggleNightLights(on);
-      else if (layer === 'radar_site') toggleRadarSite(on);
-      else if (layer === 'spc_outlook')toggleSpcOutlook(on);
-      else if (layer === 'model')      toggleModelField(on);
-      else if (layer === 'airquality') toggleAirQuality(on);
-      else if (layer === 'metar')      toggleMetar(on);
-      else if (layer === 'warnings')   toggleWarnings(on);
-      else if (layer === 'lsr')        toggleLsr(on);
-      else if (layer === 'cameras')    toggleCameras(on);
-      else if (layer === 'spotters')   toggleSpotters(on);
-      else if (layer === 'rivers')     toggleRivers(on);
-      else if (layer === 'tides')      toggleTides(on);
-      else if (layer === 'buoys')      toggleBuoys(on);
-      else if (layer === 'terminator') toggleTerminator(on);
-      else if (layer === 'parcels_us') toggleParcelsUS(on);
-      else if (layer === 'parcels_wa') toggleParcelsWA(on);
-      else if (layer === 'countries')  toggleCountries(on);
-      else if (layer === 'states')     toggleStates(on);
-      else if (layer === 'cities')     toggleCities(on);
-      else if (layer === 'airspace')   toggleAirspace(on);
+      if (LAYER_TOGGLES[layer]) LAYER_TOGGLES[layer](on);
       else if (dataSources[layer]) {
         // Build on the way in, release on the way out. The fade still runs on
         // the data source either way, so the layer appears and leaves the same
@@ -8405,8 +8446,11 @@ function initWeatherControls() {
   };
   bind('radar-site',    () => { if (isLayerOn('radar_site')) rebuildRadarSiteLayer(); });
   bind('radar-product', () => { if (isLayerOn('radar_site')) rebuildRadarSiteLayer(); });
-  bind('sat-product',   () => { if (isLayerOn('clouds'))     rebuildCloudsLayer(); });
-  bind('sat-source',    () => { if (isLayerOn('clouds'))     rebuildCloudsLayer(); });
+  // gfxRender too: the readout names the satellite and channel now, so the
+  // graphic has to be told the selection moved or it keeps the old provider's
+  // name over the new provider's tiles.
+  bind('sat-product',   () => { if (isLayerOn('clouds')) { rebuildCloudsLayer(); gfxRender(); } });
+  bind('sat-source',    () => { if (isLayerOn('clouds')) { rebuildCloudsLayer(); gfxRender(); } });
   bind('spc-day',       () => { if (isLayerOn('spc_outlook')) rebuildSpcOutlook(); });
   bind('model-name',    () => refreshModelField());
   bind('model-field',   () => refreshModelField());
@@ -11932,6 +11976,30 @@ function gfxLayerOn(key) {
   return !!(cb && cb.checked);
 }
 
+/* Name the satellite imagery that is actually on the globe.
+   This used to be the constant string 'GOES INFRARED', which is true for only
+   one of the seven things `rebuildCloudsLayer` can mount: the selector spans
+   two GOES satellites and three channels, plus NASA's global true-colour
+   composite and RainViewer's global infrared. The radar line next to it had
+   the same defect and was worse -- it read 'MRMS COMPOSITE' over RainViewer
+   tiles, naming a NOAA product this app has never called, on the one surface
+   built to look authoritative. Both now derive from the same controls the
+   layer builds from, so a new product cannot arrive without its own label. */
+function cloudsStampSub() {
+  const source  = valueOf('sat-source', 'goes-east');
+  const product = valueOf('sat-product', 'ir');
+  // Source and channel are independent selects, so not every pairing exists:
+  // GOES carries no true colour and RainViewer carries only infrared. The
+  // branch order below is `rebuildCloudsLayer`'s, deliberately, so the two
+  // cannot disagree about which provider answered.
+  const CHANNEL = { vis: 'VISIBLE', ir: 'INFRARED', wv: 'WATER VAPOR' };
+  if (source !== 'global' && CHANNEL[product]) {
+    return `${source === 'goes-west' ? 'GOES-WEST' : 'GOES-EAST'} ${CHANNEL[product]}`;
+  }
+  if (product === 'truecolor') return 'NASA GIBS TRUE COLOR';
+  return 'RAINVIEWER INFRARED';
+}
+
 /* Read the product off the globe, most specific first. Model field beats radar
    because turning it on is a deliberate act; radar is the app's resting state. */
 function gfxProduct() {
@@ -11952,8 +12020,8 @@ function gfxProduct() {
   if (gfxLayerOn('radar') && GFX.stamp) {
     return { title: GFX.stamp.kind, sub: GFX.stamp.src, when: GFX.stamp.when };
   }
-  if (gfxLayerOn('radar'))       return { title: 'RADAR',      sub: 'MRMS COMPOSITE' };
-  if (gfxLayerOn('clouds'))      return { title: 'SATELLITE',  sub: 'GOES INFRARED' };
+  if (gfxLayerOn('radar'))       return { title: 'RADAR',      sub: 'RAINVIEWER COMPOSITE' };
+  if (gfxLayerOn('clouds'))      return { title: 'SATELLITE',  sub: cloudsStampSub() };
   if (gfxLayerOn('spc_outlook')) return { title: 'SPC OUTLOOK', sub: 'STORM PREDICTION CENTER' };
   if (gfxLayerOn('warnings'))    return { title: 'WATCHES & WARNINGS', sub: 'NATIONAL WEATHER SERVICE' };
   if (gfxLayerOn('metar'))       return { title: 'SURFACE OBS', sub: 'METAR' };

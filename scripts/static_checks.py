@@ -197,6 +197,45 @@ def main() -> None:
         f"the base map's own credit is on screen, not behind the expander "
         f"({app.count('onScreenCredit(')} promoted)")
 
+    # ---- the switches and the code that answers them --------------------
+    #
+    # The layer set IS the product, and it lived in two places that nothing
+    # compared: 38 `input[data-layer]` in the markup, and a 28-arm if/else in
+    # `bindUI`. A `nightlights` arm sat in that chain long after its switch
+    # moved to the sky group, unreachable and silent. issues.md 73.
+    #
+    # Two failure shapes, and they are not symmetric. A handler with no switch
+    # is dead code. A switch with no handler is an inert control: it looks
+    # live, it takes the click, and the user is the one who finds out.
+    print("\n== every layer switch reaches code, and every handler has a switch ==")
+
+    def dispatch(app_src: str, html_src: str) -> tuple[list[str], list[str]]:
+        markup = set(re.findall(r'data-layer="([a-z0-9_]+)"', html_src))
+        block = re.search(r"const LAYER_TOGGLES = \{(.*?)\n\};", app_src, re.S)
+        toggles = set(re.findall(r"^\s{2}([a-z0-9_]+):", block.group(1), re.M)) \
+            if block else set()
+        cat = re.search(r"const CATEGORY = \{(.*?)\n\};", app_src, re.S)
+        category = set(re.findall(r"([a-z0-9_]+):\s*'", cat.group(1))) if cat else set()
+        return sorted(toggles - markup), sorted(markup - toggles - category)
+
+    dead, inert = dispatch(app, index)
+    chk(not dead, f"no handler without a switch ({dead or 'none'})")
+    chk(not inert, f"no switch without a handler ({inert or 'none'})")
+    chk("assertLayerDispatch()" in app,
+        "bindUI runs the same check at boot, so a running build says so too")
+
+    # CONTROL: both arms above report "we found zero". Reintroduce each defect
+    # on a copy and prove the detector sees it -- the dead arm is the exact
+    # line that was removed, not a stand-in.
+    revived = app.replace(
+        "  radar:       (on) => toggleRadar(on),",
+        "  radar:       (on) => toggleRadar(on),\n"
+        "  nightlights: (on) => toggleNightLights(on),")
+    inerted = index.replace('data-layer="radar"', 'data-layer="lightning"', 1)
+    chk(dispatch(revived, index)[0] == ["nightlights"]
+        and dispatch(app, inerted)[1] == ["lightning"],
+        "CONTROL: it reports the revived nightlights arm and an inert switch")
+
     print(f"\n{len(ok)} passed, {len(bad)} failed")
     for m in bad:
         print("  FAILED:", m)
