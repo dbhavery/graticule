@@ -562,13 +562,28 @@ html, body {
   padding: 16px 18px;
   backdrop-filter: blur(8px);
   overflow-y: auto;
-  transition: transform 180ms ease, opacity 180ms ease;
+
+  /* NO TRANSITION. Same reason as the sheet, the division pills, the fade-ins
+     and the scroll edges: Cesium renders the globe on the main thread and the
+     animation clock barely advances while it does, so a 180ms fade here was
+     still incomplete seconds after a click. A details panel that appears to
+     do nothing when you tap an aircraft is the complaint this rule came from.
+     IF THE CLOCK CAN STALL, NOTHING A USER IS WAITING ON GOES BEHIND IT. */
 }
-#panel.hidden {
-  pointer-events: none;
-  transform: translateX(20px);
-  opacity: 0;
-}
+
+/* `display: none`, not a transform slide.
+   This was `transform: translateX(20px); opacity: 0`, which left a 380px panel
+   laid out at `right: 16px` and then pushed it 20px further right. Four of
+   those pixels landed outside a 1440px viewport, and a TRANSFORMED ELEMENT
+   STILL CONTRIBUTES TO SCROLLABLE OVERFLOW even at zero opacity. That is the
+   whole of issues.md 70's desktop overflow: scrollWidth 1444 against an
+   innerWidth of 1440, enough to put a scrollbar on a window sized exactly to
+   its content, and invisible because the thing causing it could not be seen.
+
+   Attributed by walking `body *` for a rect past the right edge, in a pinned
+   1440x900 layout viewport. Guessing would not have found it: the offender
+   reports itself as hidden. */
+#panel.hidden { display: none; }
 #panel-close {
   position: absolute;
   top: 8px;
