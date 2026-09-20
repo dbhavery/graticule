@@ -2216,3 +2216,55 @@ metadata (`src/app/catalog.js:29-37`), while Graticule's toggle list is markup
 and its dispatch is a switch, so the two can disagree silently. The layer set
 is the product; it has no single registry and nothing asserts the two lists
 match.
+
+## 74. Hazard notifications cannot wake a sleeping phone (BY DESIGN, for now)
+
+Added 2026-09-19. The app now raises an OS notification and an alarm when a
+hazard enters the user's chosen radius, deduplicated against a persisted list
+so the same warning is never announced twice.
+
+It runs **in the page**. That means it works while Graticule is open, and for
+as long as Android leaves the WebView alive behind other apps, and not after
+that. It is not a background weather alarm.
+
+Making it one needs a server push through Google's FCM: a cloud messaging
+project tied to Don's identity, a backend that is deployed and watching NWS on
+the user's behalf, and a device token registry. The backend is not deployed at
+all yet, so none of that is reachable from here.
+
+Two things were done instead of pretending otherwise:
+
+* The Settings copy says it plainly, and points at NOAA Weather Radio and the
+  phone's own emergency alerts for the case this cannot cover. A person who
+  believes an app will wake them and is wrong is worse off than one who was
+  never offered it.
+* `RECEIVE_BOOT_COMPLETED` and `WAKE_LOCK`, which the plugin's manifest merges
+  in for SCHEDULED notifications, are stripped with `tools:node="remove"`.
+  This app schedules nothing, and holding a permission for a capability it
+  does not have is how a store review turns into a conversation.
+
+The permission set was read out of the built APK with `aapt2 dump permissions`,
+not off the source manifest, because the merge is the thing that decides.
+
+## 75. The localStorage detector could not see a key written through a constant
+
+Found 2026-09-19 while adding `graticule.told.v1`. `static_checks.py` and
+`legal_pages_test.py` both asserted "the policy names exactly the localStorage
+keys app.js uses" with:
+
+    localStorage\.(?:get|set|remove)Item\(\s*'([^']+)'
+
+which matches a string literal and nothing else. Every key this codebase adds
+is a module constant, so the check has been comparing the privacy policy
+against four keys while the app used eight.
+
+FIXED. The helper now resolves `const NAME = 'graticule...'` and checks
+whether `NAME` reaches a localStorage call. Running it immediately reported
+four undeclared keys, three of which had been live for months:
+`graticule.presets.v1`, `graticule.scenes.v1` and
+`graticule.settings.units_default_flipped`, plus the new one. The policy now
+names all eight.
+
+Same family as issue 66 and the stale location paragraph above it: the gate
+passed the whole time, and a pass from an instrument that cannot see the thing
+it is looking for means nothing.

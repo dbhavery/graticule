@@ -65,6 +65,30 @@ def em_dashes(text: str) -> int:
 PROSE_EM = re.compile(r"\w[^<>]*" + EM + r"|" + EM + r"[^<>]*\w")
 
 
+def storage_keys(js: str) -> set[str]:
+    """Every localStorage key app.js actually touches.
+
+    THIS USED TO MATCH ONLY STRING LITERALS, and a key written through a
+    constant was invisible to it. Three keys had been live and undeclared for
+    months behind that blind spot -- graticule.presets.v1 (saved camera
+    positions), graticule.scenes.v1 (scene decks) and the units-flip flag --
+    because each is referenced as `localStorage.setItem(PRESETS_KEY, ...)`.
+
+    The check reported "the policy names exactly the keys app.js uses" the
+    whole time, comparing the policy against a list that could not grow the
+    way this codebase actually adds keys. A pass meant nothing. Resolve the
+    constants too.
+    """
+    keys = set(re.findall(
+        r"localStorage\.(?:get|set|remove)Item\(\s*'([^']+)'", js))
+    for name, value in re.findall(
+            r"const\s+([A-Z_][A-Z0-9_]*)\s*=\s*'(graticule\.[^']+)'", js):
+        if re.search(r"localStorage\.(?:get|set|remove)Item\(\s*"
+                     + name + r"\b", js):
+            keys.add(value)
+    return keys
+
+
 def prose_em_dashes(text: str) -> list[str]:
     return PROSE_EM.findall(text) + re.findall(r".{0,20}&mdash;.{0,20}",
                                                text, re.IGNORECASE)
@@ -79,9 +103,8 @@ def main() -> None:
     # ---- the privacy policy's claims -------------------------------------
     print("\n== the privacy policy still describes this program ==")
 
-    named = set(re.findall(r"<code>(graticule\.[a-z0-9.]+)</code>", priv))
-    actual = set(re.findall(
-        r"localStorage\.(?:get|set|remove)Item\(\s*'([^']+)'", app_js))
+    named = set(re.findall(r"<code>(graticule\.[a-z0-9._]+)</code>", priv))
+    actual = storage_keys(app_js)
     chk(named == actual,
         f"the policy names exactly the localStorage keys app.js uses "
         f"({len(named)}); missing from policy: {sorted(actual - named) or 'none'}; "

@@ -1188,6 +1188,10 @@ const settings = Object.assign({
   diagnostics: false,
   ambientSound: false,
   soundAlerts: false,
+  // Off by default and asked for explicitly. A notification permission prompt
+  // on first launch, before the app has shown it is worth anything, is the one
+  // most people decline permanently.
+  notifyAlerts: false,
   // ---- Area darkening ------------------------------------------------------
   areaDarkening: false,
   adOpacity: 0.6,                   // matches the reference app's default
@@ -3201,6 +3205,10 @@ function doRefreshAlerts() {
   attachPulseToAlertEntities();
   // Optional sound on genuinely new tsunamis / active launches
   if (window.__prevAlertSet) maybeBeepForNewAlerts(window.__prevAlertSet, all);
+  // Distance-ranked, radius-gated, and deduplicated against what this device
+  // has already said. Cheap enough to sit on the 30-second refresh: it reuses
+  // the ranking the hero card already computed.
+  announceNearbyHazards();
   window.__prevAlertSet = new Set(all.map(a => a.kind + ':' + a.id));
 }
 
@@ -6047,6 +6055,31 @@ function initSettings() {
   checkbox('diagnostics',     'diagnostics',    applyDiagnostics);
   checkbox('ambient-sound',   'ambientSound',   applyAmbientSound);
   checkbox('sound-alerts',    'soundAlerts');
+  /* Turning this on is a request, not a setting: it can be refused by the OS.
+     Writing `true` into settings before asking would leave a checkbox that
+     says yes while Android says no, and the user would trust it. So the
+     checkbox is driven back from the answer. */
+  checkbox('notify-alerts', 'notifyAlerts', async (on) => {
+    if (!on) return;
+    const granted = await requestNotifyPermission();
+    if (!granted) {
+      settings.notifyAlerts = false;
+      saveSettings();
+      const el = document.getElementById('notify-alerts');
+      if (el) el.checked = false;
+      toast('Notifications are blocked for Graticule in your system settings');
+      return;
+    }
+    await initHazardChannel();
+    // Everything already inside the radius counts as told, not as a backlog
+    // to fire at once. Switching this on must not produce eleven
+    // notifications for warnings that have been running all afternoon.
+    for (const h of rankedHazards()) {
+      if (!h.inArea) break;
+      markTold(h.id, h.expiresMs);
+    }
+    toast('You will be told about hazards inside your radius');
+  });
 
   // Reset all settings — clears localStorage and reloads.
   const resetBtn = document.getElementById('reset-settings');
@@ -7414,6 +7447,182 @@ function maybeBeepForNewAlerts(prevSet, newAlerts) {
     if (prevSet.has(a.kind + ':' + a.id)) continue;
     if (a.kind === 'tsunamis') beep({ freq: 880, dur: 0.32, gain: 0.10 });
     else if (a.kind === 'launches' && a.sev === 'active') beep({ freq: 990, dur: 0.18 });
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BEING TOLD                                                added 2026-09-19
+   ═══════════════════════════════════════════════════════════════════════════
+   The app sounded for a tsunami and for a rocket launch, and said nothing for
+   a tornado warning two miles away. That was not a policy, it was the order
+   the features happened to get built in.
+
+   ── What this does, exactly, and what it does NOT do ─────────────────────
+   It raises an OS notification and an alarm when a hazard ENTERS your radius
+   that you have not already been told about. It runs in the page, so it works
+   while the app is open and for as long as Android leaves the WebView alive
+   behind other apps. IT IS NOT A BACKGROUND WEATHER ALARM. Waking a phone
+   that is asleep needs a server push through Google's FCM, which needs a
+   cloud messaging project and a deployed backend; neither exists yet.
+
+   (Spelling that vendor's other name in this file trips the tracker scan in
+   static_checks.py, which greps app.js for analytics and crash-reporting
+   SDKs to hold a claim the privacy page makes. The scan is deliberately
+   blunt and the comment is what gives way.)
+
+   That limit is stated in the Settings copy rather than buried here, because
+   a person who believes this will wake them and is wrong is worse off than a
+   person who was never offered it. See issues.md 74.
+
+   ── Why an explicit told-list ────────────────────────────────────────────
+   Alerts arrive on a 30-second poll and the hazard list is rebuilt from
+   scratch each time, so "new to this render" is not "new to you": a reload,
+   a units change or a radius nudge would re-announce a warning that has been
+   running for an hour. The ids of everything already announced are persisted
+   and expire with the hazard itself. */
+
+const TOLD_KEY = 'graticule.told.v1';
+const TOLD_MAX = 400;
+let TOLD = null;
+
+function toldLoad() {
+  if (TOLD) return TOLD;
+  TOLD = new Map();
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOLD_KEY) || '[]');
+    const now = Date.now();
+    // Drop anything whose hazard has already expired on the way in, so the
+    // store cannot grow without bound across a long-running install.
+    for (const [id, until] of raw) if (until > now) TOLD.set(id, until);
+  } catch { /* corrupt or unavailable storage is an empty told-list */ }
+  return TOLD;
+}
+
+function toldSave() {
+  try {
+    const rows = [...toldLoad().entries()].slice(-TOLD_MAX);
+    localStorage.setItem(TOLD_KEY, JSON.stringify(rows));
+  } catch { /* private mode: announcements repeat, nothing breaks */ }
+}
+
+function alreadyTold(id) {
+  const t = toldLoad().get(id);
+  return !!t && t > Date.now();
+}
+
+function markTold(id, expiresMs) {
+  // A hazard with no expiry still has to fall out of the list eventually, or
+  // a quake announced once is suppressed forever. Twelve hours.
+  toldLoad().set(id, expiresMs && expiresMs > Date.now()
+    ? expiresMs : Date.now() + 12 * 3600_000);
+  toldSave();
+}
+
+function notifyOn() {
+  const cb = document.getElementById('notify-alerts');
+  return !!(cb && cb.checked);
+}
+
+function notifyPlugin() {
+  return isNativeShell() && window.Capacitor.Plugins
+    && window.Capacitor.Plugins.LocalNotifications;
+}
+
+/* Ask once, when the user turns the toggle on, never on boot. A permission
+   prompt on first launch, before the app has shown it is worth anything, is
+   the one most people decline. */
+async function requestNotifyPermission() {
+  const plugin = notifyPlugin();
+  try {
+    if (plugin) {
+      const r = await plugin.requestPermissions();
+      return r && r.display === 'granted';
+    }
+    if ('Notification' in window) {
+      if (Notification.permission === 'granted') return true;
+      return (await Notification.requestPermission()) === 'granted';
+    }
+  } catch (err) {
+    console.warn('notification permission failed:', err);
+  }
+  return false;
+}
+
+let _notifyId = Date.now() % 100000;
+
+async function raiseNotification(title, body) {
+  const plugin = notifyPlugin();
+  try {
+    if (plugin) {
+      await plugin.schedule({ notifications: [{
+        id: ++_notifyId,
+        title,
+        body,
+        // No schedule block: `schedule` with none fires immediately, which is
+        // what this is. Anything time-based here would be a promise the page
+        // cannot keep once Android suspends it.
+        smallIcon: 'ic_stat_graticule',
+        channelId: 'hazards',
+      }] });
+      return true;
+    }
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body, tag: title });
+      return true;
+    }
+  } catch (err) {
+    console.warn('notification failed:', err);
+  }
+  return false;
+}
+
+/* The Android channel. Without one, Android 8+ drops every notification on
+   the floor silently, which is the worst possible failure for this feature:
+   the code runs, nothing throws, and nobody is told. */
+async function initHazardChannel() {
+  const plugin = notifyPlugin();
+  if (!plugin || !plugin.createChannel) return;
+  try {
+    await plugin.createChannel({
+      id: 'hazards',
+      name: 'Hazards near you',
+      description: 'Warnings and hazards inside your alert radius',
+      importance: 5,          // IMPORTANCE_HIGH: heads-up, with sound
+      visibility: 1,          // VISIBILITY_PUBLIC: readable on a lock screen
+      vibration: true,
+    });
+  } catch (err) {
+    console.warn('notification channel failed:', err);
+  }
+}
+
+/* One line a person can act on. The event, how far, and which way to look.
+   Deliberately not the NWS headline, which is written for a teleprinter and
+   opens with the issuing office. */
+function hazardNotificationText(h) {
+  const where = h.distKm != null
+    ? `${formatDistanceKm(h.distKm)} away` : 'in your area';
+  const when = h.expiresMs ? gfxCountdown(h.expiresMs - Date.now()) : '';
+  return when ? `${where} · ${when} left` : where;
+}
+
+/* Runs on every alert refresh. Cheap: rankedHazards is already computed for
+   the card, and the told-list is a Map lookup. */
+function announceNearbyHazards() {
+  if (!notifyOn()) return;
+  if (!homePoint()) return;          // nothing to be near
+  for (const h of rankedHazards()) {
+    if (!h.inArea) break;            // the list is in-area first, so stop
+    // The same floor the hero card uses. An aircraft restriction inside your
+    // radius is not worth a notification; a tornado warning is.
+    if (h.urgency < 3 && h.kind !== 'nws') continue;
+    if (alreadyTold(h.id)) continue;
+    markTold(h.id, h.expiresMs);
+    raiseNotification(gfxHazardTitle(h), hazardNotificationText(h));
+    // The alarm is separate from the notification on purpose: a phone on
+    // silent still shows the card, and a person looking at the map with the
+    // app open gets the sound without the OS being involved at all.
+    if (soundOn()) beep({ freq: 880, dur: 0.45, gain: 0.12 });
   }
 }
 

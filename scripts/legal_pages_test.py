@@ -65,8 +65,27 @@ def em_dashes(text: str) -> int:
 
 
 def storage_keys(js: str) -> set[str]:
-    """Every localStorage key app.js actually touches."""
-    return set(re.findall(r"localStorage\.(?:get|set|remove)Item\(\s*'([^']+)'", js))
+    """Every localStorage key app.js actually touches.
+
+    THIS USED TO MATCH ONLY STRING LITERALS, and a key written through a
+    constant was invisible to it. Three keys had been live and undeclared for
+    months behind that blind spot -- graticule.presets.v1 (saved camera
+    positions), graticule.scenes.v1 (scene decks) and the units-flip flag --
+    because each is referenced as `localStorage.setItem(PRESETS_KEY, ...)`.
+
+    The check reported "the policy names exactly the keys app.js uses" the
+    whole time. It was comparing the policy against a list that could not grow
+    the way this codebase actually adds keys, so a passing result meant
+    nothing. Resolve the constants too.
+    """
+    keys = set(re.findall(
+        r"localStorage\.(?:get|set|remove)Item\(\s*'([^']+)'", js))
+    for name, value in re.findall(
+            r"const\s+([A-Z_][A-Z0-9_]*)\s*=\s*'(graticule\.[^']+)'", js):
+        if re.search(r"localStorage\.(?:get|set|remove)Item\(\s*"
+                     + name + r"\b", js):
+            keys.add(value)
+    return keys
 
 
 def external(urls: list[str]) -> list[str]:

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -56,4 +57,45 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <!-- Notifications, for hazards inside the user's chosen radius.
+
+         Declared here for the same reason the location pair is: the plugin's
+         own manifest would merge it in silently, and a permission nobody
+         wrote down is a permission nobody reviewed before the listing was
+         filled in.
+
+         Android 13 made this a RUNTIME permission. Without the declaration
+         the request call returns denied without ever showing a dialog, which
+         is the worst shape of failure for this feature: the toggle flips, the
+         code runs, nothing throws, and nobody is told anything. The app asks
+         only when the user turns the toggle on, never at launch.
+
+         No SCHEDULE_EXACT_ALARM and no FOREGROUND_SERVICE: this raises
+         notifications from the running page, it does not schedule future ones
+         and it does not keep a service alive to watch the weather. Asking for
+         either would be claiming a capability the app does not have. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The notification plugin's own manifest asks for RECEIVE_BOOT_COMPLETED
+         and WAKE_LOCK, and the merge pulled both into the APK. Verified by
+         dumping permissions out of the built APK, not by reading this file.
+
+         They exist so a notification SCHEDULED for a future time survives a
+         reboot. This app schedules nothing: it raises a notification about a
+         hazard that is happening now, from a page that is running, and then
+         forgets about it. So both are capability the app does not use, and a
+         store reviewer would be right to ask why a weather globe wants to run
+         at boot. Removed.
+
+         The plugin's three receivers stay. Without the permission the boot
+         receiver simply never gets the broadcast, and stripping a component
+         the plugin registers itself is how a plugin stops initialising.
+
+         If scheduled notifications are ever added, these come back WITH the
+         feature, and the Play listing answers change with them. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK"
+        tools:node="remove" />
 </manifest>

@@ -163,7 +163,7 @@ coordinate is <strong>never sent to our server</strong>.</p>
 <h2>What is stored on your device</h2>
 
 <p>Graticule keeps your preferences in your browser's local storage, on the device
-only. Four keys:</p>
+only. Eight keys:</p>
 
 <ul>
   <li><code>graticule.settings.v1</code>, your Settings choices, such as units,
@@ -172,6 +172,15 @@ only. Four keys:</p>
   <li><code>graticule.tab</code>, the panel tab you had open</li>
   <li><code>graticule.rail</code>, whether the side rail is collapsed</li>
   <li><code>graticule.division</code>, your chosen map division</li>
+  <li><code>graticule.presets.v1</code>, camera positions you saved yourself</li>
+  <li><code>graticule.scenes.v1</code>, scene decks you built yourself</li>
+  <li><code>graticule.told.v1</code>, the identifiers of hazards you have already
+      been notified about, so the same warning is not announced twice. It holds
+      alert ids and expiry times, nothing about you, and each row is discarded
+      when its hazard expires</li>
+  <li><code>graticule.settings.units_default_flipped</code>, a one-time marker
+      recording that the default units were changed, so the change is not
+      applied again over a choice you made</li>
 </ul>
 
 <p>None of it identifies you and none of it is transmitted. The app also caches

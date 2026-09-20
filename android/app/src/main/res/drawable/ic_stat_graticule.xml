@@ -1,0 +1,72 @@
+<!--
+  Notification small icon.
+
+  Android draws this as a SILHOUETTE: it keeps the alpha channel and throws
+  every colour away, tinting what is left with the system accent. So this is
+  white on transparent with no fills, and anything that relied on colour to
+  separate two shapes would arrive as one solid blob. That is why the app's
+  full mark is not reused here. Its dim parallels and bright equator are the
+  same shape at two opacities, and a silhouette flattens that distinction.
+
+  What survives is the mark's skeleton at stroke weights a 24dp status bar can
+  actually resolve: the limb, the equator, the polar meridian, and one
+  meridian either side. Five lines, drawn the same orthographic way
+  scripts/build_icons.py draws the launcher, so the two read as the same
+  object.
+
+  24dp with the artwork inset to a 22dp box, which is the documented safe area
+  for a status bar icon. Drawing to the edges gets it scaled down by the
+  system and the strokes go to mush.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+
+  <!-- The limb. Two arcs rather than one circle path, so the stroke joins
+       cleanly at the poles where the meridians meet it. -->
+  <path
+      android:pathData="M12,2 A10,10 0 0,1 12,22 A10,10 0 0,1 12,2 Z"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="1.8"
+      android:fillColor="@android:color/transparent"/>
+
+  <!-- Equator. A straight chord in an orthographic view from the equator,
+       and the heaviest parallel in the launcher icon. -->
+  <path
+      android:pathData="M2,12 L22,12"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="1.8"
+      android:fillColor="@android:color/transparent"/>
+
+  <!-- Two parallels at 40 degrees north and south. Half-width chords:
+       cos(40) * 10 = 7.66, sin(40) * 10 = 6.43. -->
+  <path
+      android:pathData="M4.34,5.57 L19.66,5.57"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="1.3"
+      android:fillColor="@android:color/transparent"/>
+  <path
+      android:pathData="M4.34,18.43 L19.66,18.43"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="1.3"
+      android:fillColor="@android:color/transparent"/>
+
+  <!-- The polar meridian, edge-on, drawn as a straight line. -->
+  <path
+      android:pathData="M12,2 L12,22"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="1.8"
+      android:fillColor="@android:color/transparent"/>
+
+  <!-- One meridian either side, projected to an ellipse of semi-minor axis
+       r * sin(55) = 8.19, drawn at 5.5 so the two do not crowd the limb at
+       status-bar size. Same construction as _globe() in build_icons.py. -->
+  <path
+      android:pathData="M12,2 A5.5,10 0 0,1 12,22 A5.5,10 0 0,1 12,2 Z"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="1.3"
+      android:fillColor="@android:color/transparent"/>
+</vector>
