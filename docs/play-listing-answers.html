@@ -50,13 +50,12 @@
 impression. A declaration that does not match app behaviour is one of the
 faster ways to get an app suspended, and it is checked against the binary.</p>
 
-<div class="card blocked">
-  <p><strong>One answer depends on a decision that is still open.</strong>
-  "Is all user data encrypted in transit" is <strong>Yes only if the backend is
-  served over https</strong>. The release build already refuses to build against
-  a plain-http backend, so this holds as long as the hosting decision produces
-  an https origin. If it somehow does not, this answer changes and so does the
-  privacy policy.</p>
+<div class="card">
+  <p><strong>"Is all user data encrypted in transit" is Yes, and it no longer
+  depends on anything.</strong> This used to be conditional on where the
+  backend got hosted. There is no backend now: every provider the app talks to
+  is https, the relay the web build uses is https, and the release build
+  refuses to build against a plain-http origin.</p>
 </div>
 
 <h2>1. Data Safety</h2>
@@ -278,36 +277,47 @@ panels at the bottom are untouched. Upload the 9x16 set; keep the originals in
 case Play takes the taller ratio.</p>
 
 <h2>7. Hosting</h2>
-<p><strong>Decided and half done.</strong> The two listing URLs are live now.
-The backend is written and configured but not deployed, because deploying it
-needs an account and a card.</p>
+<p><strong>There is no longer a backend to host.</strong> This section used to
+say the app was waiting on an account and a card for Fly.io. It is not waiting
+on anything now.</p>
+<p>The backend polled sixteen feeds, held the merged picture in memory with no
+database, and pushed it to the app over a websocket. That is what forced the
+hosting: in memory means always on, and a free tier that sleeps after fifteen
+idle minutes wipes the state, so the app would open empty and take a minute to
+fill. Every provider it polled is public and keyless, so unlike a server that
+exists to hold somebody's API keys, this one was an aggregator with nothing to
+hide, and an aggregator can run on the phone.</p>
+<p>It does now. <code>web/feeds.js</code> carries all sixteen feeds and the ten
+on-demand endpoints, and the app talks to the agencies itself.</p>
 <table>
 <tr><th>Piece</th><th>Where</th><th>Cost</th><th>State</th></tr>
 <tr><td>Privacy and support pages</td>
     <td><code>https://graticule.vercel.app</code></td>
     <td>Free</td>
     <td><span class="yes">Live</span>, verified public with no login wall</td></tr>
-<tr><td>The app's backend</td>
-    <td>Fly.io, one machine, <code>graticule.fly.dev</code></td>
-    <td>$6.64/mo plus $0.02/GB out</td>
-    <td>Configured, never deployed</td></tr>
+<tr><td>The Android app</td>
+    <td>Inside the APK. No server of any kind.</td>
+    <td>Free</td>
+    <td><span class="yes">Working</span>, measured with every backend route blocked</td></tr>
+<tr><td>A relay, web build only</td>
+    <td>One stateless function on the same free Vercel project</td>
+    <td>Free</td>
+    <td>Written, allowlisted to the eighteen provider hosts</td></tr>
 </table>
-<p><strong>Why Fly and not something cheaper or free.</strong> The backend
-cannot be serverless: its feed loops are long-lived asyncio tasks and the state
-they build is in memory, so a platform that scales to zero stops the feeds, and
-one that scales out multiplies the polling against donated ADS-B
-infrastructure. That leaves a small always-on machine. Fly gives one machine
-with automatic TLS and first-class websockets for about $6.64/mo; a Hetzner VM
-is roughly $2 cheaper and adds operating system patching, TLS renewal and
-firewall upkeep, which is a bad trade on an app with no users yet.</p>
-<p>The machine is 1 GB because the process was measured at <strong>356 MB
-resident</strong> with every feed loaded, and serialising the unbounded
-snapshot briefly costs several hundred more. 512 MB would be tight.</p>
-<p><strong>Egress is worth one line.</strong> At the old 35 MB boot snapshot,
-a thousand app launches a day would have been about a terabyte a month, which
-is roughly $20 of bandwidth. After the deferred-snapshot change it is about
-3.4 MB a launch, so the same traffic is nearer $2. The fix pays for the machine
-several times over.</p>
+<p><strong>Why the relay exists and why it is not a backend.</strong> Ten of
+the seventeen providers send <code>Access-Control-Allow-Origin</code> and seven
+do not, so a browser cannot call those seven directly. Android is unaffected:
+Capacitor makes each request in native code, where there is no origin and no
+CORS check. The relay is given one address to fetch and keeps nothing between
+calls, which is exactly why a free serverless tier is enough and why there is
+nothing to keep awake.</p>
+<p><strong>What this changes for a user.</strong> The agencies now see a
+request from the user's device rather than from one machine of ours. In
+exchange there is no longer any server that could hold a record of what
+anybody looked at. The privacy policy states the trade in those terms rather
+than claiming the old arrangement, and
+<code>scripts/legal_pages_test.py</code> now reads the running app and fails if
+it reaches a host the policy does not name.</p>
 
 <h2>8. Still to produce</h2>
 <ul>

@@ -191,12 +191,30 @@ uninstalling it, removes all of it. There is no server side copy to delete.</p>
 
 <p>Every request made by any app or website reveals your IP address to whoever
 receives it. That is how the internet routes a reply, and no app can avoid it.
-What an app <em>can</em> control is how many parties receive one. Graticule routes
-almost all of its weather data through a single backend, which fetches from the
-National Weather Service, USGS, NOAA and the rest on your behalf, so those
-agencies never see your device at all.</p>
+What an app <em>can</em> control is how many parties receive one, and who sits
+in the middle.</p>
 
-<p>These are the parties your device contacts directly:</p>
+<p><strong>This changed, and the change is worth stating plainly.</strong>
+Graticule used to route its weather data through a backend we ran, which
+fetched from the National Weather Service, USGS, NOAA and the rest on your
+behalf. Those agencies did not see your device. We did: every request passed
+through one server, and that server could have kept a record of all of it.</p>
+
+<p>It no longer works that way. The app now fetches from those agencies
+itself, from your device. There is no Graticule server in the middle, so there
+is no longer anywhere that could hold a picture of what you looked at. The
+trade is that the agencies each see a request from your IP address instead of
+from ours. They are public data services, the requests carry no account and no
+identifier, and they are the same requests every other user makes. We think
+having no middleman is the better side of that trade, but it is a trade and
+you should know which one you are getting.</p>
+
+<p>On the web version only, a small number of those agencies refuse requests
+made directly by a browser. Those go through a relay we run, which is given
+one address to fetch and nothing else. It keeps nothing between requests and
+has no memory of any kind. The Android app does not use it at all.</p>
+
+<p>These are the parties your device contacts:</p>
 
 <table>
   <thead>
@@ -204,12 +222,20 @@ agencies never see your device at all.</p>
   </thead>
   <tbody>
     <tr>
-      <td>Graticule backend</td>
-      <td>Requests for shared feeds: alerts, observations, buoys, rivers, tides,
-          spotter reports, cameras. These are the same for every user and carry no
-          parameters about you. The live layer connection is receive only: the app
-          never sends a message on it. The server runs with its HTTP access log
-          switched off.</td>
+      <td>Weather and hazard agencies<br>(National Weather Service, USGS,
+          NOAA SWPC, NOAA CO-OPS, NOAA NWPS, NOAA NDBC, National Hurricane
+          Center, NASA EONET, NASA FIRMS, Smithsonian GVP, FAA, Iowa State
+          Mesonet, Aviation Weather Center, Spotter Network)</td>
+      <td>Requests for alerts, observations, earthquakes, storms, fires,
+          volcanoes, flight restrictions, buoys, rivers, tides and storm
+          reports. Each is the same for every user and carries no parameter
+          about you.</td>
+    </tr>
+    <tr>
+      <td>Tracking and orbit feeds<br>(adsb.fi, airplanes.live, adsb.lol,
+          Digitraffic, CelesTrak, The Space Devs)</td>
+      <td>Requests for aircraft, vessel and satellite positions, and rocket
+          launch schedules. Only while you have that layer switched on.</td>
     </tr>
     <tr>
       <td>Open-Meteo</td>
@@ -218,14 +244,21 @@ agencies never see your device at all.</p>
     </tr>
     <tr>
       <td>Map and imagery providers<br>(Esri ArcGIS, OpenStreetMap, NASA GIBS,
-          Iowa State Mesonet)</td>
+          RainViewer, Iowa State Mesonet)</td>
       <td>The tile coordinates of what is on your screen, which is how any map
           loads. No identifiers are attached.</td>
     </tr>
     <tr>
-      <td>Asset hosts<br>(Cesium, jsDelivr, flagcdn, GitHub)</td>
-      <td>Requests for the 3D globe engine, a satellite orbit library, country
-          flags and an aircraft model. Static files, identical for everyone.</td>
+      <td>Camera networks<br>(ALERTCalifornia, Caltrans, NYC DOT)</td>
+      <td>A request for a still image, only while the cameras layer is on and
+          only for the cameras in view.</td>
+    </tr>
+    <tr>
+      <td>Asset hosts<br>(flagcdn, GitHub)</td>
+      <td>Country flags and an aircraft model. Static files, identical for
+          everyone. <strong>The 3D globe engine used to be fetched from
+          cesium.com on every launch and is now shipped inside the app</strong>,
+          so that host is no longer contacted at all.</td>
     </tr>
     <tr>
       <td>Google Fonts</td>
@@ -235,9 +268,10 @@ agencies never see your device at all.</p>
   </tbody>
 </table>
 
-<p>Two further services, Cesium ion and Google Photorealistic 3D Tiles, are
-contacted only if whoever runs the backend has configured optional API keys for
-them. The default build has neither and contacts neither.</p>
+<p>The app ships with no API keys, so it contacts no service that needs one.
+Cesium ion and Google Photorealistic 3D Tiles are reachable only by someone who
+builds their own copy and supplies their own keys. The published build has
+neither and contacts neither.</p>
 
 <h2>What we do not do</h2>
 

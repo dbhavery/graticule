@@ -204,6 +204,108 @@ async def main() -> None:
         # So this reads the rendered strip. Cesium separates its logo
         # container from the text container; the text container is the row a
         # person actually reads.
+        # ---- the policy's host list against the hosts it actually reaches --
+        #
+        # The policy used to say the app "routes almost all of its weather data
+        # through a single backend ... so those agencies never see your device
+        # at all". That was true until the feeds moved into the app, and then
+        # it was the opposite of true, with nothing able to notice: the claim
+        # is about which hosts a running app contacts, and every check here
+        # read the policy's own text.
+        #
+        # So this reads the running app. Every third-party host it reaches has
+        # to be one the policy accounts for. The match is on the registrable
+        # part, because the policy names organisations and the app reaches
+        # api.weather.gov, and a policy written at hostname precision would be
+        # unreadable and would churn on every subdomain.
+        print("\n== the policy accounts for the hosts the app really reaches ==")
+
+        # Hostname -> the words the policy uses for whoever owns it. Written
+        # down rather than matched fuzzily, because the two do not resemble
+        # each other often enough: the policy says "Google Fonts" and the
+        # request goes to fonts.gstatic.com, it says "Esri ArcGIS" and the
+        # request goes to server.arcgisonline.com.
+        #
+        # This makes the check bite from both ends. A host with no entry is a
+        # third party nobody wrote down, and an entry whose words are missing
+        # from the policy is a party quietly dropped from the table.
+        HOST_PARTY = {
+            "api.weather.gov": "national weather service",
+            "earthquake.usgs.gov": "usgs",
+            "www.nhc.noaa.gov": "national hurricane center",
+            "services.swpc.noaa.gov": "swpc",
+            "api.tidesandcurrents.noaa.gov": "co-ops",
+            "api.water.noaa.gov": "nwps",
+            "www.ndbc.noaa.gov": "ndbc",
+            "aviationweather.gov": "aviation weather center",
+            "mesonet.agron.iastate.edu": "iowa state mesonet",
+            "www.spc.noaa.gov": "national weather service",
+            "www.spotternetwork.org": "spotter network",
+            "eonet.gsfc.nasa.gov": "nasa eonet",
+            "firms.modaps.eosdis.nasa.gov": "nasa firms",
+            "gibs.earthdata.nasa.gov": "nasa gibs",
+            "webservices.volcano.si.edu": "smithsonian gvp",
+            "tfr.faa.gov": "faa",
+            "opendata.adsb.fi": "adsb.fi",
+            "api.airplanes.live": "airplanes.live",
+            "api.adsb.lol": "adsb.lol",
+            "meri.digitraffic.fi": "digitraffic",
+            "celestrak.org": "celestrak",
+            "ll.thespacedevs.com": "the space devs",
+            "api.open-meteo.com": "open-meteo",
+            "api.rainviewer.com": "rainviewer",
+            "tilecache.rainviewer.com": "rainviewer",
+            "server.arcgisonline.com": "esri arcgis",
+            "www.submarinecablemap.com": "telegeography",
+            "davidmegginson.github.io": "github",
+            "flagcdn.com": "flagcdn",
+            "fonts.googleapis.com": "google fonts",
+            "fonts.gstatic.com": "google fonts",
+            "cameras.alertcalifornia.org": "alertcalifornia",
+            "cwwp2.dot.ca.gov": "caltrans",
+            "webcams.nyctmc.org": "nyc dot",
+        }
+
+        priv_html = (WEB / "privacy.html").read_text(encoding="utf-8")
+        low = re.sub(r"<[^>]+>", " ", priv_html).lower()
+        low = re.sub(r"\s+", " ", low)
+
+        # Everything the app talked to during the control load above.
+        reached = sorted({u.split("/")[2] for u in ext})
+        unmapped = [h for h in reached if h not in HOST_PARTY]
+        chk(not unmapped,
+            f"every host the app reached is one this test knows the owner of "
+            f"({len(reached)} reached; unmapped: {unmapped or 'none'})")
+
+        missing = sorted({HOST_PARTY[h] for h in reached if h in HOST_PARTY
+                          and HOST_PARTY[h] not in low})
+        chk(not missing,
+            f"and the policy names every one of those owners "
+            f"(missing: {missing or 'none'})")
+
+        chk("never see your device at all" not in low,
+            "the superseded 'those agencies never see your device' claim is gone")
+        chk("fetches from those agencies itself" in low
+            or "fetches from those agencies" in low,
+            "and the policy says the device fetches from them itself")
+
+        # CONTROL: both arms above report an absence, so prove each fires.
+        # One unknown host, and one known host whose owner is not in the text.
+        # The second arm uses a host that is reached on EVERY run rather than
+        # one that depends on which layers happened to be on, so the control
+        # demonstrates rather than passing on a technicality.
+        anchor = "api.weather.gov"
+        probe_reached = reached + ["tracker.example-analytics.net"]
+        probe_unmapped = [h for h in probe_reached if h not in HOST_PARTY]
+        probe_low = low.replace(HOST_PARTY[anchor], "")
+        probe_missing = sorted({HOST_PARTY[h] for h in probe_reached
+                                if h in HOST_PARTY and HOST_PARTY[h] not in probe_low})
+        chk(anchor in reached
+            and probe_unmapped == ["tracker.example-analytics.net"]
+            and HOST_PARTY[anchor] in probe_missing,
+            "CONTROL: an unknown host is reported, and so is a named party "
+            f"removed from the policy ({probe_unmapped}, {probe_missing})")
+
         print("\n== attribution is on the screen, not behind the expander ==")
         await pg.wait_for_timeout(9000)   # the base map has to draw first
         strip = await pg.evaluate(
