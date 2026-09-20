@@ -2376,3 +2376,91 @@ Four things the script had to learn, each found by a failed capture:
   checking it immediately passed, and the scene still photographed the card.
   The only moment worth asserting is the moment the shutter opens, and doing
   that is what exposed issue 78.
+
+---
+
+## 80. The engine came off a CDN, so "works with no signal" was false (FIXED)
+
+`index.html` loaded CesiumJS from cesium.com and satellite.js from jsdelivr.
+`android_build.py` copies `web/` verbatim, so the APK shipped those URLs and
+two third-party CDNs were hard dependencies of a native app.
+
+Blocking cesium.com produced `Cesium is not defined`: no canvas, no globe,
+the chrome sitting over a blank page with every counter on a dash. That reads
+as a working app with no data rather than a broken one, which is worse. The
+Play listing answers say, in Don's words: *"Boundary and coastline data ships
+inside the app, so the globe still draws with no signal."* It did not.
+
+Measured on a 45 second cold boot before the fix:
+
+    720 requests to cesium.com          21.3 MB
+    of which the same file again        14.8 MB
+    approximateTerrainHeights.json      24 fetches, 7.2 MB
+    Cesium.js                           1 fetch, 5.07 MB
+    Cache-Control on the bundle         public, max-age=1800
+
+The duplication is one copy per web worker: Cesium resolves worker chunks and
+`approximateTerrainHeights.json` against `CESIUM_BASE_URL` inside each worker,
+and there is one worker per core. **That count scales with
+`navigator.hardwareConcurrency`, so a phone pays less of it than the 24-core
+desktop this was measured on.** The dependency does not scale with anything,
+and the 30-minute cache means a launch half an hour later pays again.
+
+Both are npm dependencies now, pinned exactly, copied to `web/vendor/` by
+`scripts/vendor_assets.py` and committed on the same rule as
+`web/data/airspace.json`. Cesium's `index.js` and `index.cjs` are left out:
+8 MB the script tag never touches.
+
+    cesium.com per boot   21.3 MB / 720 req  ->  0
+    APK                   20.9 MB            ->  25.9 MB
+
+`scripts/offline_test.py` is the gate. **It took three tries to measure
+anything**, and each failure is now a control in its output:
+
+* Blocking remote hosts and letting the origin through photographed live
+  radar, 494 alerts and 1,721 aircraft. On a desktop the origin IS the
+  backend, so the browser was offline and nothing else was.
+* The service worker then fetched outside Playwright's intercept.
+  `page.route` does not see what a worker fetches on the page's behalf, and
+  this one is network-first with a cache fallback.
+* The live feed then arrived over a WebSocket, which `page.route` does not
+  touch either. The tell had to be a COUNT, because the word "aircraft"
+  appears in the offline fallback sentence too.
+
+## 81. Offline, the base imagery smears into vertical bands (OPEN)
+
+With the network gone the globe draws, which is the point of 80, but the base
+layer is wrong: below roughly the US northern border it becomes vertical
+blue/green/yellow bands stretched pole-ward instead of a low-resolution world
+map. Cesium's bundled NaturalEarthII texture is what should appear.
+
+**Not the radar layer.** The first read blamed it on the reflectivity ramp,
+because the band colours match it and the REFLECTIVITY legend was on screen.
+Turning radar off removes the legend and leaves the bands, and covers MORE of
+the globe. Online the globe is clean, so this is specific to the fallback
+path.
+
+Only reachable with no network, so nobody has seen it in normal use; it is the
+first impression of an offline launch, which the store copy invites.
+
+## 82. The on-screen credit says "Upgrade for commercial use" (OPEN, Don's call)
+
+Now that attribution is actually on screen (issues.md entry for the credit
+work), the strip reads:
+
+    Imagery (c) Microsoft - Cesium ion - Upgrade for commercial use.
+
+That last clause is Cesium ion's free-tier notice, and it is in the app's own
+credit strip on every launch that uses the satellite base. It is accurate and
+it is ion's to display, but it is a sentence about billing in the middle of a
+product, and it says out loud that this build is not licensed commercially.
+Nothing to fix in code: it is either a paid ion tier or a different base
+layer, and both are Don's call.
+
+## 83. approximateTerrainHeights.json is parsed once per worker (OPEN, upstream)
+
+Local now rather than downloaded, so it is no longer 7.2 MB of network per
+boot, but Cesium still fetches and parses the same 299 KB JSON inside every
+worker it spawns: 24 times on a 24-core desktop, once per core on a phone.
+Nothing in this repo controls it. Recorded because it is a real share of the
+boot the attribution in 69 never named.
