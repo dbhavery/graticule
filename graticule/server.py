@@ -146,6 +146,67 @@ app.add_middleware(
 )
 
 
+# ---- the CORS proxy, and why it is an allowlist -----------------------------
+#
+# web/feeds.js runs the feeds in the page instead of here. On Android that is
+# the whole story: Capacitor makes the request in native code, where there is
+# no origin and no CORS check, so the APK needs nothing from this file.
+#
+# A browser is different. Ten of the seventeen providers send
+# Access-Control-Allow-Origin and seven do not, and CORS is per RESPONSE, not
+# per host -- services.swpc.noaa.gov sends it under /json/ and not under
+# /products/. So the web build needs something same-origin to fetch on its
+# behalf.
+#
+# AN OPEN PROXY IS A LIABILITY, not a convenience: anyone who can reach it can
+# make this host fetch anything, including private addresses on whatever
+# network it sits on. So the allowlist is exact hostnames, it is the same list
+# the feeds actually use, and anything else is refused without being fetched.
+PROXY_HOSTS = frozenset({
+    "api.adsb.lol", "opendata.adsb.fi", "api.airplanes.live",
+    "www.nhc.noaa.gov", "webservices.volcano.si.edu", "tfr.faa.gov",
+    "www.submarinecablemap.com", "firms.modaps.eosdis.nasa.gov",
+    "services.swpc.noaa.gov", "api.weather.gov", "earthquake.usgs.gov",
+    "api.rainviewer.com", "celestrak.org", "eonet.gsfc.nasa.gov",
+    "ll.thespacedevs.com", "meri.digitraffic.fi", "api.open-meteo.com",
+    "davidmegginson.github.io",
+})
+
+
+@app.get("/api/proxy")
+async def proxy(url: str) -> Response:
+    """Fetch one allowlisted provider URL on the page's behalf.
+
+    Stateless on purpose. Everything this app used to need a long-lived
+    process for now happens in the browser, so the only thing left that a
+    host must do is this, and a function with no memory can do it. That is
+    what makes a free serverless tier enough.
+    """
+    try:
+        parsed = httpx.URL(url)
+    except Exception:                                    # noqa: BLE001
+        return JSONResponse({"error": "unparseable url"}, status_code=400)
+    if parsed.scheme != "https":
+        return JSONResponse({"error": "https only"}, status_code=400)
+    if parsed.host not in PROXY_HOSTS:
+        return JSONResponse({"error": f"host not allowed: {parsed.host}"},
+                            status_code=403)
+    try:
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            r = await c.get(url, headers={"User-Agent": "graticule/1.0"})
+    except Exception as e:                               # noqa: BLE001
+        return JSONResponse({"error": f"upstream {type(e).__name__}"},
+                            status_code=502)
+    # Pass the body through untouched. The client parses it exactly as it
+    # would a direct response, so a proxied feed and a direct one are the same
+    # code path on the far side.
+    return Response(
+        content=r.content,
+        status_code=r.status_code,
+        media_type=r.headers.get("content-type", "application/octet-stream"),
+    )
+
+
 @app.get("/api/snapshot")
 async def snapshot() -> JSONResponse:
     # Everything, unbounded: this endpoint exists for inspection and for tests

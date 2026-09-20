@@ -39,7 +39,7 @@ try {
         between the two builds.
      3. Empty, meaning same origin, which is the web build.
 
-   Nothing may call fetch(apiUrl('/api/...')) directly any more. `apiUrl()` is the only
+   Nothing may call apiFetch('/api/...') directly any more. `apiUrl()` is the only
    door, so there is exactly one place to be wrong. */
 const API_BASE = (() => {
   const q = new URLSearchParams(location.search).get('api');
@@ -49,6 +49,20 @@ const API_BASE = (() => {
 
 function apiUrl(path) {
   return API_BASE ? API_BASE + path : path;
+}
+
+/* The one door for every /api call, so there is exactly one place that knows
+ * whether a backend exists.
+ *
+ * Returns a real Response either way. In device mode web/feeds.js answers
+ * from the state it already holds, so `r.ok` and `await r.json()` at the call
+ * sites work unchanged and no caller has to care.
+ */
+function apiFetch(path, opts) {
+  if (DATA_SOURCE === 'device' && window.GraticuleFeeds) {
+    return window.GraticuleFeeds.api(path);
+  }
+  return fetch(apiUrl(path), opts);
 }
 
 function wsUrl(path) {
@@ -63,6 +77,27 @@ function wsUrl(path) {
 }
 
 window.__graticule_api_base = API_BASE;
+
+/* Where the live data comes from.
+ *
+ * 'device'  the feeds run here, in web/feeds.js, talking to the providers
+ *           directly. No backend, so nothing to host, nothing to keep awake
+ *           and nothing to pay for. This is the default and the shipped path.
+ * 'server'  the old arrangement: a FastAPI process polls the same providers
+ *           and pushes a merged snapshot over a WebSocket.
+ *
+ * Passing `?api=<url>` selects 'server', because naming a backend is asking
+ * to use it -- that is how the native path stays testable. `?data=` overrides
+ * either way, which is what the test suites use to exercise both.
+ */
+const DATA_SOURCE = (() => {
+  const q = new URLSearchParams(location.search);
+  const want = q.get('data');
+  if (want === 'server' || want === 'device') return want;
+  return q.get('api') ? 'server' : 'device';
+})();
+
+window.__graticule_data_source = DATA_SOURCE;
 
 /* The two links Settings > About carries.
  *
@@ -1447,7 +1482,7 @@ function applyInitialLayerState() {
 }
 
 async function initViewer() {
-  const cfg = await fetch(apiUrl('/api/config')).then(r => r.json()).catch(() => ({}));
+  const cfg = await apiFetch('/api/config').then(r => r.json()).catch(() => ({}));
   Cesium.Ion.defaultAccessToken = cfg.cesium_ion_token || '';
   window.__graticule_cfg = cfg;
 
@@ -2125,6 +2160,14 @@ function bindUI() {
     cb.addEventListener('change', () => {
       const layer = cb.dataset.layer;
       const on = cb.checked;
+      // The heavy feeds do not run until somebody asks for them: fires is
+      // 175,000 rows, airports is a 10 MB CSV, aircraft is fourteen requests
+      // a sweep. Switching the layer on IS the ask, so tell the scheduler now
+      // rather than leaving the user looking at an empty layer until the next
+      // interval comes round, which for satellites would be six hours.
+      if (on && DATA_SOURCE === 'device' && window.GraticuleFeeds) {
+        window.GraticuleFeeds.wake(layer);
+      }
       if (LAYER_TOGGLES[layer]) LAYER_TOGGLES[layer](on);
       else if (dataSources[layer]) {
         // Build on the way in, release on the way out. The fade still runs on
@@ -3432,6 +3475,19 @@ function updateCategoryCounts() {
 // ---------- WebSocket -------------------------------------------------------
 
 function connectWebSocket() {
+  // Device mode has no socket to open: the feeds run in this process and call
+  // handleMessage() directly, so every message shape below still arrives, it
+  // just does not cross a network first.
+  if (DATA_SOURCE === 'device') {
+    if (!window.GraticuleFeeds) {
+      setStatus('bad', 'no feeds');
+      console.error('feeds.js did not load; index.html must include it before app.js');
+      return;
+    }
+    window.GraticuleFeeds.start();
+    setStatus('ok', 'live');
+    return;
+  }
   const ws = new WebSocket(wsUrl('/ws'));
   ws.onopen    = () => setStatus('ok', 'live');
   ws.onclose   = () => { setStatus('bad', 'offline'); setTimeout(connectWebSocket, 2000); };
@@ -3605,7 +3661,7 @@ function fetchDeferredLayer(layer) {
   if (!deferredLayers.has(layer) || deferredLoaded.has(layer)) return null;
   if (deferredFetches.has(layer)) return deferredFetches.get(layer);
 
-  const p = fetch(apiUrl(`/api/layer/${encodeURIComponent(layer)}`))
+  const p = apiFetch(`/api/layer/${encodeURIComponent(layer)}`)
     .then((r) => {
       if (!r.ok) throw new Error(`${layer} -> HTTP ${r.status}`);
       return r.json();
@@ -8836,7 +8892,7 @@ async function rebuildSpcOutlook() {
   spcDS.entities.removeAll();
   let gj;
   try {
-    const r = await fetch(apiUrl(`/api/spc/outlook?day=${encodeURIComponent(day)}`));
+    const r = await apiFetch(`/api/spc/outlook?day=${encodeURIComponent(day)}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -9789,7 +9845,7 @@ function toggleMetar(on) {
 async function refreshMetar() {
   if (!metarDS || !metarDS.show) return;
   try {
-    const r = await fetch(apiUrl('/api/metar'));
+    const r = await apiFetch('/api/metar');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     metarRaw = await r.json();
     if (!Array.isArray(metarRaw)) metarRaw = [];
@@ -10072,7 +10128,7 @@ function toggleWarnings(on) {
    a side effect of drawing. Returns whether it succeeded. */
 async function fetchWarnFeatures() {
   try {
-    const r = await fetch(apiUrl('/api/nws/alerts'));
+    const r = await apiFetch('/api/nws/alerts');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const gj = await r.json();
     // Keep every active alert for the card list. Most NWS alerts are issued
@@ -10248,7 +10304,7 @@ async function refreshLsr() {
   const hours = Number(valueOf('lsr-hours', '12'));
   let gj;
   try {
-    const r = await fetch(apiUrl(`/api/lsr?hours=${hours}`));
+    const r = await apiFetch(`/api/lsr?hours=${hours}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -11247,7 +11303,7 @@ async function refreshCameras() {
   if (!camerasDS || !camerasDS.show) return;
   let gj;
   try {
-    const r = await fetch(apiUrl('/api/cameras'));
+    const r = await apiFetch('/api/cameras');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -11319,7 +11375,7 @@ async function refreshSpotters() {
   if (!spottersDS || !spottersDS.show) return;
   let gj;
   try {
-    const r = await fetch(apiUrl('/api/spotters'));
+    const r = await apiFetch('/api/spotters');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -11912,7 +11968,7 @@ async function refreshRivers() {
   let gj;
   try {
     // The first uncached call walks four NWPS tiles and takes ~19 s.
-    const r = await fetch(apiUrl('/api/rivers'));
+    const r = await apiFetch('/api/rivers');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -11999,7 +12055,7 @@ async function refreshTides() {
   if (!tidesDS || !tidesDS.show) return;
   let gj;
   try {
-    const r = await fetch(apiUrl('/api/tides'));
+    const r = await apiFetch('/api/tides');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -12075,7 +12131,7 @@ async function refreshBuoys() {
   if (!buoysDS || !buoysDS.show) return;
   let gj;
   try {
-    const r = await fetch(apiUrl('/api/buoys'));
+    const r = await apiFetch('/api/buoys');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     gj = await r.json();
   } catch (err) {
@@ -12126,7 +12182,7 @@ async function refreshBuoys() {
 async function loadTideDetail(stationId, slot) {
   let d;
   try {
-    const r = await fetch(apiUrl(`/api/tide/${encodeURIComponent(stationId)}`));
+    const r = await apiFetch(`/api/tide/${encodeURIComponent(stationId)}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     d = await r.json();
   } catch (err) {
@@ -14370,7 +14426,7 @@ const _dbCache = new Map();
 async function dbFetch(url, ttlMs = 25_000) {
   const hit = _dbCache.get(url);
   if (hit && Date.now() - hit.at < ttlMs) return hit.data;
-  const r = await fetch(apiUrl(url));
+  const r = await apiFetch(url);
   if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
   const data = await r.json();
   _dbCache.set(url, { at: Date.now(), data });

@@ -66,6 +66,11 @@
   <!-- Before app.js, because app.js reads GRATICULE_API_BASE at parse time.
        This is the ONLY file that differs between the web and Android builds. -->
   <script src="/static/api-config.js"></script>
+  <!-- The feeds, running here rather than on a server. Loaded before app.js
+       so `window.GraticuleFeeds` exists by the time bindUI decides whether to
+       open a WebSocket or start them. It calls app.js's handleMessage(), so
+       it has to be a plain script in the same global scope. -->
+  <script src="/static/feeds.js"></script>
 </head>
 <body>
 <!-- ═══════════════  DIRECTION CONTRACT  ═══════════════  seed 62a73d06
