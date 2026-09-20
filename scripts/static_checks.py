@@ -257,6 +257,53 @@ def main() -> None:
         f"the base map's own credit is on screen, not behind the expander "
         f"({app.count('onScreenCredit(')} promoted)")
 
+    # ---- the image installs what the package declares -------------------
+    #
+    # The Dockerfile lists its dependencies explicitly instead of running
+    # `pip install .`, so that pywebview -- a DESKTOP dependency needing a GUI
+    # toolkit -- never enters the image. Its own comment says "keep this list
+    # in step with pyproject.toml", and a list two files have to agree on by
+    # hand is a list that drifts. The failure would be a container that builds
+    # and then dies on an ImportError at boot, on a host with no Docker here
+    # to catch it first.
+    print("\n== the container installs exactly what the package needs, minus the desktop ==")
+
+    docker = read(ROOT / "Dockerfile")
+    pyproj = read(ROOT / "pyproject.toml")
+
+    block = re.search(r"^dependencies = \[(.*?)^\]", pyproj, re.S | re.M)
+    declared = set(re.findall(r'"([^"]+)"', block.group(1))) if block else set()
+    installed = set(re.findall(r'^\s+"([^"]+)"\s*\\?$', docker, re.M))
+
+    # pywebview is excluded on purpose and is the one difference allowed.
+    DESKTOP_ONLY = {d for d in declared if d.startswith("pywebview")}
+    chk(bool(DESKTOP_ONLY), "pyproject still declares the desktop dependency")
+    missing = sorted(declared - DESKTOP_ONLY - installed)
+    extra = sorted(installed - declared)
+    chk(not missing and not extra,
+        f"the Dockerfile installs every runtime dependency and no others "
+        f"(missing: {missing or 'none'}; unexpected: {extra or 'none'})")
+    chk(not (installed & DESKTOP_ONLY),
+        "and it does not drag the GUI toolkit into the image")
+
+    # The CMD calls run_server(port, host). A signature change here is silent
+    # until the container starts.
+    server = read(ROOT / "graticule" / "server.py")
+    chk("def run_server(port: int, host: str | None = None)" in server,
+        "run_server still takes (port, host), which the Dockerfile CMD passes")
+    # WEB_DIR is the sibling of the package dir, which is why the image copies
+    # graticule/ and web/ side by side rather than nesting them.
+    chk('WEB_DIR = Path(__file__).parent.parent / "web"' in server
+        and "COPY graticule/ /app/graticule/" in docker
+        and "COPY web/ /app/web/" in docker,
+        "the image's layout matches how WEB_DIR resolves")
+
+    # CONTROL: drop a dependency on a copy and confirm the comparison notices.
+    probe = docker.replace('      "httpx>=0.27" \\\n', "")
+    probe_installed = set(re.findall(r'^\s+"([^"]+)"\s*\\?$', probe, re.M))
+    chk(bool(sorted(declared - DESKTOP_ONLY - probe_installed)),
+        "CONTROL: removing httpx from the install list is reported as missing")
+
     # ---- the listing and the manifest name the same permissions ---------
     #
     # A store listing has to justify every permission, and the one nobody

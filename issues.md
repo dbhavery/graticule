@@ -2268,3 +2268,54 @@ names all eight.
 Same family as issue 66 and the stale location paragraph above it: the gate
 passed the whole time, and a pass from an instrument that cannot see the thing
 it is looking for means nothing.
+
+## 76. Celestrak refuses the starlink group with 403 (OPEN, upstream)
+
+Found 2026-09-19 while proving the container image's runtime. The satellite
+feed logs:
+
+    Celestrak starlink failed: Client error '403 Forbidden' for url
+    https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle
+
+Confirmed as upstream and specific to that group: a bare `curl` of the same URL
+returns 403 while `GROUP=gps-ops` returns 200 from the same address in the same
+second. Starlink is by far the largest group Celestrak publishes, so it is the
+one most likely to be rate limited or gated.
+
+The app degrades correctly. The loop warns, continues, and the session still
+tracked 846 unique satellites. Not fixed because the fix is not ours to make:
+the options are a cached mirror, an API key if Celestrak now issues them for
+that group, or accepting the gap. Logged so that "no Starlink in the sky" is
+not diagnosed as an app bug later.
+
+## 77. The container image had never been built or run (RESOLVED, verified without Docker)
+
+The Dockerfile has been committed since 2026-08-14 and no process had ever
+executed it, because there is no Docker on this machine. It is the deployment
+path, so a defect in it would have surfaced on Don's first `fly deploy` and
+nowhere earlier.
+
+Verified 2026-09-19 by reproducing the image rather than building it: a clean
+venv holding ONLY the six packages the Dockerfile installs, a directory with
+ONLY its two COPY lines (`graticule/` and `web/`, no pyproject, no uv.lock, no
+scripts), and its `CMD` run verbatim with its own env.
+
+    /api/config    200
+    /              200
+    /privacy       200
+    /support       200
+    /static/app.js 200, 699,594 bytes
+    feeds started, 846 satellites tracked
+
+`import pywebview` fails in that venv, which is the point of installing the
+list explicitly rather than running `pip install .`.
+
+Four checks now hold what the run proved: the Dockerfile's list matches
+pyproject minus the desktop dependency, it does not drag the GUI toolkit in,
+`run_server` still takes the arguments the CMD passes, and the copied layout
+still matches how `WEB_DIR` resolves. Control removes httpx from a copy of the
+Dockerfile and confirms the comparison reports it.
+
+This does NOT prove the image builds. `FROM python:3.13-slim` and the pip
+resolution inside it are still unexercised, and Fly builds remotely so Don does
+not need Docker either.
