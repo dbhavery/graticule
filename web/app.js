@@ -108,12 +108,32 @@ window.__graticule_data_source = DATA_SOURCE;
  * the exact shape of bug native_origin_test.py exists to catch.
  *
  * When API_BASE is empty (web and desktop) these stay root-relative, which is
- * what the FastAPI routes serve. */
+ * what the FastAPI routes serve.
+ *
+ * THE APK NO LONGER HAS A BACKEND to hang them off. The feeds run on the
+ * device, so `GRATICULE_API_BASE` is not a place any more, and pointing these
+ * at it would send somebody to a host that answers nothing. Play requires
+ * both URLs to resolve for as long as the listing exists, so a native build
+ * uses the published static site, which is the address the listing itself
+ * names and which has nothing to fall over. */
+const LEGAL_SITE = 'https://graticule.vercel.app';
+
+function legalBase() {
+  // Capacitor serves the app from https://localhost, whose asset server knows
+  // only the staged files, and privacy.html is staged under /static. So a
+  // native build cannot use a root-relative link and has to name the site.
+  const native = !!(window.Capacitor && window.Capacitor.isNativePlatform
+                    && window.Capacitor.isNativePlatform());
+  if (native) return LEGAL_SITE;
+  return API_BASE;
+}
+
 function wireAboutLinks() {
+  const base = legalBase();
   const p = document.getElementById('link-privacy');
   const s = document.getElementById('link-support');
-  if (p) p.href = `${API_BASE}/privacy`;
-  if (s) s.href = `${API_BASE}/support`;
+  if (p) p.href = `${base}/privacy`;
+  if (s) s.href = `${base}/support`;
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', wireAboutLinks);
