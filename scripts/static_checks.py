@@ -414,11 +414,34 @@ def main() -> None:
         "CESIUM_BASE_URL points at the vendored copy, so the workers and "
         "Assets resolve locally too")
 
+    # The version the checkout SHIPS against the version package.json pins.
+    # Done here as well as in vendor_assets.py because CI has no node_modules
+    # -- ci.yml runs this file with no npm step -- and the failure that
+    # actually happens is a bump landing without the vendor step being re-run.
+    pins = json.loads(read(ROOT / "package.json"))["dependencies"]
+    stamps = {
+        "cesium": WEB / "vendor" / "cesium" / "VERSION",
+        "satellite.js": WEB / "vendor" / "satellite" / "VERSION",
+    }
+
+    def drift(pin_map: dict[str, str]) -> list[str]:
+        out = []
+        for pkg, stamp in stamps.items():
+            have = read(stamp).strip() if stamp.exists() else None
+            want = pin_map.get(pkg, "").lstrip("^~=v ")
+            if have != want:
+                out.append(f"{pkg}: vendored {have!r}, pinned {want!r}")
+        return out
+
+    off = drift(pins)
+    chk(not off,
+        f"the vendored copies are the versions package.json pins ({off or 'none'})")
+
     vendored = subprocess.run(
         [sys.executable, str(HERE / "vendor_assets.py"), "--check"],
         capture_output=True, text=True)
     chk(vendored.returncode == 0,
-        "web/vendor matches node_modules: "
+        "and vendor_assets agrees: "
         + (vendored.stdout.strip().splitlines() or ["no output"])[-1])
 
     # CONTROL: the URL scan has to see a CDN when one is there, or "none" is
@@ -429,8 +452,10 @@ def main() -> None:
         'dist/satellite.min.js"></script>')
     probe = [u for u in re.findall(r'(?:src|href)="(https?://[^"]+)"', probe_index)
              if "cesium.com" in u or "jsdelivr" in u]
-    chk(len(probe) == 1,
-        f"CONTROL: the scan finds the jsdelivr tag when it is put back ({probe})")
+    bumped = drift({**pins, "cesium": "1.122.0"})
+    chk(len(probe) == 1 and len(bumped) == 1,
+        f"CONTROL: the scan finds the jsdelivr tag when it is put back ({probe}), "
+        f"and a bumped pin with a stale copy is reported ({bumped})")
 
     print(f"\n{len(ok)} passed, {len(bad)} failed")
     for m in bad:

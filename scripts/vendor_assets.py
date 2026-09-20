@@ -85,54 +85,110 @@ STAMPED = {"cesium": CESIUM_DST, "satellite.js": VENDOR / "satellite"}
 def installed(pkg: str) -> str:
     p = NM / pkg / "package.json"
     if not p.exists():
-        raise SystemExit(f"node_modules/{pkg} is missing. Run: npm install")
+        return ""
     return json.loads(p.read_text(encoding="utf-8"))["version"]
 
 
 def declared(pkg: str) -> str:
+    """The version package.json pins, with any range marker stripped.
+
+    The two browser dependencies are pinned exactly on purpose, so this is
+    normally a no-op; it tolerates a `^` or `~` rather than reporting a
+    mismatch that is really a notation difference.
+    """
     j = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
-    return j["dependencies"][pkg]
+    return j["dependencies"][pkg].lstrip("^~=v ")
 
 
 def tree(p: pathlib.Path) -> set[pathlib.Path]:
     return {f.relative_to(p) for f in p.rglob("*") if f.is_file()}
 
 
+# The shapes a complete copy has. Checked from the checkout alone, because
+# that is all CI has -- `.github/workflows/ci.yml` runs static_checks.py with
+# no npm step, and the first version of this check exited non-zero there and
+# turned the badge red. The counts are floors, not equalities: they catch a
+# half-copied or truncated vendor directory without breaking on a Cesium
+# release that adds a worker.
+FLOORS = {
+    CESIUM_DST / "Cesium.js": 4_000_000,
+    CESIUM_DST / "Assets" / "approximateTerrainHeights.json": 200_000,
+    VENDOR / "satellite" / "satellite.min.js": 15_000,
+}
+DIR_FLOORS = {CESIUM_DST / "Workers": 80, CESIUM_DST / "Assets": 100}
+
+
 def check() -> int:
+    """Two levels, because CI has no node_modules and a developer does.
+
+    Without node_modules this verifies the COMMITTED copy against
+    package.json, which is the failure that actually happens: a version bump
+    lands and nobody re-runs the vendor step. With node_modules it also
+    compares the bytes.
+    """
     bad = 0
+    have_nm = NM.exists()
+
     for pkg, dst in STAMPED.items():
         stamp = dst / "VERSION"
         have = stamp.read_text(encoding="utf-8").strip() if stamp.exists() else None
-        want = installed(pkg)
+        want = declared(pkg)
         if have != want:
-            print(f"FAIL  vendored {pkg} is {have!r}, node_modules has {want}")
+            print(f"FAIL  vendored {pkg} is {have!r}, package.json pins {want}")
             print("      run: py -V:3.13 scripts/vendor_assets.py")
             bad += 1
+        # A developer's tree has a third opinion, and it is the one that would
+        # ship. Only checkable where node_modules exists.
+        got = installed(pkg)
+        if have_nm and got and got != want:
+            print(f"FAIL  node_modules has {pkg} {got}, package.json pins {want}")
+            bad += 1
 
-    for name in CESIUM_WANTED:
-        s, d = CESIUM_SRC / name, CESIUM_DST / name
-        if s.is_file():
-            if not d.is_file() or not filecmp.cmp(s, d, shallow=False):
-                print(f"FAIL  cesium/{name} differs from node_modules")
+    for path, floor in FLOORS.items():
+        if not path.is_file():
+            print(f"FAIL  {path.relative_to(ROOT)} is missing")
+            bad += 1
+        elif path.stat().st_size < floor:
+            print(f"FAIL  {path.relative_to(ROOT)} is {path.stat().st_size} bytes, "
+                  f"under the {floor} floor -- a truncated copy")
+            bad += 1
+
+    for path, floor in DIR_FLOORS.items():
+        n = len(tree(path)) if path.is_dir() else 0
+        if n < floor:
+            print(f"FAIL  {path.relative_to(ROOT)} holds {n} files, under the "
+                  f"{floor} floor")
+            bad += 1
+
+    if have_nm:
+        for name in CESIUM_WANTED:
+            s, d = CESIUM_SRC / name, CESIUM_DST / name
+            if not s.exists():
+                continue
+            if s.is_file():
+                if not d.is_file() or not filecmp.cmp(s, d, shallow=False):
+                    print(f"FAIL  cesium/{name} differs from node_modules")
+                    bad += 1
+                continue
+            missing = tree(s) - tree(d)
+            if missing:
+                print(f"FAIL  cesium/{name}: {len(missing)} file(s) not vendored, "
+                      f"e.g. {sorted(missing)[0]}")
                 bad += 1
-            continue
-        if not d.exists():
-            print(f"FAIL  cesium/{name} is not vendored at all")
-            bad += 1
-            continue
-        missing = tree(s) - tree(d)
-        if missing:
-            print(f"FAIL  cesium/{name}: {len(missing)} file(s) not vendored, "
-                  f"e.g. {sorted(missing)[0]}")
-            bad += 1
 
-    for s, d in SINGLES.items():
-        if not d.is_file() or not filecmp.cmp(s, d, shallow=False):
-            print(f"FAIL  {d.relative_to(ROOT)} differs from node_modules")
-            bad += 1
+        for s, d in SINGLES.items():
+            if s.exists() and (not d.is_file()
+                               or not filecmp.cmp(s, d, shallow=False)):
+                print(f"FAIL  {d.relative_to(ROOT)} differs from node_modules")
+                bad += 1
 
     if bad:
         return 1
+    if not have_nm:
+        pins = ", ".join(f"{p} {declared(p)}" for p in STAMPED)
+        print(f"OK    web/vendor is complete and matches package.json: {pins}"
+              "  (no node_modules here, so the bytes were not compared)")
+        return 0
     versions = ", ".join(f"{p} {installed(p)} (pinned {declared(p)})"
                          for p in STAMPED)
     print(f"OK    web/vendor matches node_modules: {versions}")
