@@ -43,6 +43,17 @@ const ALLOWED = new Set([
   'webservices.volcano.si.edu',
   'www.nhc.noaa.gov',
   'www.submarinecablemap.com',
+  // The ten on-demand endpoints web/feeds.js now answers itself.
+  'api.tidesandcurrents.noaa.gov',
+  'api.water.noaa.gov',
+  'aviationweather.gov',
+  'cameras.alertcalifornia.org',
+  'cwwp2.dot.ca.gov',
+  'mesonet.agron.iastate.edu',
+  'webcams.nyctmc.org',
+  'www.ndbc.noaa.gov',
+  'www.spc.noaa.gov',
+  'www.spotternetwork.org',
 ]);
 
 export default async function handler(req, res) {

@@ -1137,8 +1137,392 @@ const DEVICE_CONFIG = {
   ships_global: false,
 };
 
+/* Cache with a TTL, and serve the stale copy when the fetch fails.
+ *
+ * The stale fallback is not a nicety: every one of these endpoints did it
+ * server-side, so the client has never seen a hard failure while an old copy
+ * existed, and a panel that blanks on one bad request would be a regression
+ * introduced by moving the code rather than by anything upstream.
+ */
+const apiCache = new Map();      // key -> {at, data}
+
+async function cached(key, ttlMs, build) {
+  const hit = apiCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+  try {
+    const data = await build();
+    apiCache.set(key, { at: Date.now(), data });
+    return data;
+  } catch (e) {
+    if (hit) return hit.data;
+    throw e;
+  }
+}
+
+const feature = (lon, lat, props) => ({
+  type: 'Feature',
+  geometry: { type: 'Point', coordinates: [lon, lat] },
+  properties: props,
+});
+
+const inRange = (lat, lon) => lat !== null && lon !== null
+  && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+
+// NWPS writes -999 where it has no reading. Plotting it puts the gauge a
+// thousand feet below its own riverbed.
+const NWPS_MISSING = -999;
+const FLOOD_RANK = {
+  no_flooding: 0, not_defined: 0, obs_not_current: 0, fcst_not_current: 0,
+  low_water_threshold: 0, action: 1, minor: 2, moderate: 3, major: 4,
+};
+
+function nwpsReading(node) {
+  if (!node) return null;
+  const v = num(node.primary);
+  if (v === null || v === NWPS_MISSING) return null;
+  const out = {
+    value: v, unit: node.primaryUnit || 'ft', valid: node.validTime || '',
+  };
+  const flow = num(node.secondary);
+  if (flow !== null && flow !== NWPS_MISSING) {
+    out.flow = flow;
+    out.flow_unit = node.secondaryUnit || '';
+  }
+  return out;
+}
+
+// GRLevelX placefile. The quoted blob escapes its newlines as the two
+// characters backslash and n, so it is split on that and not on a real one.
+const SPOTTER_ICON = new RegExp(
+  '^Icon:\\s*(-?\\d+(?:\\.\\d+)?),\\s*(-?\\d+(?:\\.\\d+)?),\\s*\\d+,\\s*\\d+,'
+  + '\\s*(\\d+),\\s*"([\\s\\S]*?)"\\s*$', 'gm');
+
+function parseSpotters(text) {
+  const feats = [];
+  SPOTTER_ICON.lastIndex = 0;
+  let m;
+  while ((m = SPOTTER_ICON.exec(text)) !== null) {
+    const lat = num(m[1]), lon = num(m[2]);
+    if (!inRange(lat, lon)) continue;
+    const rec = { reporter: '', report: '', time: '', notes: '' };
+    for (const line of String(m[4]).split('\\n')) {
+      const s = line.trim();
+      if (!s) continue;
+      const low = s.toLowerCase();
+      // split on the FIRST colon only: a time value carries more of them.
+      const after = () => s.slice(s.indexOf(':') + 1).trim();
+      if (low.startsWith('reported by:')) rec.reporter = after();
+      else if (low.startsWith('time:')) rec.time = after();
+      else if (low.startsWith('notes:')) rec.notes = after();
+      else if (!rec.report) rec.report = s;
+    }
+    feats.push(feature(lon, lat, { kind: 'spotters', icon: parseInt(m[3], 10), ...rec }));
+  }
+  return feats;
+}
+
+// NDBC latest_obs.txt: whitespace columns, "MM" meaning no reading.
+const BUOY_COLS = [
+  [8, 'wind_dir'], [9, 'wind_speed'], [10, 'gust'], [11, 'wave_height'],
+  [12, 'dom_period'], [13, 'avg_period'], [14, 'wave_dir'], [15, 'pressure'],
+  [16, 'pressure_tend'], [17, 'air_temp'], [18, 'water_temp'],
+  [19, 'dew_point'], [20, 'visibility'], [21, 'tide'],
+];
+
+function parseBuoys(text) {
+  const feats = [];
+  for (const line of text.split('\n')) {
+    const s = line.trim();
+    if (!s || s.startsWith('#')) continue;
+    const c = s.split(/\s+/);
+    if (c.length < 22) continue;
+    const lat = num(c[1]), lon = num(c[2]);
+    if (!inRange(lat, lon)) continue;
+    const rec = { id: c[0] };
+    const p2 = (x) => String(parseInt(x, 10)).padStart(2, '0');
+    try {
+      rec.obs_time = `${c[3]}-${p2(c[4])}-${p2(c[5])}T${p2(c[6])}:${p2(c[7])}Z`;
+    } catch (e) { rec.obs_time = ''; }
+    for (const [i, key] of BUOY_COLS) {
+      if (c[i] === 'MM') continue;
+      const v = num(c[i]);
+      if (v !== null) rec[key] = v;
+    }
+    // id and obs_time only is a dot with nothing in it.
+    if (Object.keys(rec).length <= 2) continue;
+    feats.push(feature(lon, lat, { kind: 'buoys', ...rec }));
+  }
+  return feats;
+}
+
+const RIVER_TILES = [
+  [-180.0, 15.0, -125.0, 72.0],   // Alaska, Hawaii, Pacific
+  [-125.0, 24.0, -100.0, 50.0],   // west
+  [-100.0, 24.0, -85.0, 50.0],    // plains and midwest
+  [-85.0, 15.0, -60.0, 50.0],     // east, Gulf, Puerto Rico
+];
+
+const CAM_FRAME = 'https://cameras.alertcalifornia.org/public-camera-data/'
+  + '{cid}/latest-frame.jpg';
+
 const API_ROUTES = [
   [/^\/api\/config$/, async () => jsonResponse(DEVICE_CONFIG)],
+
+  // ---- storm products ----------------------------------------------------
+
+  [/^\/api\/spc\/outlook$/, async (m, path) => {
+    const day = new URLSearchParams(path.split('?')[1] || '').get('day') || '1';
+    if (!['1', '2', '3'].includes(day)) {
+      return jsonResponse({ error: 'day must be 1, 2 or 3' }, 400);
+    }
+    return jsonResponse(await cached(`spc:${day}`, 600000, () => gfetch(
+      `https://www.spc.noaa.gov/products/outlook/day${day}otlk_cat.nolyr.geojson`,
+      { timeout: 20000 })));
+  }],
+
+  [/^\/api\/nws\/alerts$/, async () => jsonResponse(
+    await cached('nws', 60000, () => gfetch(
+      'https://api.weather.gov/alerts/active?status=actual&message_type=alert',
+      { timeout: 25000 })))],
+
+  [/^\/api\/lsr$/, async (m, path) => {
+    const raw = parseInt(
+      new URLSearchParams(path.split('?')[1] || '').get('hours') || '12', 10);
+    const hours = Math.max(1, Math.min(48, Number.isFinite(raw) ? raw : 12));
+    return jsonResponse(await cached(`lsr:${hours}`, 180000, async () => {
+      const d = await gfetch(
+        `https://mesonet.agron.iastate.edu/geojson/lsr.py?hours=${hours}`,
+        { timeout: 25000 });
+      d._hours = hours;     // the client reads this back
+      return d;
+    }));
+  }],
+
+  [/^\/api\/metar$/, async () => jsonResponse(
+    await cached('metar', 300000, async () => {
+      // bbox is lat0,lon0,lat1,lon1. Lon first returns 204 and then fails to
+      // parse, which looks like an outage and is not one.
+      const raw = await gfetch('https://aviationweather.gov/api/data/metar'
+        + '?format=json&taf=false&hours=2&bbox=15,-170,72,-60',
+        { timeout: 25000 });
+      const latest = {};
+      for (const ob of Array.isArray(raw) ? raw : []) {
+        const sid = ob.icaoId;
+        if (!sid || ob.lat === null || ob.lon === null
+            || ob.lat === undefined || ob.lon === undefined) continue;
+        const prev = latest[sid];
+        if (prev && !(ob.obsTime > prev.obsTime)) continue;
+        latest[sid] = {
+          id: sid, lat: ob.lat, lon: ob.lon,
+          temp: ob.temp, dewp: ob.dewp, wdir: ob.wdir, wspd: ob.wspd,
+          wgst: ob.wgst, visib: ob.visib, altim: ob.altim,
+          name: ob.name, obsTime: ob.obsTime,
+        };
+      }
+      return Object.values(latest);
+    }))],
+
+  // ---- water -------------------------------------------------------------
+
+  [/^\/api\/rivers$/, async () => jsonResponse(
+    await cached('rivers', 600000, async () => {
+      const tiles = await Promise.all(RIVER_TILES.map(([a, b, c, d]) =>
+        gfetch('https://api.water.noaa.gov/nwps/v1/gauges?srid=EPSG_4326'
+          + `&bbox.xmin=${a}&bbox.ymin=${b}&bbox.xmax=${c}&bbox.ymax=${d}`,
+          { timeout: 90000 }).catch(() => null)));
+      if (tiles.every((t) => t === null)) throw new Error('river gauges unavailable');
+
+      const seen = new Set();
+      const feats = [];
+      let flooding = 0;
+      for (const t of tiles) {
+        for (const g of (t && t.gauges) || []) {
+          const lat = num(g.latitude), lon = num(g.longitude);
+          if (!inRange(lat, lon)) continue;
+          const id = g.lid || '';
+          if (id && seen.has(id)) continue;
+          if (id) seen.add(id);
+          const status = g.status || {};
+          const observed = nwpsReading(status.observed);
+          const forecast = nwpsReading(status.forecast);
+          // Forecast-only gauges are kept on purpose; a gauge with neither is
+          // a dot with nothing to say.
+          if (!observed && !forecast) continue;
+          const cat = (status.observed || {}).floodCategory || 'not_defined';
+          const rank = FLOOD_RANK[cat] || 0;
+          if (rank >= 1) flooding += 1;
+          feats.push(feature(lon, lat, {
+            kind: 'rivers', id,
+            name: g.name || 'River gauge',
+            state: (g.state || {}).abbreviation || '',
+            wfo: (g.wfo || {}).abbreviation || '',
+            rfc: (g.rfc || {}).name || '',
+            flood_category: cat, flood_rank: rank,
+            observed, forecast,
+          }));
+        }
+      }
+      return {
+        type: 'FeatureCollection', flooding,
+        credit: 'NOAA National Water Prediction Service', features: feats,
+      };
+    }))],
+
+  [/^\/api\/tides$/, async () => jsonResponse(
+    await cached('tides', 86400000, async () => {
+      const d = await gfetch('https://api.tidesandcurrents.noaa.gov/mdapi/prod/'
+        + 'webapi/stations.json?type=waterlevels', { timeout: 45000 });
+      const feats = [];
+      for (const s of d.stations || []) {
+        // Upstream calls longitude `lng`.
+        const lat = num(s.lat), lon = num(s.lng);
+        if (lat === null || lon === null) continue;
+        feats.push(feature(lon, lat, {
+          kind: 'tides', id: s.id || '', name: s.name || 'Tide station',
+          state: s.state || '', tidal: !!s.tidal,
+          great_lakes: !!s.greatlakes, storm_surge: !!s.stormsurge,
+          affiliations: s.affiliations || '',
+        }));
+      }
+      return { type: 'FeatureCollection', features: feats, credit: 'NOAA CO-OPS' };
+    }))],
+
+  [/^\/api\/tide\/([0-9A-Za-z]{3,12})$/, async (m) => {
+    // No cache, as before: this is a per-click lookup.
+    const station = m[1];
+    const base = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'
+      + `?station=${station}&datum=MLLW&units=english&format=json`
+      + '&application=graticule';
+    const [lvl, pred] = await Promise.all([
+      // gmt for the observation and lst_ldt for the hi/lo predictions, which
+      // is what makes the panel show a high tide at the local clock time.
+      gfetch(`${base}&date=latest&product=water_level&time_zone=gmt`,
+             { timeout: 25000 }).catch(() => null),
+      gfetch(`${base}&date=today&product=predictions&interval=hilo&time_zone=lst_ldt`,
+             { timeout: 25000 }).catch(() => null),
+    ]);
+    const out = { station };
+    if (lvl) {
+      const rows = lvl.data || [];
+      if (rows.length) {
+        out.level = { t: rows[rows.length - 1].t, v: rows[rows.length - 1].v };
+        out.name = (lvl.metadata || {}).name;
+      } else if (lvl.error) {
+        // CO-OPS answers 200 with an error object for a station that carries
+        // no water level, so r.ok is not the question.
+        out.level_error = (lvl.error || {}).message || '';
+      }
+    }
+    if (pred) {
+      out.predictions = (pred.predictions || []).map(
+        (p) => ({ t: p.t, v: p.v, type: p.type }));
+    }
+    return jsonResponse(out);
+  }],
+
+  [/^\/api\/buoys$/, async () => jsonResponse(
+    await cached('buoys', 900000, async () => ({
+      type: 'FeatureCollection',
+      features: parseBuoys(await gfetch(
+        'https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt',
+        { as: 'text', timeout: 30000 })),
+      credit: 'NOAA National Data Buoy Center',
+    })))],
+
+  // ---- people and eyes ---------------------------------------------------
+
+  [/^\/api\/spotters$/, async () => jsonResponse(
+    await cached('spotters', 120000, async () => ({
+      type: 'FeatureCollection',
+      features: parseSpotters(await gfetch(
+        'https://www.spotternetwork.org/feeds/reports.txt',
+        { as: 'text', timeout: 25000 })),
+      credit: 'Spotter Network',
+    })))],
+
+  [/^\/api\/cameras$/, async () => jsonResponse(
+    await cached('cameras', 1800000, async () => {
+      const jobs = [
+        gfetch('https://cameras.alertcalifornia.org/public-camera-data/'
+               + 'all_cameras-v3.json', { timeout: 45000 })
+          .then((d) => ['alertca', d]).catch(() => null),
+        gfetch('https://webcams.nyctmc.org/api/cameras', { timeout: 45000 })
+          .then((d) => ['nyc', d]).catch(() => null),
+      ];
+      for (let d = 1; d <= 12; d++) {
+        // `d` unpadded in the directory, zero-padded in the filename.
+        const dd = String(d).padStart(2, '0');
+        jobs.push(gfetch(`https://cwwp2.dot.ca.gov/data/d${d}/cctv/cctvStatusD${dd}.json`,
+                         { timeout: 45000 })
+          .then((x) => ['caltrans', x]).catch(() => null));
+      }
+      const got = (await Promise.all(jobs)).filter(Boolean);
+      if (!got.length) throw new Error('all camera sources unavailable');
+
+      const cams = [];
+      const networks = {};
+      const add = (net, lat, lon, props) => {
+        if (!inRange(lat, lon) || (lat === 0 && lon === 0)) return;
+        networks[net] = (networks[net] || 0) + 1;
+        cams.push(feature(lon, lat, { kind: 'cameras', network: net, ...props }));
+      };
+
+      for (const [kind, d] of got) {
+        if (kind === 'alertca') {
+          for (const f of (d && d.features) || []) {
+            const c = (f.geometry || {}).coordinates || [];
+            // About 900 of 2,180 records carry a null coordinate, and a NaN
+            // reaches Cesium's frustum computation and kills the scene.
+            if (c.length < 2 || c[0] === null || c[1] === null) continue;
+            const p = f.properties || {};
+            const id = p.id || p.name;
+            if (!id) continue;
+            add('ALERTCalifornia', num(c[1]), num(c[0]), {
+              id, name: p.name || id,
+              place: String(p.county || '').replace(/\b\w/g, (x) => x.toUpperCase()),
+              state: p.state || 'CA',
+              image: CAM_FRAME.replace('{cid}', id),
+              az_current: p.az_current, tilt_current: p.tilt_current,
+              last_frame_ts: p.last_frame_ts,
+            });
+          }
+        } else if (kind === 'nyc') {
+          for (const c of Array.isArray(d) ? d : []) {
+            add('NYC DOT', num(c.latitude), num(c.longitude), {
+              id: c.id, name: c.name || 'NYC camera',
+              place: c.area || 'New York City', state: 'NY',
+              image: c.imageUrl,
+              in_service: String(c.isOnline || '').toLowerCase() === 'true',
+            });
+          }
+        } else {
+          // {data: [{cctv: {index, location{...}, inService, imageData{...}}}]}
+          // and every scalar in it is a STRING, latitude included.
+          let li = -1;
+          for (const loc of (d || {}).data || []) {
+            li += 1;
+            const L = loc.cctv || loc;
+            const rec = L.location || {};
+            const url = ((L.imageData || {}).static || {}).currentImageURL;
+            if (!url) continue;
+            add('Caltrans', num(rec.latitude), num(rec.longitude), {
+              id: `ct-${rec.district || ''}-${li}-${L.index || 0}`,
+              name: rec.locationName || rec.nearbyPlace || 'Caltrans CCTV',
+              place: rec.county || rec.nearbyPlace || '',
+              state: 'CA', route: rec.route, direction: rec.direction,
+              image: url,
+              stream: ((L.imageData || {}).streamingVideoURL) || '',
+              in_service: String(L.inService || '').toLowerCase() === 'true',
+            });
+          }
+        }
+      }
+      return {
+        type: 'FeatureCollection', networks,
+        credit: 'ALERTCalifornia / UC San Diego · Caltrans CWWP2 · NYC DOT',
+        features: cams,
+      };
+    }))],
 
   [/^\/api\/snapshot$/, async () => jsonResponse({
     layers: store.layers, meta: store.meta,

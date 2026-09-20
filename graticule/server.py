@@ -170,6 +170,17 @@ PROXY_HOSTS = frozenset({
     "api.rainviewer.com", "celestrak.org", "eonet.gsfc.nasa.gov",
     "ll.thespacedevs.com", "meri.digitraffic.fi", "api.open-meteo.com",
     "davidmegginson.github.io",
+    # The ten on-demand endpoints web/feeds.js now answers itself.
+    "www.spc.noaa.gov",
+    "aviationweather.gov",
+    "mesonet.agron.iastate.edu",
+    "cameras.alertcalifornia.org",
+    "cwwp2.dot.ca.gov",
+    "webcams.nyctmc.org",
+    "www.spotternetwork.org",
+    "api.water.noaa.gov",
+    "api.tidesandcurrents.noaa.gov",
+    "www.ndbc.noaa.gov",
 })
 
 

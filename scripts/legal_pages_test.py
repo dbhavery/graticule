@@ -162,8 +162,15 @@ async def main() -> None:
         # ---- the control -----------------------------------------------------
         # The two checks above are the ones the policy's own text depends on,
         # and both are "we saw zero". Point the identical detector at the app,
-        # which loads Cesium, satellite.js and Google Fonts from CDNs. If this
-        # reads zero too, the detector is broken and this whole file is theatre.
+        # which reaches the data providers directly. If this reads zero too,
+        # the detector is broken and this whole file is theatre.
+        #
+        # THIS USED TO ASSERT IT SAW THE CESIUM CDN. It did, for as long as
+        # index.html loaded the engine from cesium.com, and then it stopped:
+        # the engine is vendored into the APK now, so the app contacts that
+        # host zero times. The old assertion failing was the change working.
+        # It is replaced with the providers the app genuinely does reach, which
+        # are the ones the policy names.
         print("\n== the control: the same detector, pointed at the app ==")
         pg, seen = await load(ctx, "/?terrain=off", wait_ms=6000)
         ext = external(seen)
@@ -171,8 +178,14 @@ async def main() -> None:
         chk(len(ext) > 0,
             f"the app DOES reach {len(ext)} external requests across "
             f"{len(hosts)} hosts, so a zero above is a real zero")
-        chk(any("cesium" in h for h in hosts),
-            f"and one of them is the Cesium CDN ({', '.join(hosts[:4])})")
+        # Any one of these is enough; which of them answers first is a race.
+        providers = ("weather.gov", "usgs.gov", "rainviewer.com", "nasa.gov",
+                     "arcgisonline.com", "openstreetmap.org", "gstatic.com")
+        chk(any(any(p in h for p in providers) for h in hosts),
+            f"and they are data providers, which is what the policy names "
+            f"({', '.join(hosts[:4])})")
+        chk(not any("cesium.com" in h for h in hosts),
+            f"and the engine is NOT among them any more ({', '.join(hosts)})")
 
         # ---- attribution, read off the SCREEN --------------------------------
         #
