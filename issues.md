@@ -2183,3 +2183,36 @@ changes what somebody sees while a severe thunderstorm warning is active:
 Whichever one, the anchor has to become a measured height. This is the same
 defect family as issue 70's bottom stack and the desktop corner fixed on
 2026-09-18: a constant standing in for another element's runtime size.
+
+---
+
+## 72. The radar graphic credits MRMS, and the tiles are RainViewer
+
+Found 2026-09-19 during a scope audit, by reading the source rather than the
+screen. The broadcast graphic prints the label `MRMS COMPOSITE`
+(`web/app.js:11955`), but no MRMS endpoint is called anywhere in the repo. The
+tiles under that label come from RainViewer (`web/app.js:7757`, manifest
+`graticule/feeds/radar.py:17`).
+
+MRMS is a real NOAA product and a meaningful claim about resolution and update
+cadence. Printing its name over somebody else's mosaic is a wrong attribution
+on a surface built to look authoritative, and RainViewer's own credit is the
+one the licence actually requires.
+
+Not fixed here: the correct label depends on whether the intent was to name the
+product or to name the source, and issue 66 already established that the credit
+strip is a licence condition rather than a courtesy.
+
+## 73. A dead `nightlights` branch in the layer dispatch
+
+`web/app.js:2061` carries `else if (layer === 'nightlights') toggleNightLights(on);`
+inside the `input[data-layer]` dispatch. No `input[data-layer="nightlights"]`
+exists in `web/index.html`; the real control is `#sky-nightlights`
+(`web/index.html:733`), dispatched separately at `web/app.js:8191`.
+
+Harmless today. Logged because God's Eye View cannot hold a defect of this
+shape: its catalog constructor throws when an instance has no matching registry
+metadata (`src/app/catalog.js:29-37`), while Graticule's toggle list is markup
+and its dispatch is a switch, so the two can disagree silently. The layer set
+is the product; it has no single registry and nothing asserts the two lists
+match.
