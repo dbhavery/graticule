@@ -121,15 +121,33 @@ and who receives it.</p>
 <h2>Location</h2>
 
 <p><strong>Location access is optional, and the app works without it.</strong>
-Graticule asks for it only when you press the locate button, or when you have
-turned on "start at my location" in Settings. If you decline, the locate button
-tells you it is off and every other feature behaves normally.</p>
+Graticule asks for it only when you press the locate button, when you have
+turned on "start at my location" in Settings, or when you choose "Use my
+location" to set your area. If you decline, the app tells you it is off and
+every other feature behaves normally.</p>
 
-<p>When you grant it, the coordinate is used entirely on your device, for two
-things: moving the map camera to where you are, and drawing the blue accuracy
-circle around that point. The coordinate is <strong>not sent to our server, not
-written to storage, and not retained</strong>. It exists in memory until you
-close the app.</p>
+<p>When you grant it, the coordinate is used entirely on your device, for three
+things: moving the map camera to where you are, drawing the accuracy circle
+around that point, and ranking hazards by how far they are from you. The
+coordinate is <strong>never sent to our server</strong>.</p>
+
+<div class="card">
+  <p><strong>One coordinate is saved, and only if you ask for it.</strong>
+  Setting your area writes a single point to your device's local storage, inside
+  the <code>graticule.settings.v1</code> key, so that the app can still tell you
+  how far away a tornado warning is after you close it and reopen it. Alerting
+  that forgets where you live every time you quit is not alerting.</p>
+
+  <p>It is stored on your device only and is never transmitted. You can see it in
+  Settings under Your Area, it names the nearest town rather than your address,
+  and <strong>Clear</strong> removes it immediately. Nothing else about location
+  is retained: the fixes behind the locate button are used and discarded.</p>
+
+  <p>If you would rather not grant location access at all, <strong>Use map
+  centre</strong> sets your area from wherever the globe is pointing. It needs no
+  permission and no GPS, and everything that depends on knowing where you are
+  works the same way afterwards.</p>
+</div>
 
 <div class="card">
   <p>The one thing worth understanding: after the camera moves, forecast data for
@@ -149,7 +167,8 @@ only. Four keys:</p>
 
 <ul>
   <li><code>graticule.settings.v1</code>, your Settings choices, such as units,
-      which layers are on, and the theme</li>
+      which layers are on, the theme, and, only if you set one, the single
+      coordinate for your area described above</li>
   <li><code>graticule.tab</code>, the panel tab you had open</li>
   <li><code>graticule.rail</code>, whether the side rail is collapsed</li>
   <li><code>graticule.division</code>, your chosen map division</li>

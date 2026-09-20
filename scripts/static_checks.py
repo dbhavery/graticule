@@ -87,6 +87,43 @@ def main() -> None:
         f"({len(named)}); missing from policy: {sorted(actual - named) or 'none'}; "
         f"named but unused: {sorted(named - actual) or 'none'}")
 
+    # A KEY LIST CANNOT SEE A NEW FIELD INSIDE AN EXISTING KEY.
+    #
+    # The check above compares the key NAMES the policy prints against the ones
+    # app.js touches, and it has passed every run. It went on passing when
+    # `settings.home` started writing a precise latitude and longitude into
+    # `graticule.settings.v1`, because the key count never moved -- while the
+    # policy still said the coordinate was "not written to storage, and not
+    # retained". The live page was false for a day and every gate was green.
+    #
+    # So: if the code persists a location, the policy has to say so, in the
+    # section about local storage, and the app has to offer a way to erase it.
+    persists_home = bool(re.search(r"settings\.home\s*=\s*\{", app_js))
+    low = priv.lower()
+    admits = ("local storage" in low
+              and "coordinate for your area" in low
+              and "never transmitted" in low)
+    chk(not persists_home or admits,
+        "the policy describes the one coordinate the app saves "
+        f"(code persists it: {persists_home}; policy describes it: {admits})")
+
+    # The exact sentence that became false. Whitespace-normalised, because it
+    # wraps across lines in the source and a literal match would miss it.
+    flat = re.sub(r"\s+", " ", priv)
+    chk("not written to storage, and not retained" not in flat,
+        "the superseded 'not written to storage' claim is gone")
+
+    chk(not persists_home or 'id="home-clear"' in index,
+        "Settings offers the Clear control the policy promises")
+
+    # CONTROL: all three report an absence. Prove each fires on a copy that has
+    # the defect, using the real superseded sentence rather than a stand-in.
+    stale = "the coordinate is not written to storage, and not retained."
+    chk("not written to storage, and not retained" in re.sub(r"\s+", " ", stale)
+        and not ("coordinate for your area" in stale.lower())
+        and bool(re.search(r"settings\.home\s*=\s*\{", "settings.home = { lat, lon };")),
+        "CONTROL: the stale-claim, policy-silence and persistence detectors all fire")
+
     hits = [t for t in TRACKERS if t in app_js.lower()]
     chk(not hits, f"no analytics or crash-reporting SDK in app.js ({hits or 'none'})")
     hits = [t for t in TRACKERS if t in index.lower()]
