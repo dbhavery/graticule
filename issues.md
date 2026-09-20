@@ -2464,3 +2464,77 @@ boot, but Cesium still fetches and parses the same 299 KB JSON inside every
 worker it spawns: 24 times on a 24-core desktop, once per core on a phone.
 Nothing in this repo controls it. Recorded because it is a real share of the
 boot the attribution in 69 never named.
+
+---
+
+## 84. The backend is the only reason this needs hosting (OPEN, Don's call)
+
+Don, 2026-09-20: *"use open source like 'gods eye view'."*
+
+God's Eye View has no hosting to copy. It is localhost-only on purpose and
+**refuses** Cloudflare sharing in code, because its dev server brokers the
+user's own API keys to anyone who can reach it (`SECURITY.md:75-89`,
+`scripts/pinokio-preflight.mjs:13-19`). It has no Dockerfile, no fly.toml, no
+deploy workflow, and no Android build. What it actually does is run on the
+user's machine and **call the data providers itself**.
+
+Graticule cannot copy the first half: a phone cannot run a Python backend and
+this ships on Play. It can copy the second half.
+
+### Why a host is needed today
+
+`graticule/server.py` runs 16 feed loops, holds the merged picture in memory
+with no database, and pushes it to clients over a WebSocket. In-memory and
+always-on: a free tier that sleeps after fifteen idle minutes wipes the state,
+so the app opens to the empty screen and waits a minute to fill. That, more
+than the card, is what rules out most free hosting.
+
+### Every provider is public and keyless
+
+    services.swpc.noaa.gov   tfr.faa.gov          ll.thespacedevs.com
+    submarinecablemap.com    nhc.noaa.gov         meri.digitraffic.fi
+    firms.modaps.eosdis...   eonet.gsfc.nasa.gov  earthquake.usgs.gov
+    davidmegginson.github.io api.weather.gov      api.rainviewer.com
+    webservices.volcano...   opendata.adsb.fi     celestrak.org
+    api.airplanes.live       api.adsb.lol         aisstream.io
+
+`keyless_test.py` already proves the app runs with no keys at all, so unlike
+God's Eye View there are no keys for a proxy to hide. **The server is an
+aggregator, not a key broker.**
+
+### Measured: who answers a browser directly
+
+Same request the page would make, `Origin: https://localhost`:
+
+    OK, Access-Control-Allow-Origin: *   10 of 17
+      nws alerts, usgs, rainviewer, celestrak, swpc, eonet,
+      spacedevs, digitraffic, open-meteo, ourairports
+
+    no CORS header                        7 of 17
+      adsb.lol (403), adsb.fi, airplanes.live (403), nhc,
+      volcano gvp, faa tfr, cablemap
+
+The two 403s answered a probe, not a real client, so that may be a
+User-Agent or Origin rejection rather than a block; not yet chased.
+
+**CORS is a browser rule, and Capacitor 7 ships `CapacitorHttp`, which makes
+requests in native Java outside the WebView where no origin exists.** So all
+seventeen are reachable from the APK. NOT YET VERIFIED ON A DEVICE: the
+emulator's system_server died during this session and the app will not launch
+on it, so this is read off the Capacitor API, not measured.
+
+### The shape that needs no host at all
+
+Move the feed loops and the merge into the client. Then:
+
+* nothing to pay for, nothing to keep awake, nothing to go down,
+* no middleman sees every user's requests,
+* the WebSocket becomes polling, and each phone only polls the layers that
+  are switched ON, which is less work than the server does for everyone,
+* the **web** build still needs something for the 7 CORS-less providers.
+  A Vercel serverless function is the obvious answer: free, no card, and
+  Vercel already hosts the privacy page. It works precisely because there is
+  no longer any always-on state for it to hold.
+
+Cost: about 1,000 lines of Python feed and merge logic become JavaScript, and
+per-provider rate limits start applying per phone rather than per server.
