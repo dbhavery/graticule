@@ -2319,3 +2319,60 @@ Dockerfile and confirms the comparison reports it.
 This does NOT prove the image builds. `FROM python:3.13-slim` and the pip
 resolution inside it are still unexercised, and Fly builds remotely so Don does
 not need Docker either.
+
+## 78. The warning card's dismiss button did nothing on a phone (FIXED)
+
+Found 2026-09-19 while recapturing the store screenshots: a capture kept
+showing the hero alert card that the DOM said was hidden. Reading the element
+rather than trusting either one settled it. With the `hidden` class applied it
+measured **340x156 and `display: block`**.
+
+    #gfx .hidden          { display: none; }    (1,1,0), line 3806
+    #gfx .gfx-warning     { display: block; }   (1,1,0), phone block, later
+
+Equal specificity, so source order decides, and the phone rule is later. The
+card could not hide on a phone. `gfxShell` added the class, the dismiss button
+called it, and nothing happened, on the one surface in the app that a person
+taps while a severe thunderstorm warning is on screen.
+
+**Third instance of this exact shape in this stylesheet.** `#timeline` set
+`display: flex` at id specificity and outranked `.hidden`; `.gfx-scale.is-vertical`
+set `display: flex` at two classes and landed after `.gfx.hidden`. The comment
+on that second fix says the `#gfx` scope outranks "any graphic's own display
+rule, present or future". Equal specificity plus later source order is the case
+it did not cover, and it is the case that happened.
+
+Fixed with `#gfx .gfx-warning.hidden { display: none; }`, which wins on
+specificity rather than on position. The pattern to watch for: **any rule that
+sets `display` on an element that also has a hidden state**.
+
+## 79. Store screenshots are generated now, not taken by hand (RESOLVED)
+
+The shipped set was captured by hand on 2026-08-13 and showed the cyan accent,
+a five-tile quick row, and a sheet introducing the app as a radar viewer. None
+of that exists. A listing whose pictures are of a different app is worse than
+one with fewer pictures.
+
+`scripts/store_shots.py` captures six scenes at 1080x2400 with 16:9 crops.
+Three are deliberately not weather, per Don's "swiss army knife" direction.
+The August set moved to `_deprecated/2026-09-19/`.
+
+Four things the script had to learn, each found by a failed capture:
+
+* **Terrain on cannot be captured.** Every screenshot timed out at 120 s, on
+  SwiftShader and again on the real GPU headed. It costs this set nothing:
+  `syncTerrainForView` keeps terrain off above these altitudes anyway, so the
+  frames are what a phone actually draws there.
+* **The camera kept going home.** Scene 5 asked for the Pacific and
+  photographed North America. `lockNorthAmerica` re-centres after 90 s with no
+  sign of a person, and a script that drives the camera through `evaluate()`
+  and then waits is exactly that. Turned off for the session rather than faked.
+* **The fires layer could not be composited.** With it on, the capture did not
+  finish inside 180 s while every other scene took under five. That layer ships
+  ~175,000 points (issue 31, open). Attribution was NOT established, because a
+  bisect measured before the deferred layers had loaded; the only claim made is
+  what was observed.
+* **A capture script must verify its own setup.** Setting the card's config and
+  checking it immediately passed, and the scene still photographed the card.
+  The only moment worth asserting is the moment the shutter opens, and doing
+  that is what exposed issue 78.

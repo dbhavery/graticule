@@ -4932,6 +4932,22 @@ div[data-requires].is-off .wf-item.is-active {
      readable by being scaled onto a phone. The alert banner is the one that
      matters on a small screen, so it goes full width and the rest stand down. */
   #gfx .gfx { display: none; }
+  /* AND IT STILL HAS TO BE ABLE TO HIDE.
+     `#gfx .hidden { display: none }` above is (1,1,0) and this rule is also
+     (1,1,0), so source order decides and this one is later. The card
+     therefore ignored its own hidden class ON A PHONE ONLY: `gfxShell` added
+     it, the dismiss button called it, and the element stayed 340x156 and
+     painted. Tapping the x on a severe weather warning did nothing.
+
+     Found 2026-09-19 by reading the DOM while a capture showed the card that
+     the DOM said was hidden. It is the THIRD time this shape has bitten this
+     file, after #timeline and .gfx-scale.is-vertical, and the comment on the
+     second one claims the #gfx scope outranks "any graphic's own display
+     rule, present or future". Equal specificity plus later source order is
+     the case it did not cover.
+
+     One extra class, so it wins on specificity rather than on position. */
+  #gfx .gfx-warning.hidden { display: none; }
   #gfx .gfx-warning {
     display: block;
     left: 8px; right: 8px; top: auto;
@@ -5935,7 +5951,24 @@ div[data-requires].is-off .wf-item.is-active {
 @media (max-width: 780px), (max-height: 500px) {
   /* The phone is the judging surface and this is the line that does the
      explaining, so it gets the readable size, not the compact one. */
-  .gfx-urg { padding: 9px calc(var(--gfx-x-size) + 10px) 0 14px; gap: 9px; }
+  /* The row WRAPS on a phone rather than truncating.
+     Reserving the dismiss button's width stopped it printing under the x,
+     and revealed the next problem: at 360 CSS px the remaining space is not
+     enough for "Happening now or about to. Act.", so it ellipsised to
+     "Happening now or about t...". This line is the information graphic Don
+     asked for -- the one that explains what the severity colour means -- and
+     an explanation cut mid-word explains nothing.
+     So the sentence drops to its own full-width line under the pips. */
+  .gfx-urg {
+    padding: 9px calc(var(--gfx-x-size) + 10px) 0 14px;
+    gap: 4px 9px;
+    flex-wrap: wrap;
+  }
+  .gfx-urg-say {
+    flex: 1 1 100%;
+    white-space: normal;
+    overflow: visible;
+  }
   .gfx-urg-word, .gfx-urg-say { font-size: var(--fs-xs); }
   .gfx-urg-pips i { width: 6px; height: 13px; }
 }
