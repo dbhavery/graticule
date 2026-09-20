@@ -12397,7 +12397,12 @@ function gfxHazardArea(h) {
 function gfxHazardTitle(h) {
   const p = h.raw || {};
   switch (h.kind) {
-    case 'nws':        return String(h.event || 'ALERT').toUpperCase();
+    // `severe` and `tsunamis` below already fall back through the raw feed
+    // object; this case did not, so an NWS hazard that reached the card
+    // without its normalised `event` lifted printed the word ALERT over a
+    // tornado warning. Same fallback chain for all three now.
+    case 'nws':        return String(h.event || p.event || p.headline
+                                     || 'ALERT').toUpperCase();
     case 'quakes':     return `MAGNITUDE ${Number(p.mag).toFixed(1)} EARTHQUAKE`;
     case 'hurricanes': return `${p.classification || 'TROPICAL CYCLONE'} ${p.name || ''}`
                                 .trim().toUpperCase();
@@ -14501,10 +14506,31 @@ function syncBotstackHeight() {
   if (!el) return;
   // display:contents on desktop, so there is no box to measure and nothing
   // downstream needs one -- the members position themselves there as before.
-  const h = (getComputedStyle(el).display === 'contents')
-    ? 0
-    : Math.ceil(el.getBoundingClientRect().height);
+  const isSheet = getComputedStyle(el).display !== 'contents';
+  const h = isSheet ? Math.ceil(el.getBoundingClientRect().height) : 0;
   document.documentElement.style.setProperty('--botstack-h', `${h}px`);
+
+  /* How much of the screen the sheet is covering RIGHT NOW.
+     `--sheet-peek` is the closed height and the whole bottom stack is built on
+     it, which is correct for the stack: at half and full the sheet covers all
+     of it, and chrome that is covered is not a defect. The warning card is the
+     exception, because it is the one thing that has to stay readable while a
+     warning is running, and it was the one thing anchored to a height that
+     stops being true the moment the sheet moves. Measured 2026-09-19 at
+     412x915: at the half detent the sheet's top edge landed at y=518 and cut
+     62px off a 135px card, through the middle of the expiry line.
+
+     Measured, not derived from the detent's own `translateY(52%)`, because
+     that percentage is in the stylesheet and reading it back here would be one
+     more constant guessing at another. Safe to read immediately after the
+     class changes: the sheet deliberately has NO transition, so its box is
+     already final. */
+  const sheet = document.getElementById('hud');
+  if (sheet && isSheet) {
+    const vis = Math.max(0, Math.round(window.innerHeight
+                                       - sheet.getBoundingClientRect().top));
+    document.documentElement.style.setProperty('--sheet-vis', `${vis}px`);
+  }
 
   // The warning card is NOT a stack member -- it floats above the stack, off
   // that same measured height -- so anything that has to clear the WARNING
@@ -14522,6 +14548,27 @@ function syncBotstackHeight() {
                   getComputedStyle(warn).display !== 'none';
   const wh = visible ? Math.ceil(warn.getBoundingClientRect().height) : 0;
   document.documentElement.style.setProperty('--gfxwarn-h', `${wh}px`);
+
+  /* The top of the whole bottom cluster, as a distance up from the bottom
+     edge, so anything that has to sit clear of ALL of it needs one term.
+
+     This replaces a four-term sum. The sum was right for as long as every
+     term was anchored to the same base, and it stopped being right the moment
+     the warning card started riding with the sheet: at the half detent the
+     locate button computed peek + stack + card + 28 and landed inside the
+     card, over the end of its own hint line. Caught in a screenshot, not in
+     the geometry -- the boxes were all exactly where each rule said.
+
+     Measuring the top of whichever element is actually highest cannot drift
+     that way, because it is not a description of the layout, it is the
+     layout. */
+  const topEls = [visible ? warn : null, isSheet ? el : null].filter(Boolean);
+  const top = topEls.reduce((acc, node) => {
+    const r = node.getBoundingClientRect();
+    if (r.height <= 0) return acc;
+    return Math.max(acc, Math.round(window.innerHeight - r.top));
+  }, 0);
+  document.documentElement.style.setProperty('--botstack-top', `${top}px`);
 
   // The credit strip's own height, published on BOTH breakpoints.
   //
@@ -14624,6 +14671,10 @@ function sheetGo(i) {
   // The sheet covers a different amount of map at each detent, and the scroll
   // edges are computed from a box whose height just changed.
   syncRailScrollEdges();
+  // So is the warning card's anchor. The 400ms backstop would eventually
+  // publish the new --sheet-vis, and 400ms of a severe thunderstorm warning
+  // sliced in half is exactly the frame a person sees.
+  syncBotstackHeight();
 }
 
 /* A transient line of text, bottom centre, gone in a few seconds.

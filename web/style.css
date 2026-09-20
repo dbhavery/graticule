@@ -4979,6 +4979,20 @@ div[data-requires].is-off .wf-item.is-active {
   .gfx-col  { min-width: 0; flex: 1 1 100%; }
   .gfx-col .gfx-big, .gfx-col .gfx-sub { min-width: 0; overflow-wrap: anywhere; }
 
+  /* The area line's desktop backstop is `max-width: 22vw`, which bounds it
+     against a broadcast frame where this card is one narrow element in a 16:9
+     composition. On a phone the card is the full width of the screen and 22vw
+     is 90px, so a three-county warning rendered as "CLARK · M..." with 200px
+     of empty card beside it -- the list of places the warning is ABOUT,
+     cut after one of them.
+
+     The column above already wraps and already has `min-width: 0`, so the
+     text has somewhere to go. `gfxCounties()` still budgets 38 characters and
+     still appends "+2", which is the honest way to say a list was shortened;
+     this only stops CSS shortening it a second time, silently, at a width
+     that describes a different device. */
+  .gfx-area .gfx-big { max-width: none; white-space: normal; }
+
   #ap-filters { flex-wrap: wrap; }
   .apf { min-width: 0; }
 
@@ -5382,19 +5396,57 @@ div[data-requires].is-off .wf-item.is-active {
     bottom: calc(var(--sheet-peek) + var(--botstack-h, 0px)
                  + env(safe-area-inset-bottom, 0px) + 18px);
   }
-  /* The button clears the stack AND the warning card floating above it.
-     Measured on the emulator 2026-09-18: with only --botstack-h in the sum it
-     landed on top of the card's right-hand end, over the county name. Both
-     terms are measured; --gfxwarn-h is 0 when no warning is drawn, so the
-     button drops back down by itself. */
-  #locate-btn {
-    bottom: calc(var(--sheet-peek) + var(--botstack-h, 0px)
-                 + var(--gfxwarn-h, 0px)
-                 + env(safe-area-inset-bottom, 0px) + 28px);
+
+  /* ── The card is the one thing that rides with the sheet ──────────────
+     Every other member of the stack is anchored to `--sheet-peek`, the CLOSED
+     height, and at the half and full detents the sheet simply covers them.
+     That is fine for a timeline and a colour scale: covered chrome is a
+     choice a person just made by opening the sheet.
+
+     It is not fine for a live warning. Anchored to the closed height, the card
+     alone stuck out far enough to be crossed by the sheet's top edge instead
+     of covered by it, and got sliced through the middle of a word --
+     measured at 412x915, 62px off a 135px card. issues.md 71.
+
+     So at half it sits on the sheet's real top edge, `--sheet-vis`, which
+     app.js measures from the sheet itself. `--botstack-h` drops out of the sum
+     here on purpose: the stack it was clearing is behind the sheet now, and
+     keeping the term would float the card 233px above nothing.
+
+     The 50vh fallback matters. If the measurement never runs, the card lands
+     mid-screen where a person can still read it, rather than off the top. */
+  body.sheet-half #gfx .gfx-warning {
+    bottom: calc(var(--sheet-vis, 50vh) + env(safe-area-inset-bottom, 0px) + 8px);
   }
+
+  /* At full there is no map left to float over and nowhere above the sheet to
+     go. Standing the card down is not dropping the alert: the sheet the user
+     just opened all the way has the NWS Alerts tab in it, with this warning at
+     the top of the list and its full text. Hidden, not moved, so it cannot
+     come back as an overlap at some viewport nobody tested. */
+  body.sheet-full #gfx .gfx-warning { display: none; }
+  /* The button clears the stack AND the warning card floating above it.
+     This was the four-term sum `--sheet-peek + --botstack-h + --gfxwarn-h +
+     28`, and every term was measured, which is why it read as correct. It was
+     still wrong: the terms describe a layout where everything sits on the
+     closed sheet, and the warning card stopped doing that when it started
+     riding with the sheet's real top edge. At the half detent the sum put the
+     button inside the card, over the end of its own hint line.
+
+     `--botstack-top` is the top of whichever element is actually highest,
+     measured. It is zero when the stack is empty, so the button drops back to
+     the bottom edge by itself. */
+  #locate-btn {
+    bottom: calc(var(--botstack-top, 0px)
+                 + env(safe-area-inset-bottom, 0px) + 12px);
+  }
+  /* A toast is transient and usually says something about what just happened
+     to the thing the user is touching, so it rides above the sheet at every
+     detent rather than being covered at two of the three. "Press back again
+     to leave" behind an open sheet is the same as no toast at all. */
   #toast {
-    bottom: calc(var(--sheet-peek) + var(--botstack-h, 0px)
-                 + env(safe-area-inset-bottom, 0px) + 78px);
+    bottom: calc(var(--sheet-vis, var(--sheet-peek))
+                 + env(safe-area-inset-bottom, 0px) + 16px);
   }
   /* The docked alerts panel is a full surface, not a stack member; it sits
      directly on the sheet and the stack rides above it. */
