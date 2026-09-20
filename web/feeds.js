@@ -497,18 +497,29 @@ FEEDS.push({
     } catch (e) { /* leave kp null; the blob is still written */ }
 
     try {
+      // /products/solar-wind/plasma-2-hour.json is GONE -- 404, along with
+      // every plasma-*.json under that path. graticule/feeds/space_weather.py
+      // still asked for it, wrapped in its own try, so the server has been
+      // quietly shipping a null solar wind for however long it has been dead.
+      // This is the real-time solar wind feed that replaced it, a list of
+      // objects rather than rows behind a header.
       const rows = await gfetch(
-        'https://services.swpc.noaa.gov/products/solar-wind/plasma-2-hour.json');
-      // rows[0] is the header: time_tag, density, speed, temperature.
-      for (let i = rows.length - 1; i >= 1; i--) {
-        const r = rows[i];
-        const speed = num(r[2]);
-        if (speed === null) continue;
+        'https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.json');
+      // Pick by newest timestamp rather than by position: the old endpoint
+      // was oldest-first and this one is not documented either way, and a
+      // wrong guess shows a reading from hours ago as the current one.
+      let best = null;
+      for (const r of Array.isArray(rows) ? rows : []) {
+        if (num(r.proton_speed) === null) continue;
+        if (!best || String(r.time_tag) > String(best.time_tag)) best = r;
+      }
+      if (best) {
         blob.solar_wind = {
-          speed_kms: speed, density_cm3: num(r[1]),
-          temp_k: num(r[3]), time: r[0],
+          speed_kms: num(best.proton_speed),
+          density_cm3: num(best.proton_density),
+          temp_k: num(best.proton_temperature),
+          time: best.time_tag,
         };
-        break;
       }
     } catch (e) { /* leave solar_wind null */ }
 
@@ -1021,12 +1032,14 @@ async function runFeed(feed) {
   const st = running.get(feed.name);
   if (!st || st.busy) return;              // never overlap a feed with itself
   if (feed.onDemand && !layerIsOn(feed.layer)) return;
+  if (st.backoffUntil && Date.now() < st.backoffUntil) return;
   st.busy = true;
   st.runs = (st.runs || 0) + 1;
   try {
     await feed.run();
     st.lastOk = Date.now();
     st.lastError = null;
+    st.backoffUntil = 0;
   } catch (e) {
     // Recorded, not just logged. A feed that quietly stops is the failure
     // this whole design has to be able to answer for: with no server there is
@@ -1034,6 +1047,16 @@ async function runFeed(feed) {
     st.lastError = (e && e.message ? e.message : String(e)).slice(0, 200);
     st.errors = (st.errors || 0) + 1;
     console.warn(`[feeds] ${feed.name}:`, st.lastError);
+
+    // A 429 is the one failure that gets worse if you retry on schedule, and
+    // it is new: a server polled once for everybody, and a phone polls for
+    // itself. The Space Devs allow about fifteen requests an hour per IP, so
+    // one launch feed is fine and a retry loop is not. Back off to an hour
+    // and let the next success clear it.
+    if (/\b429\b/.test(st.lastError)) {
+      st.backoffUntil = Date.now() + 3600000;
+      console.warn(`[feeds] ${feed.name}: rate limited, holding for an hour`);
+    }
   } finally {
     st.busy = false;
   }
@@ -1573,6 +1596,8 @@ window.GraticuleFeeds = {
       errors: st.errors || 0,
       lastOk: st.lastOk || null,
       lastError: st.lastError || null,
+      heldUntil: st.backoffUntil && Date.now() < st.backoffUntil
+        ? st.backoffUntil : null,
       busy: !!st.busy,
     };
   }),

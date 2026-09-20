@@ -16,7 +16,7 @@ import httpx
 from loguru import logger
 
 KP_URL    = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
-PLASMA_URL = "https://services.swpc.noaa.gov/products/solar-wind/plasma-2-hour.json"
+PLASMA_URL = "https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.json"
 XRAY_URL  = "https://services.swpc.noaa.gov/json/goes/primary/xray-flares-latest.json"
 POLL_SEC = 300
 TIMEOUT_SEC = 20
@@ -48,24 +48,40 @@ async def space_weather_loop(state) -> None:
             except Exception as e:
                 logger.warning(f"SWPC Kp failed: {e!r}")
 
-            # --- Solar wind plasma (DSCOVR) ---
+            # --- Solar wind plasma (real-time solar wind) ---
+            #
+            # THIS URL WAS DEAD. /products/solar-wind/plasma-2-hour.json 404s,
+            # as does every other plasma-*.json under that path, and because
+            # this block has its own try/except the loop went on writing a
+            # blob with `solar_wind: None` in it and logged a warning nobody
+            # was reading. Found 2026-09-20 when the same URL failed in the
+            # browser port, where the failure was visible.
+            #
+            # The replacement is a list of objects rather than rows behind a
+            # header row, so the parsing is different as well as the address.
             try:
                 r = await client.get(PLASMA_URL)
                 r.raise_for_status()
                 rows = r.json()
-                if isinstance(rows, list) and len(rows) >= 2:
-                    # Schema: ["time_tag","density","speed","temperature"]
-                    # Walk back to find the latest row with non-null speed
-                    for row in reversed(rows[1:]):
-                        sp = _f(row[2]) if len(row) > 2 else None
-                        if sp is not None:
-                            blob["solar_wind"] = {
-                                "speed_kms":   sp,
-                                "density_cm3": _f(row[1]) if len(row) > 1 else None,
-                                "temp_k":      _f(row[3]) if len(row) > 3 else None,
-                                "time":        row[0],
-                            }
-                            break
+                best = None
+                for row in rows if isinstance(rows, list) else []:
+                    if not isinstance(row, dict):
+                        continue
+                    if _f(row.get("proton_speed")) is None:
+                        continue
+                    # By newest timestamp, not by position: the old endpoint
+                    # was oldest-first and this one is not documented either
+                    # way, and guessing wrong shows an hours-old reading as
+                    # the current one.
+                    if best is None or str(row.get("time_tag")) > str(best.get("time_tag")):
+                        best = row
+                if best is not None:
+                    blob["solar_wind"] = {
+                        "speed_kms":   _f(best.get("proton_speed")),
+                        "density_cm3": _f(best.get("proton_density")),
+                        "temp_k":      _f(best.get("proton_temperature")),
+                        "time":        best.get("time_tag"),
+                    }
             except Exception as e:
                 logger.warning(f"SWPC plasma failed: {e}")
 

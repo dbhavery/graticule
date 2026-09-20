@@ -280,10 +280,19 @@ async def main() -> None:
                 f"and the feeds filled {len(filled)} layers on their own "
                 f"({dict(sorted(filled.items(), key=lambda kv: -kv[1])[:5])})")
 
+            # A 429 the scheduler is already holding off on is the rate limit
+            # working, not a broken feed, and running these suites repeatedly
+            # is what burns the allowance. Anything else is a real failure.
             failed = await pg3.evaluate("""()=>(window.GraticuleFeeds
               ? window.GraticuleFeeds.status() : [])
-              .filter(f => f.lastError).map(f => f.name + ': ' + f.lastError)""")
-            chk(not failed, f"with no feed reporting an error ({failed[:2] or 'none'})")
+              .filter(f => f.lastError && !(f.heldUntil && f.lastError.indexOf('429') >= 0))
+              .map(f => f.name + ': ' + f.lastError)""")
+            held = await pg3.evaluate("""()=>(window.GraticuleFeeds
+              ? window.GraticuleFeeds.status() : [])
+              .filter(f => f.heldUntil).map(f => f.name)""")
+            chk(not failed,
+                f"with no feed reporting an error ({failed[:2] or 'none'}; "
+                f"rate limited and backing off: {held or 'none'})")
             await pg3.close()
 
             await br.close()
