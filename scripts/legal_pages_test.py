@@ -12,11 +12,18 @@ they are checked here rather than believed:
 
   * "no analytics, no crash reporting, no tracking SDK"  ->  grep the shipped
     bundle for every such host and SDK name.
-  * "four keys, on your device only"  ->  the four keys named in the policy
-    must be EXACTLY the localStorage keys app.js uses. Add a fifth key to the
-    app and this test fails, because at that moment the policy became false.
+  * "eight keys, on your device only"  ->  the keys named in the policy must be
+    EXACTLY the localStorage keys app.js uses. Add one to the app and this test
+    fails, because at that moment the policy became false. It resolves module
+    CONSTANTS as well as string literals, which it did not until 2026-09-19:
+    three keys had been live and undeclared for months behind that gap.
 
   * "this page contacts no third party"  ->  load it and watch every request.
+
+  * attribution is displayed  ->  read the rendered credit strip, not the
+    source. A count of `onScreenCredit(` call sites in app.js passed while the
+    strip held nothing but Cesium's logo and a link to their pricing page,
+    because the branch holding those call sites was not the branch that ran.
 
 That last one carries the control. A detector that reports "0 external
 requests" is indistinguishable from a detector that is broken, so the same
@@ -167,6 +174,47 @@ async def main() -> None:
         chk(any("cesium" in h for h in hosts),
             f"and one of them is the Cesium CDN ({', '.join(hosts[:4])})")
 
+        # ---- attribution, read off the SCREEN --------------------------------
+        #
+        # static_checks.py counts `onScreenCredit(` call sites in app.js. That
+        # count has never dropped and it proved nothing: measured 2026-09-19,
+        # the on-screen strip in a default session contained Cesium's logo and
+        # a link to their pricing page, and no data attribution whatsoever.
+        #
+        # The satellite base prefers Cesium ion when a token is configured, and
+        # one is. That branch returns ion asset 2, which is Bing Maps Aerial
+        # and carries a credit ion built, not marked for the screen. The app's
+        # own `onScreenCredit('Tiles (c) Esri')` sits in the branch that never
+        # executes. A COUNT OF CALL SITES CANNOT SEE THAT THE CALL SITE DOES
+        # NOT RUN. Issue 66 all over again, one level down.
+        #
+        # So this reads the rendered strip. Cesium separates its logo
+        # container from the text container; the text container is the row a
+        # person actually reads.
+        print("\n== attribution is on the screen, not behind the expander ==")
+        await pg.wait_for_timeout(9000)   # the base map has to draw first
+        strip = await pg.evaluate(
+            "()=>{const t=document.querySelector"
+            "('#credits .cesium-credit-textContainer');"
+            "return t?t.textContent.trim():'';}")
+        print(f"     strip reads: {strip[:120]!r}")
+
+        # Whoever is serving the base map has to be named. Which one it is
+        # depends on whether an ion token is configured, so accept either
+        # rather than pinning the test to this machine's .env.
+        BASES = ("Microsoft", "Esri", "OpenStreetMap", "OpenTopoMap", "NASA")
+        chk(any(b in strip for b in BASES),
+            f"the base map's source is named on screen "
+            f"({[b for b in BASES if b in strip] or 'NONE'})")
+        chk("RainViewer" in strip,
+            "and the radar layer's, which its terms require")
+        # CONTROL: "we found the words" from a strip that is empty looks the
+        # same as from one that is broken. Assert it is not empty and that the
+        # detector is reading a real element.
+        chk(len(strip) > 20,
+            f"CONTROL: the strip has content at all ({len(strip)} chars), so a "
+            f"match above is a real match")
+
         # ---- the links inside the app ---------------------------------------
         # A policy reachable only from a store listing is a policy a user cannot
         # find. Settings > About carries both, and app.js rewrites the hrefs at
@@ -202,7 +250,11 @@ async def main() -> None:
     # ---- claims that must stay true of the code --------------------------
     print("\n== the policy's claims, checked against the source ==")
 
-    named = set(re.findall(r"<code>(graticule\.[a-z0-9.]+)</code>", priv))
+    # The underscore matters: `graticule.settings.units_default_flipped`
+    # exists and this pattern could not match it, so this suite read 7
+    # keys while static_checks.py read 8 from the same two files. Two
+    # surfaces disagreeing about the same number, again.
+    named = set(re.findall(r"<code>(graticule\.[a-z0-9._]+)</code>", priv))
     actual = storage_keys(app_js)
     chk(named == actual,
         f"the policy names exactly the localStorage keys app.js uses "

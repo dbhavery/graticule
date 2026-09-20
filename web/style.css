@@ -4685,7 +4685,7 @@ div[data-requires].is-off .wf-item.is-active {
    not the first thing the pointer meets coming off the screen edge. */
 .gfx-x {
   top: 2px; right: 2px;
-  width: 26px; height: 26px; padding: 0;
+  width: var(--gfx-x-size); height: var(--gfx-x-size); padding: 0;
   display: flex; align-items: center; justify-content: center;
   border-radius: var(--r-sm);
   font-size: var(--fs-lg);
@@ -5017,7 +5017,10 @@ div[data-requires].is-off .wf-item.is-active {
   /* The rail footer's active-layer chips and the alert graphic's dismiss were
      26px, sized for a cursor rather than a fingertip. */
   .rs-chip, .gfx-x { min-height: var(--hit); }
-  .gfx-x { width: var(--hit); height: var(--hit); }
+  /* Setting the token rather than the button's width: the urgency row's
+     padding reads the same value, so growing the target cannot orphan the
+     text underneath it again. */
+  :root { --gfx-x-size: var(--hit); }
 
   #rail-tools { flex-wrap: wrap; gap: 6px; }
   #rail-tools > * { flex: 0 1 auto; min-width: 0; }
@@ -5828,11 +5831,21 @@ div[data-requires].is-off .wf-item.is-active {
    screen, and never having seen an NWS product before.
    ═════════════════════════════════════════════════════════════════════════ */
 
+/* The dismiss control's size, in one place.
+   It is 26px for a cursor and a full 44px finger target on a phone, and the
+   urgency row below has to reserve whichever is live. Two rules each holding
+   their own copy of that number is how they drifted apart in the first
+   place: the phone rule grew the button to 44 and nothing told the text. */
+:root { --gfx-x-size: 26px; }
+
 .gfx-urg {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px 0;
+  /* Right padding clears the dismiss button, which is absolutely positioned
+     over this row's right end. Derived from the same token the button reads,
+     plus its 2px offset and a gap. */
+  padding: 7px calc(var(--gfx-x-size) + 10px) 0 12px;
   font-family: var(--sans);
   min-width: 0;
 }
@@ -5922,7 +5935,7 @@ div[data-requires].is-off .wf-item.is-active {
 @media (max-width: 780px), (max-height: 500px) {
   /* The phone is the judging surface and this is the line that does the
      explaining, so it gets the readable size, not the compact one. */
-  .gfx-urg { padding: 9px 14px 0; gap: 9px; }
+  .gfx-urg { padding: 9px calc(var(--gfx-x-size) + 10px) 0 14px; gap: 9px; }
   .gfx-urg-word, .gfx-urg-say { font-size: var(--fs-xs); }
   .gfx-urg-pips i { width: 6px; height: 13px; }
 }

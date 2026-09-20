@@ -6589,6 +6589,77 @@ async function initPolarBackstop() {
    attribution, it is a wall nobody reads. */
 const onScreenCredit = (html) => new Cesium.Credit(html, true);
 
+/* ---- The on-screen credit was never actually on screen ----------------------
+
+   `onScreenCredit` builds a Credit with `showOnScreen = true`, and five call
+   sites use it, and `static_checks.py` counts those call sites. Measured in
+   the running app on 2026-09-19, with `new Cesium.Credit('x', true)` as a
+   live control proving the property works: EVERY imagery provider's credit
+   reported `showOnScreen === false`, and the on-screen strip contained
+   nothing but Cesium's own logo and a link to their pricing page.
+
+   Two reasons, and neither is visible from the source:
+
+   1. The satellite base prefers Cesium ion when a token is configured, and a
+      token IS configured. So the branch that runs is
+      `IonImageryProvider.fromAssetId(2)`, which is Bing Maps Aerial and
+      brings ITS OWN credit. The app's `onScreenCredit('Tiles (c) Esri')` is
+      in the branch that does not execute. Microsoft's terms are the ones that
+      then apply, and their credit sat behind the expander.
+
+   2. A provider's credit is attached per RENDERED TILE, so Cesium can decide
+      what is currently visible. Nothing guarantees it reaches the on-screen
+      row just because the object says it may.
+
+   `creditDisplay.addStaticCredit` is the mechanism that does: it pins a credit
+   to the strip for as long as it is registered. So the base map now registers
+   a line that NAMES WHAT IS ACTUALLY DRAWING, and removes it on swap.
+
+   This is the same defect family as issue 66, one level deeper. That one found
+   credits written into a detached div; a source-level count then replaced it,
+   and a count of call sites cannot see that the call site never runs. */
+
+let baseCreditOnScreen = null;
+
+function setBaseCredit(html) {
+  if (!viewer || !viewer.creditDisplay) return;
+  try {
+    if (baseCreditOnScreen) {
+      viewer.creditDisplay.removeStaticCredit(baseCreditOnScreen);
+      baseCreditOnScreen = null;
+    }
+    if (!html) return;
+    baseCreditOnScreen = onScreenCredit(html);
+    viewer.creditDisplay.addStaticCredit(baseCreditOnScreen);
+    viewer.scene.requestRender();
+  } catch (err) {
+    // Never let attribution take the map down with it. A missing credit is a
+    // licence problem; a thrown exception here is a blank globe.
+    console.warn('on-screen credit failed:', err);
+  }
+}
+
+/* ONLY the ion path needs this, and finding that out took a measurement.
+
+   The app's own providers pass `onScreenCredit(...)` and that DOES reach the
+   strip once their tiles render: pinning a second line for them printed
+   "Tiles (c) OpenStreetMap contributors" twice, side by side. So the
+   provider-level mechanism was never broken in general.
+
+   What is broken is the one branch that does not build its own provider.
+   `IonImageryProvider.fromAssetId(2)` arrives with a credit ion constructed,
+   which is not marked for the screen, and it is Bing Maps Aerial, so
+   Microsoft's end-user terms are the ones that apply. That credit was sitting
+   behind the expander with nothing on screen naming the imagery at all.
+
+   Esri is in this table too, because it is reached from inside the ion
+   branch's catch: if ion fails, the provider swaps to somebody else's tiles
+   and the pinned line has to swap with it. */
+const BASE_CREDIT = {
+  esri: 'Imagery © <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a>',
+  ion:  'Imagery © <a href="https://www.microsoft.com/en-us/maps/product/enduserterms" target="_blank" rel="noopener">Microsoft</a> · Cesium ion',
+};
+
 let baseImageryLayer = null;
 async function applyImageryBase(kind) {
   if (!viewer) return;
@@ -6599,6 +6670,10 @@ async function applyImageryBase(kind) {
   }
   const cfg = window.__graticule_cfg || {};
   let provider;
+  // Which BASE_CREDIT line to pin. Set on every branch below, including both
+  // halves of the satellite fork, because the fork can land on either of two
+  // different companies' imagery.
+  let creditKey = null;
   try {
     if (kind === 'streets') {
       provider = new Cesium.UrlTemplateImageryProvider({
@@ -6628,12 +6703,18 @@ async function applyImageryBase(kind) {
       if (cfg.cesium_ion_token) {
         try {
           provider = await Cesium.IonImageryProvider.fromAssetId(2);
+          // ion asset 2 is Bing Maps Aerial. Recording WHICH source answered,
+          // rather than which one was asked for, is the whole point: the
+          // credit below has to name what is drawing, and the fallback path
+          // right underneath serves somebody else's tiles.
+          creditKey = 'ion';
         } catch {
           provider = new Cesium.UrlTemplateImageryProvider({
             url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
             maximumLevel: 19,
             credit: onScreenCredit('Tiles © Esri'),
           });
+          creditKey = 'esri';
         }
       } else {
         provider = new Cesium.UrlTemplateImageryProvider({
@@ -6641,6 +6722,7 @@ async function applyImageryBase(kind) {
           maximumLevel: 19,
           credit: onScreenCredit('Tiles © Esri'),
         });
+        creditKey = 'esri';
       }
     }
     /* Clip the base to the Mercator limit, or it smears over the pole.
@@ -6672,6 +6754,10 @@ async function applyImageryBase(kind) {
     });
     viewer.imageryLayers.add(layer);
     baseImageryLayer = layer;
+    // Pin the line for whoever actually answered. Registered AFTER the layer
+    // is in, so a provider that threw on the way here leaves the previous
+    // credit standing rather than an empty strip over somebody's tiles.
+    setBaseCredit(BASE_CREDIT[creditKey] || null);
     gradeBaseImagery();
     // Keep it near the bottom; other overlays (radar, clouds, parcels) ride on
     // top. The floor is 1 rather than 0 when the polar backstop is present --
@@ -8029,7 +8115,7 @@ function ensureFrameLayer(i) {
   // every tile 404s — which is exactly what the layer was silently doing.
   const layer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
     url: `${radarMeta.host}${frame.path}/256/{z}/{x}/{y}/4/1_1.png`,
-    credit: 'Radar © RainViewer',
+    credit: onScreenCredit('Radar © <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>'),
     // RainViewer's radar cache stops at z7; without the cap Cesium requests
     // deeper tiles as you zoom in and those 404 too.
     minimumLevel: 0, maximumLevel: 7,
@@ -8640,7 +8726,7 @@ function rebuildCloudsLayer() {
   if (source !== 'global' && GOES[source] && GOES[source][product]) {
     provider = new Cesium.UrlTemplateImageryProvider({
       url: `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${GOES[source][product]}/{z}/{x}/{y}.png`,
-      credit: 'GOES © Iowa State Mesonet / NOAA',
+      credit: onScreenCredit('GOES © Iowa State Mesonet / NOAA'),
       maximumLevel: 9,
     });
   } else if (product === 'truecolor') {
@@ -8662,7 +8748,7 @@ function rebuildCloudsLayer() {
     // prefix, so concatenate it onto the host rather than rebuilding it.
     provider = new Cesium.UrlTemplateImageryProvider({
       url: `${radarMeta.host}${latest.path}/256/{z}/{x}/{y}/0/0_0.png`,
-      credit: 'Clouds © RainViewer',
+      credit: onScreenCredit('Clouds © <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>'),
       minimumLevel: 0, maximumLevel: 7,
     });
   }
