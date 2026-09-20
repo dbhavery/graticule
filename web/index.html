@@ -397,6 +397,23 @@
         </button>
       </div>
 
+      <!-- ═════════  FORECAST  ═════════
+           The app carried 23 live weather sources and could not say what
+           tomorrow's high was. Everything it had was observation or
+           situational awareness; the one forecast surface was a model FIELD,
+           sampled on a grid over the camera view and read as coloured dots.
+
+           It sits here, under Quick Layers, for two reasons. It is not a
+           layer, so it does not belong in the division nav, and it is the
+           second thing the saved home location earns its keep for: the first
+           was ranking hazards by distance, and a person who has told the app
+           where they live should not have to tell it again to get a forecast.
+
+           Filled by renderPointForecast(). Empty until an area is set, and
+           that empty state offers the control rather than describing it. -->
+      <div class="div-sec">Forecast</div>
+      <div id="fxcard" class="fx"></div>
+
       <div id="wx-modes">
         <div class="div-sec">Weather</div>
         <div class="div-grid">

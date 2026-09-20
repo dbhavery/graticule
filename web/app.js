@@ -1400,6 +1400,9 @@ function initServiceWorker() {
   initWorldDash();
   initModelCompare();
   initModelHour();
+  // Paints the empty state immediately when no area is set, so the section
+  // never renders as a blank card while a request is in flight.
+  refreshPointForecast();
   initAreaDarkening();
   initPresentation();
   initPanes();
@@ -2549,7 +2552,14 @@ function setHome(lat, lon, { label = '', source = 'gps' } = {}) {
     // the difference between "your area" and "Clark County, WA".
     if (settings.home && !settings.home.label) {
       const near = nearestPlaceLabel(lat, lon);
-      if (near) { settings.home.label = near; saveSettings(); }
+      if (near) {
+        settings.home.label = near; saveSettings();
+        // The forecast card was drawn before the county index finished
+        // loading, so it is showing the placeholder "Your area". Re-render it
+        // with the real name; the response is cached, so this costs nothing
+        // on the network.
+        renderPointForecast(fxPoint(), FX.data);
+      }
     }
     // Zone-only alerts -- 92% of them -- could not be ranked until the table
     // arrived, so everything that reads a distance has to be redrawn now.
@@ -2560,6 +2570,9 @@ function setHome(lat, lon, { label = '', source = 'gps' } = {}) {
   refreshAlerts();
   gfxRender();
   HOME_REPAINT?.();
+  // The saved location now feeds two things, not one: how far away a hazard
+  // is, and what the weather is going to do here.
+  refreshPointForecast({ force: true });
   return settings.home;
 }
 
@@ -2810,6 +2823,12 @@ function initHomeArea() {
     paint();
     refreshAlerts();
     gfxRender();
+    // The privacy page promises Clear erases the saved coordinate. Dropping
+    // the cached forecast with it is part of keeping that promise: the
+    // response is keyed to the rounded point and holds nothing else, but
+    // leaving it in memory would mean Clear did not clear everything.
+    FX.at = null; FX.data = null; FX.fetchedMs = 0;
+    refreshPointForecast();
   });
 
   // Units own which ladder is showing, so a unit change has to repaint this.
@@ -6081,6 +6100,11 @@ function applyUnits() {
   if (lbl) lbl.textContent = settings.units === 'us' ? 'ALT (US)' : 'ALT';
   // formatAltitude reads settings.units directly on every tick, so the header
   // value catches up within ~1s on its own.
+  // The forecast cannot: Open-Meteo converts server-side, so the cached
+  // response holds Fahrenheit and there is no way to re-read it as Celsius.
+  // refreshPointForecast compares settings.units against the units the cache
+  // was fetched under and re-requests when they differ.
+  refreshPointForecast();
 }
 
 // ---------- Realistic Earth -------------------------------------------------
@@ -9056,6 +9080,400 @@ async function refreshAirQuality() {
     viewer.scene.requestRender();
   } catch { /* transient network — the next view change retries */ }
   finally { _aqiBusy = false; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   POINT FORECAST                                            added 2026-09-19
+   ═══════════════════════════════════════════════════════════════════════════
+   The app held 23 live weather sources and could not tell you tomorrow's high.
+
+   Everything here was observation or situational awareness: radar with a
+   nowcast, satellite, alerts, storm reports, METAR, buoys, rivers, outlooks.
+   The model field on the globe is a forecast but it is a FIELD, sampled on a
+   grid over the camera view, capped at 24 hours, and read as coloured dots. A
+   person who wants to know whether to take a coat is not served by any of it.
+
+   ── Where the numbers come from ──────────────────────────────────────────
+   Open-Meteo, which this app already calls in four places, so no new party
+   receives anything and the privacy page's table does not grow. One request
+   carries current conditions, 48 hours of hourly and 7 days of daily.
+
+   ── Why the coordinate is rounded ────────────────────────────────────────
+   This is the first surface that would send the user's OWN saved position to
+   a third party rather than the map view. Rounding to 0.05 degrees is about
+   5.5 km, and every global model behind this call has a grid cell of 11 km or
+   coarser, so the returned forecast is identical while the coordinate that
+   leaves the device stops being a home address. Applied to the map-centre
+   path too, because a person who pointed the globe at their own roof deserves
+   the same treatment as one who pressed the button. */
+
+const FX_ROUND_DEG = 0.05;
+const FX_STALE_MS = 10 * 60 * 1000;
+const FX = { at: null, data: null, fetchedMs: 0, busy: null, days: false };
+
+/* WMO weather interpretation codes. Open-Meteo returns the number; a person
+   reads the words. Grouped rather than exhaustive: 51/53/55 are three
+   intensities of drizzle and printing "light drizzle" vs "dense drizzle"
+   in a 3-line card is detail nobody acts on differently. */
+const WMO = {
+  0: 'Clear', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+  45: 'Fog', 48: 'Freezing fog',
+  51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle',
+  56: 'Freezing drizzle', 57: 'Freezing drizzle',
+  61: 'Light rain', 63: 'Rain', 65: 'Heavy rain',
+  66: 'Freezing rain', 67: 'Freezing rain',
+  71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 77: 'Snow grains',
+  80: 'Rain showers', 81: 'Rain showers', 82: 'Violent rain showers',
+  85: 'Snow showers', 86: 'Heavy snow showers',
+  95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Severe thunderstorm',
+};
+
+function wmoText(code) {
+  return WMO[code] || (code == null ? '' : 'Unsettled');
+}
+
+/* Round toward a grid the model already quantises to. Not a privacy gesture
+   for its own sake: at 0.05 degrees the request returns the same cell. */
+function fxRound(v) {
+  return Math.round(v / FX_ROUND_DEG) * FX_ROUND_DEG;
+}
+
+function fxUnitsQuery() {
+  return settings.units === 'us'
+    ? 'temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
+    : 'temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm';
+}
+
+const FX_CURRENT = [
+  'temperature_2m', 'apparent_temperature', 'relative_humidity_2m',
+  'dew_point_2m', 'precipitation', 'weather_code', 'cloud_cover',
+  'pressure_msl', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
+  'is_day',
+].join(',');
+
+const FX_HOURLY = [
+  'temperature_2m', 'precipitation_probability', 'precipitation',
+  'weather_code', 'wind_speed_10m', 'wind_gusts_10m', 'visibility',
+  'uv_index',
+].join(',');
+
+const FX_DAILY = [
+  'weather_code', 'temperature_2m_max', 'temperature_2m_min',
+  'precipitation_sum', 'precipitation_probability_max', 'wind_speed_10m_max',
+  'wind_gusts_10m_max', 'uv_index_max', 'sunrise', 'sunset',
+].join(',');
+
+async function fetchPointForecast(lat, lon, signal) {
+  const la = fxRound(lat), lo = fxRound(lon);
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${la.toFixed(2)}&longitude=${lo.toFixed(2)}`
+    + `&current=${FX_CURRENT}&hourly=${FX_HOURLY}&daily=${FX_DAILY}`
+    + `&forecast_days=7&forecast_hours=48&timezone=auto&${fxUnitsQuery()}`;
+  const r = await fetch(url, { signal });
+  if (!r.ok) throw new Error(`open-meteo ${r.status}`);
+  return r.json();
+}
+
+/* The point the forecast is about, in priority order: an explicit request,
+   then the saved home, then nothing. Deliberately NOT the camera: a forecast
+   that silently re-targets every time the globe drifts is a forecast nobody
+   can trust, and the user already has a way to say where they mean. */
+function fxPoint() {
+  if (FX.at) return FX.at;
+  const home = homePoint();
+  if (!home) return null;
+  return { lat: home.lat, lon: home.lon,
+           label: (settings.home && settings.home.label) || 'Your area' };
+}
+
+async function refreshPointForecast({ force = false } = {}) {
+  const at = fxPoint();
+  const card = document.getElementById('fxcard');
+  if (!card) return;
+  if (!at) { renderPointForecast(null, null); return; }
+
+  const fresh = FX.data && !force
+    && Date.now() - FX.fetchedMs < FX_STALE_MS
+    && FX.data.__lat === fxRound(at.lat) && FX.data.__lon === fxRound(at.lon)
+    && FX.data.__units === settings.units;
+  if (fresh) { renderPointForecast(at, FX.data); return; }
+
+  if (FX.busy) FX.busy.abort();
+  FX.busy = new AbortController();
+  card.classList.add('is-loading');
+  try {
+    const d = await fetchPointForecast(at.lat, at.lon, FX.busy.signal);
+    d.__lat = fxRound(at.lat); d.__lon = fxRound(at.lon);
+    d.__units = settings.units;
+    FX.data = d; FX.fetchedMs = Date.now();
+    // Re-resolve the point rather than rendering the copy captured before the
+    // await. Setting a home kicks off TWO async jobs: this request, and the
+    // county index load that turns a bare coordinate into "Vancouver,
+    // Washington". The index usually wins, and the stale capture then painted
+    // the placeholder "Your area" over a label that had already arrived.
+    renderPointForecast(fxPoint() || at, d);
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    console.warn('point forecast failed:', err);
+    renderPointForecast(fxPoint() || at, null);
+  } finally {
+    card.classList.remove('is-loading');
+  }
+}
+
+/* Units are read from the response, not assumed, because Open-Meteo echoes
+   what it actually applied and this app has already been bitten once by a
+   surface that printed a stored normalised value instead of the number the
+   provider returned. */
+function fxUnit(d, key, fallback) {
+  const raw = (d && d.current_units && d.current_units[key])
+      || (d && d.hourly_units && d.hourly_units[key])
+      || (d && d.daily_units && d.daily_units[key])
+      || fallback;
+  // Open-Meteo spells miles per hour "mp/h". Nobody writes it that way and it
+  // reads as a typo in the one place a person checks a number against what
+  // they already know. The unit is still taken from the RESPONSE rather than
+  // from settings, so this renames what came back, it does not assume it.
+  return FX_UNIT_ALIAS[raw] || raw;
+}
+
+const FX_UNIT_ALIAS = { 'mp/h': 'mph', 'km/h': 'km/h', 'm/s': 'm/s' };
+
+function fxNum(v, dp = 0) {
+  return Number.isFinite(v) ? v.toFixed(dp) : '—';
+}
+
+/* Station pressure, in the unit the reader chose.
+   0.02953 inHg per hPa. Two decimals on inHg is the convention and is real
+   resolution; hPa gets none, because a tenth of a hectopascal is below what
+   the model resolves and printing it implies otherwise. */
+function fxPressure(hPa) {
+  if (!Number.isFinite(hPa)) return '—';
+  return settings.units === 'us'
+    ? `${(hPa * 0.0295299830714).toFixed(2)} inHg`
+    : `${Math.round(hPa)} hPa`;
+}
+
+/* Wind direction as a compass point. A bearing in degrees is precise and
+   unreadable; "WSW" is what a person repeats out loud. */
+const FX_COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                    'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+function fxBearing(deg) {
+  if (!Number.isFinite(deg)) return '';
+  return FX_COMPASS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+}
+
+function fxEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function fxStat(label, value) {
+  const wrap = fxEl('div', 'fx-stat');
+  wrap.appendChild(fxEl('div', 'fx-stat-v', value));
+  wrap.appendChild(fxEl('div', 'fx-stat-l', label));
+  return wrap;
+}
+
+/* Hour labels in the FORECAST POINT's own zone, not the device's.
+   `timezone=auto` means the strings come back local to the coordinate, so a
+   forecast for Tokyo read from Vancouver says 3 PM Tokyo time. Parsing them
+   as local Date objects here would re-apply the device offset on top, which
+   is the trap: the string is already correct, so only the clock face is read
+   off it and never the epoch. */
+function fxHourLabel(iso) {
+  const hh = Number(String(iso).slice(11, 13));
+  if (!Number.isFinite(hh)) return '';
+  // The app's clock setting is about which ZONE to show (utc / local / both),
+  // not 12 vs 24 hour, and these labels are already in the forecast point's
+  // own zone. A 12-hour face with a single letter is what fits a 40px column.
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${h12}${hh < 12 ? 'a' : 'p'}`;
+}
+
+function fxDayLabel(iso, i) {
+  if (i === 0) return 'Today';
+  const d = new Date(`${String(iso).slice(0, 10)}T12:00:00Z`);
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+}
+
+function renderPointForecast(at, d) {
+  const card = document.getElementById('fxcard');
+  if (!card) return;
+  card.textContent = '';
+
+  // No location set. This is the one empty state that must not read as a
+  // failure: nothing is broken, the app just has not been told where to look,
+  // and the control that fixes it is one tap away.
+  if (!at) {
+    card.classList.add('is-empty');
+    const p = fxEl('div', 'fx-empty');
+    p.appendChild(fxEl('div', 'fx-empty-t', 'No forecast yet'));
+    p.appendChild(fxEl('div', 'fx-empty-s',
+      'Set your area and this shows conditions, the next two days by hour, and seven days out.'));
+    const b = fxEl('button', 'sm-btn', 'Set your area');
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      document.getElementById('settings-overlay')?.classList.remove('hidden');
+      // Scroll Your Area into view rather than leaving the user to find it:
+      // it is the first section, but the modal remembers its scroll position
+      // and this button exists precisely because they do not know where it is.
+      document.getElementById('home-name')
+        ?.scrollIntoView({ block: 'center', behavior: 'auto' });
+    });
+    p.appendChild(b);
+    card.appendChild(p);
+    return;
+  }
+  card.classList.remove('is-empty');
+
+  const head = fxEl('div', 'fx-head');
+  head.appendChild(fxEl('div', 'fx-place', at.label || 'Selected point'));
+  card.appendChild(head);
+
+  if (!d || !d.current) {
+    head.appendChild(fxEl('div', 'fx-sub', 'Forecast unavailable right now'));
+    return;
+  }
+
+  const c = d.current;
+  const tU = fxUnit(d, 'temperature_2m', '°');
+  const wU = fxUnit(d, 'wind_speed_10m', '');
+  const pU = fxUnit(d, 'precipitation', '');
+
+  head.appendChild(fxEl('div', 'fx-sub',
+    `${wmoText(c.weather_code)} · feels ${fxNum(c.apparent_temperature)}${tU}`));
+
+  const now = fxEl('div', 'fx-now');
+  now.appendChild(fxEl('div', 'fx-temp', `${fxNum(c.temperature_2m)}${tU}`));
+  const stats = fxEl('div', 'fx-stats');
+  const gust = Number.isFinite(c.wind_gusts_10m)
+    ? ` G${fxNum(c.wind_gusts_10m)}` : '';
+  stats.appendChild(fxStat('Wind',
+    `${fxBearing(c.wind_direction_10m)} ${fxNum(c.wind_speed_10m)}${gust} ${wU}`.trim()));
+  stats.appendChild(fxStat('Humidity', `${fxNum(c.relative_humidity_2m)}%`));
+  stats.appendChild(fxStat('Dew point', `${fxNum(c.dew_point_2m)}${tU}`));
+  stats.appendChild(fxStat('Cloud', `${fxNum(c.cloud_cover)}%`));
+  // Open-Meteo has no pressure unit option: it always answers in hPa, so the
+  // US conversion is ours to do. Printing "1017.80 hPa" to somebody who has
+  // chosen US Customary is the same class of mistake as printing kilometres
+  // in a mile app, and it was worse than that here -- it also carried two
+  // decimal places, which is precision hPa does not deserve.
+  stats.appendChild(fxStat('Pressure', fxPressure(c.pressure_msl)));
+  const uvNow = d.daily && d.daily.uv_index_max ? d.daily.uv_index_max[0] : null;
+  stats.appendChild(fxStat('UV max today', fxNum(uvNow, 1)));
+  now.appendChild(stats);
+  card.appendChild(now);
+
+  // ---- Hourly. Two days, scrolled sideways, because a phone cannot show 48
+  // columns and squeezing them is how a chart becomes decoration.
+  const h = d.hourly || {};
+  const times = h.time || [];
+  if (times.length) {
+    // Start at the current hour rather than midnight: the first column a
+    // person sees should be the one they are standing in.
+    const nowIso = (c.time || '').slice(0, 13);
+    let start = times.findIndex((t) => String(t).slice(0, 13) >= nowIso);
+    if (start < 0) start = 0;
+
+    card.appendChild(fxEl('div', 'fx-section-l', 'NEXT 48 HOURS'));
+
+    /* A dry window is the common case in most places most of the time, and
+       48 empty bar tracks is a lot of grey furniture to say "no". Worse, a
+       row of unfilled boxes reads as a chart that FAILED TO LOAD rather than
+       as a measured zero, which is the opposite of what it means. Verified by
+       looking: at 0% across the window the strip is indistinguishable from
+       one whose data never arrived.
+
+       The threshold is 5%, not 0. A single hour at 1% is not a forecast of
+       rain, it is model noise, and it was enough to keep 48 full-height
+       tracks on screen showing a fill of a third of a pixel. Below 5% the
+       bars collapse to a hairline and the card says the number in words,
+       which does not overclaim: it reports the ceiling rather than asserting
+       it will stay dry. */
+    const end = Math.min(times.length, start + 48);
+    const pops = (h.precipitation_probability || [])
+      .slice(start, end).filter(Number.isFinite);
+    const wettest = pops.length ? Math.max(...pops) : 0;
+    const dry = wettest < 5;
+
+    const strip = fxEl('div', 'fx-hours');
+    if (dry) strip.classList.add('is-dry');
+    for (let i = start; i < end; i++) {
+      const col = fxEl('div', 'fx-hour');
+      col.appendChild(fxEl('div', 'fx-hour-t', fxHourLabel(times[i])));
+      col.appendChild(fxEl('div', 'fx-hour-v',
+        `${fxNum(h.temperature_2m?.[i])}${tU}`));
+      const pop = h.precipitation_probability?.[i];
+      const pct = fxEl('div', 'fx-hour-p',
+        Number.isFinite(pop) && pop > 0 ? `${pop}%` : '');
+      // The bar is the readable part; the number is the check on it.
+      const bar = fxEl('div', 'fx-hour-bar');
+      // A floor of 4% of the track height, so a real but small chance draws
+      // something a person can see. Zero still draws nothing, which is the
+      // distinction that matters: "almost none" and "none" must not look the
+      // same, and neither may be invented where the model gave no value.
+      const popPct = Number.isFinite(pop) ? (pop > 0 ? Math.max(4, pop) : 0) : 0;
+      bar.style.setProperty('--pop', `${popPct}%`);
+      col.appendChild(bar);
+      col.appendChild(pct);
+      col.title = `${wmoText(h.weather_code?.[i])} · wind `
+        + `${fxNum(h.wind_speed_10m?.[i])} ${wU}`;
+      strip.appendChild(col);
+    }
+    card.appendChild(strip);
+    if (dry) {
+      card.appendChild(fxEl('div', 'fx-dry',
+        wettest > 0
+          ? `Chance of precipitation stays under ${Math.max(1, Math.ceil(wettest))}% for the next 48 hours`
+          : 'No precipitation in the next 48 hours'));
+    }
+  }
+
+  // ---- Daily.
+  const dy = d.daily || {};
+  if (dy.time && dy.time.length) {
+    card.appendChild(fxEl('div', 'fx-section-l', 'SEVEN DAYS'));
+    const list = fxEl('div', 'fx-days');
+    const highs = (dy.temperature_2m_max || []).filter(Number.isFinite);
+    const lows = (dy.temperature_2m_min || []).filter(Number.isFinite);
+    const hi = highs.length ? Math.max(...highs) : 1;
+    const lo = lows.length ? Math.min(...lows) : 0;
+    const span = hi - lo || 1;
+    for (let i = 0; i < dy.time.length; i++) {
+      const row = fxEl('div', 'fx-day');
+      row.appendChild(fxEl('div', 'fx-day-n', fxDayLabel(dy.time[i], i)));
+      row.appendChild(fxEl('div', 'fx-day-w', wmoText(dy.weather_code?.[i])));
+      const dlo = dy.temperature_2m_min?.[i], dhi = dy.temperature_2m_max?.[i];
+      row.appendChild(fxEl('div', 'fx-day-lo', `${fxNum(dlo)}°`));
+      // One shared scale across the week, so the bars compare to each other
+      // rather than each filling its own row.
+      const track = fxEl('div', 'fx-day-track');
+      const fill = fxEl('div', 'fx-day-fill');
+      if (Number.isFinite(dlo) && Number.isFinite(dhi)) {
+        fill.style.marginLeft = `${((dlo - lo) / span) * 100}%`;
+        fill.style.width = `${Math.max(3, ((dhi - dlo) / span) * 100)}%`;
+      }
+      track.appendChild(fill);
+      row.appendChild(track);
+      row.appendChild(fxEl('div', 'fx-day-hi', `${fxNum(dhi)}°`));
+      const pop = dy.precipitation_probability_max?.[i];
+      row.appendChild(fxEl('div', 'fx-day-p',
+        Number.isFinite(pop) && pop > 0 ? `${pop}%` : ''));
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+  }
+
+  const foot = fxEl('div', 'fx-foot');
+  // Say what it is and where it came from. The rounding is stated because the
+  // privacy page states it, and a claim made in one place and not the other
+  // is how the location paragraph went stale.
+  foot.textContent = `Open-Meteo · ${d.__lat.toFixed(2)}°, ${d.__lon.toFixed(2)}° `
+    + `· rounded to about 5 km · ${dy.time ? dy.time.length : 0} days`;
+  card.appendChild(foot);
 }
 
 // ---------- Surface observations (METAR) -------------------------------------

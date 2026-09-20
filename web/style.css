@@ -5550,6 +5550,253 @@ div[data-requires].is-off .wf-item.is-active {
 }
 
 /* ═════════════════════════════════════════════════════════════════════════
+   POINT FORECAST                                        added 2026-09-19
+   ═════════════════════════════════════════════════════════════════════════
+   Same card language as the quick tiles and the bottom stack: a 14-16px
+   radius, a 5% white fill, a 9% hairline. It is a reading surface rather
+   than a control surface, so the type carries the hierarchy and nothing in
+   it is a filled block competing with the alert card for attention.
+
+   The accent is white, so state cannot be carried by hue (every hue in this
+   app is also a dBZ value). Here that costs nothing: a forecast has no
+   active state, only magnitude, and magnitude is carried by bar LENGTH. */
+.fx {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px;
+  /* A grid/flex child that will not shrink below its content is the single
+     most repeated layout defect in this file. The hour strip below is wider
+     than the screen ON PURPOSE, so this one matters more than most. */
+  min-width: 0;
+}
+.fx.is-loading { opacity: 0.55; }
+
+.fx-head { margin-bottom: 10px; }
+.fx-place {
+  font-family: var(--sans);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-med);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.fx-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-mute);
+  margin-top: 2px;
+}
+
+.fx-now { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.fx-temp {
+  font-family: var(--mono);
+  font-size: 34px;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.fx-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.fx-stat { min-width: 0; }
+.fx-stat-v {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fx-stat-l {
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.fx-section-l {
+  margin: 14px 0 6px;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+/* ---- Hourly strip ----
+   48 columns will not fit and must not be squeezed to fit: a chart narrowed
+   until its columns are 8px is decoration that looks like data. It scrolls,
+   and the scroll is horizontal only, inside this card, so the sheet it lives
+   in still scrolls vertically through it. */
+.fx-hours {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 4px;
+  /* Bleed to the card's edges so a half-visible column at the right reads as
+     "there is more", which is the only affordance a touch scroller gets. */
+  margin: 0 -12px;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.fx-hour {
+  flex: 0 0 auto;
+  width: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.fx-hour-t {
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+.fx-hour-v {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+/* Precipitation probability as a column that grows UP from a baseline. The
+   track is always drawn, so an empty bar reads as a measured zero rather than
+   as missing data. */
+.fx-hour-bar {
+  width: 100%;
+  height: 34px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  position: relative;
+  overflow: hidden;
+}
+.fx-hour-bar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: var(--pop, 0%);
+  background: rgba(255, 255, 255, 0.34);
+}
+.fx-hour-p {
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+  min-height: 1em;
+}
+
+/* Nothing in the window reaches 1%. The tracks collapse to a hairline rather
+   than disappearing, so the row still reads as an axis the temperatures sit
+   on, and the card says the rest in words underneath. */
+.fx-hours.is-dry .fx-hour-bar { height: 3px; background: rgba(255, 255, 255, 0.07); }
+.fx-hours.is-dry .fx-hour-p { display: none; }
+.fx-dry {
+  margin-top: 6px;
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+}
+
+/* ---- Seven days ----
+   One shared temperature scale across the week, so a row's bar compares to
+   the other rows rather than filling its own width. A per-row scale is the
+   usual mistake and it makes a 4-degree day look like a 30-degree one. */
+.fx-days { display: flex; flex-direction: column; gap: 2px; }
+/* Column order matches the DOM order exactly: day, word, low, track, high,
+   chance. The TRACK is the flexible one -- it is the only member whose whole
+   job is comparison, so it gets the leftover width and every number keeps a
+   fixed box so the columns line up down the week. */
+.fx-day {
+  display: grid;
+  grid-template-columns:
+    3.2em minmax(0, 6.5em) 2.4em minmax(0, 1fr) 2.4em 2.6em;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+.fx-day-n {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-weight: var(--fw-med);
+}
+.fx-day-w {
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.fx-day-lo, .fx-day-hi {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.fx-day-lo { color: var(--text-mute); }
+.fx-day-hi { color: var(--text); }
+.fx-day-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  position: relative;
+  min-width: 0;
+}
+.fx-day-fill {
+  position: absolute;
+  top: 0; bottom: 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.42);
+}
+.fx-day-p {
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.fx-foot {
+  margin-top: 10px;
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Empty state ----
+   Nothing is broken here, the app has just not been told where to look, so it
+   must not borrow the visual language of a failure. It names what it would
+   show and carries the control that fixes it. */
+.fx.is-empty { border-style: dashed; }
+.fx-empty { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.fx-empty-t {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-med);
+  color: var(--text-dim);
+}
+.fx-empty-s { font-size: var(--fs-xs); color: var(--text-mute); }
+.fx-empty .sm-btn { margin-top: 4px; }
+
+@media (max-width: 780px), (max-height: 500px) {
+  /* Three stat columns at 412px leaves ~95px each, which clips "WSW 12 G24
+     mph". Two columns, and the big temperature takes its own line. */
+  .fx-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fx-temp { font-size: 40px; }
+  /* The weather word is the first thing to go when the row is tight: the
+     numbers either side of it are what a person is actually reading.
+     `display: none` removes it from the grid entirely, so this template has
+     FIVE columns, in the order the remaining children appear: day, low,
+     track, high, chance. Getting that count wrong is silent -- the row still
+     renders, with the track squeezed into a 2.3em number slot. */
+  .fx-day {
+    grid-template-columns: 3em 2.3em minmax(0, 1fr) 2.3em 2.5em;
+  }
+  .fx-day-w { display: none; }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
    THE URGENCY KEY                                       added 2026-09-18
    ═════════════════════════════════════════════════════════════════════════
    Don asked for information graphics that say what you are looking at, and
