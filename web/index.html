@@ -37,10 +37,32 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css">
+  <link rel="stylesheet" href="/static/vendor/cesium/Widgets/widgets.css">
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
+  <!-- The engine is served by this app, not by cesium.com.
+
+       It used to be a <script> tag pointing at cesium.com. That made a
+       third-party CDN a hard dependency of a native app: with cesium.com
+       unreachable the page threw "Cesium is not defined" and the user got the
+       chrome over a blank page, no canvas and no globe, while the Play
+       listing said the globe still draws with no signal. A cold boot also
+       pulled 21.3 MB across 720 requests from it, 14.8 MB of which was the
+       same files again -- Cesium resolves its worker chunks and
+       approximateTerrainHeights.json against CESIUM_BASE_URL once per web
+       worker -- and the bundle's Cache-Control is max-age=1800, so a launch
+       half an hour later paid for all of it a second time.
+
+       CESIUM_BASE_URL has to be set BEFORE Cesium.js parses: the workers and
+       Assets are resolved against it, and the default is wherever the script
+       came from. scripts/vendor_cesium.py puts the files here from the
+       `cesium` dependency in package.json; scripts/offline_test.py fails the
+       build if a boot with cesium.com blocked cannot draw a globe. -->
+  <script>window.CESIUM_BASE_URL = '/static/vendor/cesium/';</script>
+  <script src="/static/vendor/cesium/Cesium.js"></script>
+  <!-- Also served by this app rather than by cdn.jsdelivr.net, and for the
+       same reason as the engine above: with jsdelivr unreachable there is no
+       SGP4 propagation and the satellites layer has nothing to draw. 22 KB. -->
+  <script src="/static/vendor/satellite/satellite.min.js"></script>
   <!-- Before app.js, because app.js reads GRATICULE_API_BASE at parse time.
        This is the ONLY file that differs between the web and Android builds. -->
   <script src="/static/api-config.js"></script>

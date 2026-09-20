@@ -42,6 +42,20 @@ ROOT_FILES = ["index.html", "sw.js", "manifest.webmanifest", "offline.html", "fa
 
 
 def stage(api_base: str) -> None:
+    # The engine and satellite.js live in web/vendor and are copied along with
+    # everything else below. They used to come off cesium.com and jsdelivr at
+    # runtime, which made two CDNs hard dependencies of an offline-capable app.
+    # Checked HERE rather than only in static_checks because this is the last
+    # point before the bytes go into an APK: a version bumped in package.json
+    # with the committed copy left behind would ship silently otherwise.
+    vendored = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent / "vendor_assets.py"),
+         "--check"], capture_output=True, text=True)
+    if vendored.returncode != 0:
+        print(vendored.stdout.strip())
+        raise SystemExit("web/vendor is out of step with node_modules; "
+                         "run: py -V:3.13 scripts/vendor_assets.py")
+
     if DIST.exists():
         shutil.rmtree(DIST)
     (DIST / "static").mkdir(parents=True)

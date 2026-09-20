@@ -23,9 +23,11 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+HERE = pathlib.Path(__file__).resolve().parent
 WEB = ROOT / "web"
 
 ok: list[str] = []
@@ -388,6 +390,47 @@ def main() -> None:
     chk(dispatch(revived, index)[0] == ["nightlights"]
         and dispatch(app, inerted)[1] == ["lightning"],
         "CONTROL: it reports the revived nightlights arm and an inert switch")
+
+    # ---- the browser libraries are ours, not a CDN's ---------------------
+    #
+    # index.html used to load the engine from cesium.com and satellite.js from
+    # cdn.jsdelivr.net, which made two third-party CDNs hard dependencies of a
+    # native app: with cesium.com unreachable the page threw "Cesium is not
+    # defined" and drew nothing, while the Play listing said the globe still
+    # draws with no signal. A cold boot also pulled 21.3 MB across 720
+    # requests from cesium.com, 14.8 MB of it the same files again.
+    #
+    # scripts/offline_test.py is the behavioural gate. This is the cheap half:
+    # it catches a CDN URL creeping back into the markup, and a version bump in
+    # package.json that leaves the committed copy behind.
+    print("\n== the browser libraries ship with the app ==")
+
+    cdn = re.findall(r'(?:src|href)="(https?://[^"]+)"', index)
+    engine_cdn = [u for u in cdn if "cesium.com" in u or "jsdelivr" in u]
+    chk(not engine_cdn,
+        "no library is loaded from a CDN"
+        + ("" if not engine_cdn else f": {engine_cdn}"))
+    chk("window.CESIUM_BASE_URL = '/static/vendor/cesium/'" in index,
+        "CESIUM_BASE_URL points at the vendored copy, so the workers and "
+        "Assets resolve locally too")
+
+    vendored = subprocess.run(
+        [sys.executable, str(HERE / "vendor_assets.py"), "--check"],
+        capture_output=True, text=True)
+    chk(vendored.returncode == 0,
+        "web/vendor matches node_modules: "
+        + (vendored.stdout.strip().splitlines() or ["no output"])[-1])
+
+    # CONTROL: the URL scan has to see a CDN when one is there, or "none" is
+    # also what a regex that matches nothing says.
+    probe_index = index.replace(
+        '<script src="/static/vendor/satellite/satellite.min.js"></script>',
+        '<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/'
+        'dist/satellite.min.js"></script>')
+    probe = [u for u in re.findall(r'(?:src|href)="(https?://[^"]+)"', probe_index)
+             if "cesium.com" in u or "jsdelivr" in u]
+    chk(len(probe) == 1,
+        f"CONTROL: the scan finds the jsdelivr tag when it is put back ({probe})")
 
     print(f"\n{len(ok)} passed, {len(bad)} failed")
     for m in bad:
