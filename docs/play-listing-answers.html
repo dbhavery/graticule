@@ -81,9 +81,16 @@ faster ways to get an app suspended, and it is checked against the binary.</p>
   <tr><th>Data type</th><th>Declaration</th></tr>
   <tr><td>Precise location</td>
       <td><span class="no">Not collected.</span> The app requests location permission
-          and uses the fix entirely on device: it moves the map camera and draws the
-          accuracy circle. It is never transmitted and never stored. Google defines
-          collection as transmission off the device, and this is not transmitted.</td></tr>
+          and uses the fix entirely on device: it moves the map camera, draws the
+          accuracy circle, and ranks hazards by distance from the user. Google
+          defines collection as transmission off the device, and this is not
+          transmitted.<br>
+          <strong>Note, changed 2026-09-19:</strong> if the user sets an area, one
+          coordinate IS written to local storage on the device, so that distance
+          ranking survives a restart. That is on-device storage, not collection, and
+          it stays outside this declaration for the same reason the camera position
+          does. It is described in the privacy policy and a Clear control erases
+          it.</td></tr>
   <tr><td>Approximate location</td>
       <td><span class="yes">Collected and shared.</span><br>
           <strong>Collected:</strong> Yes · <strong>Shared:</strong> Yes, with Open-Meteo<br>
@@ -121,7 +128,7 @@ and no advertising ID read anywhere in the bundle, which
 </table>
 
 <h2>2. Permissions</h2>
-<p>Three are declared, and a store listing has to justify each one.</p>
+<p>Four are declared, and a store listing has to justify each one.</p>
 <table>
   <tr><th>Permission</th><th>Justification to give</th></tr>
   <tr><td><code>INTERNET</code></td>
@@ -132,11 +139,23 @@ and no advertising ID read anywhere in the bundle, which
   <tr><td><code>ACCESS_FINE_LOCATION</code></td>
       <td>The accuracy circle drawn on the map is only honest if the fix is. A 3 km
           circle over a tornado warning is the difference between "us" and "not us".</td></tr>
+  <tr><td><code>POST_NOTIFICATIONS</code></td>
+      <td>To tell the user when a hazard enters the alert radius they chose. Opt in:
+          the app asks only when that switch is turned on, never at launch, and
+          everything else works if it is declined.</td></tr>
 </table>
 <p>Neither location permission is required to launch, and
 <code>android:required="false"</code> on the GPS feature keeps the app installable
 on a device without one. There is no background location permission, so the
 prominent-disclosure and background-access review path does not apply.</p>
+<p><strong>Two permissions are deliberately NOT in the APK.</strong> The local
+notifications plugin's own manifest asks for <code>RECEIVE_BOOT_COMPLETED</code> and
+<code>WAKE_LOCK</code>, which exist so a notification scheduled for a future time
+survives a reboot. This app schedules nothing: it raises a notification about a
+hazard that is happening now, from a page that is running. Both are stripped with
+<code>tools:node="remove"</code>, and the permission list above was read out of the
+built APK rather than off the source manifest, because the manifest merge is what
+decides.</p>
 
 <h2>3. Content rating questionnaire</h2>
 <p>Expected outcome: <strong>Everyone / PEGI 3</strong>. The answers are all "no"
@@ -212,8 +231,10 @@ No account. No ads. No analytics library, no crash reporter and no advertising
 ID anywhere in the app, which is not a promise but a test that runs on every
 change.</p>
 
-<p>Your location is used on the device to move the map to you and draw your
-accuracy circle. It is not transmitted and it is not stored.</p>
+<p>Your location is used on the device to move the map to you, draw your accuracy
+circle, and work out how far away a warning is. It is not transmitted. If you set
+your area, one coordinate is saved on your device so the app still knows where you
+are next time, and Clear erases it.</p>
 
 <p>Boundary and coastline data ships inside the app, so the globe still draws
 with no signal. The live feeds need a connection.</p>

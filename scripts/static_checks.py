@@ -257,6 +257,52 @@ def main() -> None:
         f"the base map's own credit is on screen, not behind the expander "
         f"({app.count('onScreenCredit(')} promoted)")
 
+    # ---- the listing and the manifest name the same permissions ---------
+    #
+    # A store listing has to justify every permission, and the one nobody
+    # wrote down is the one nobody reviewed. These drifted the moment the
+    # notification plugin was added: the manifest gained POST_NOTIFICATIONS
+    # and the listing still said "three are declared".
+    #
+    # This reads the SOURCE manifest, which is not the final word -- a plugin's
+    # manifest merge adds permissions this file never mentions, which is
+    # exactly how RECEIVE_BOOT_COMPLETED got in. Those are stripped with
+    # tools:node="remove", and that is asserted separately below. The APK
+    # itself is the authority and needs aapt2, so it is checked at build time,
+    # not here.
+    print("\n== the Play listing justifies every permission the manifest asks for ==")
+
+    mf = read(ROOT / "android" / "app" / "src" / "main" / "AndroidManifest.xml")
+    listing = read(ROOT / "docs" / "play-listing-answers.html")
+
+    asked = set(re.findall(
+        r'<uses-permission\s+android:name="android\.permission\.([A-Z_]+)"\s*/>', mf))
+    removed = set(re.findall(
+        r'<uses-permission\s+android:name="android\.permission\.([A-Z_]+)"\s*\n?\s*'
+        r'tools:node="remove"\s*/>', mf))
+    asked -= removed
+
+    unjustified = sorted(p for p in asked if p not in listing)
+    chk(not unjustified,
+        f"every declared permission appears in the listing answers "
+        f"({len(asked)} declared; missing: {unjustified or 'none'})")
+    chk(bool(removed),
+        f"the plugin permissions this app does not use are stripped ({sorted(removed)})")
+    chk(all(p in listing for p in removed),
+        "and the listing explains why they are stripped")
+
+    # CONTROL: the detector has to find a permission that is NOT in the
+    # listing, or "none missing" is what a broken regex also says.
+    probe_mf = mf.replace(
+        '<uses-permission android:name="android.permission.INTERNET" />',
+        '<uses-permission android:name="android.permission.INTERNET" />\n'
+        '    <uses-permission android:name="android.permission.CAMERA" />')
+    probe_asked = set(re.findall(
+        r'<uses-permission\s+android:name="android\.permission\.([A-Z_]+)"\s*/>',
+        probe_mf))
+    chk("CAMERA" in probe_asked and "CAMERA" not in listing,
+        "CONTROL: an undeclared permission is seen and reported as unjustified")
+
     # ---- the switches and the code that answers them --------------------
     #
     # The layer set IS the product, and it lived in two places that nothing
