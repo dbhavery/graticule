@@ -143,6 +143,15 @@ def main() -> None:
     (OUT / "vercel.json").write_text(json.dumps(VERCEL, indent=2) + "\n",
                                      encoding="utf-8", newline="\n")
 
+    # `vercel link` writes a .env.local into this directory holding a fresh
+    # OIDC token, and `vercel deploy` uploads the directory. Nothing here is
+    # secret by design, so the one credential that can appear is one the CLI
+    # put there itself, on its way to being published. Written by the build
+    # rather than by hand: it was added by hand once, and the next build
+    # would have dropped it silently while the token was still on disk.
+    (OUT / ".vercelignore").write_text(".env*\n.vercel\n",
+                                       encoding="utf-8", newline="\n")
+
     # ---- the app itself -----------------------------------------------------
     #
     # This site used to be two legal pages, because the app needed a long-lived

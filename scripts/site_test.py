@@ -125,6 +125,51 @@ async def main() -> None:
                 good, text = False, str(e)
             chk(good, f"{path} resolves and says {must!r}")
 
+        print("\n=== nothing in the bundle is a credential ===")
+        # `vercel link` writes a .env.local holding an OIDC token into this
+        # directory, and `vercel deploy` uploads the directory. That is the one
+        # way a secret can reach a bundle whose contents are otherwise public
+        # by design, and it happened on the first real deploy.
+        ignore = SITE / ".vercelignore"
+        rules = ignore.read_text(encoding="utf-8").split() if ignore.exists() else []
+        chk(any(r.startswith(".env") for r in rules),
+            f"the build writes a .vercelignore that covers .env ({rules})")
+
+        # Byte patterns, not names: a token does not have to be in a file the
+        # CLI chose the name of.
+        SECRET = (re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\."),
+                  re.compile(r"AIza[0-9A-Za-z_-]{35}"))
+        SKIP = {".jpg", ".png", ".webp", ".ico", ".ktx2", ".bin", ".woff",
+                ".woff2", ".gz", ".mp4"}
+        # Cesium ships a demo ion token inside its own bundle. It is upstream's,
+        # not Don's, so it is named here rather than allowed by shape.
+        ALLOW = {"app/static/vendor/cesium/Cesium.js"}
+        leaked = []
+        for f in SITE.rglob("*"):
+            if not f.is_file() or f.suffix.lower() in SKIP:
+                continue
+            rel = f.relative_to(SITE).as_posix()
+            if rel in ALLOW or rel.startswith(".vercel/"):
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if any(p.search(text) for p in SECRET):
+                leaked.append(rel)
+        chk(not leaked, f"and no file carries a token-shaped string ({leaked[:3]})")
+
+        # CONTROL: the scan has to be able to see one. Cesium's own bundled
+        # demo token is a real match that is deliberately allowed, so drop the
+        # allowance and the same scan must report it.
+        cesium = SITE / "app" / "static" / "vendor" / "cesium" / "Cesium.js"
+        found = cesium.exists() and any(
+            p.search(cesium.read_text(encoding="utf-8", errors="ignore"))
+            for p in SECRET)
+        chk(found,
+            "CONTROL: the same scan does find the token Cesium ships, so a "
+            "clean result above means it looked")
+
         print("\n=== the app, from the same static bundle ===")
         async with async_playwright() as p:
             br = await p.chromium.launch(args=[

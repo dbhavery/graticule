@@ -2611,3 +2611,23 @@ both produce confident wrong answers:
 
 Needs Don's S23 with wireless debugging on. Until then nothing should claim
 the globe draws on a phone, and nothing should claim it does not.
+
+## 87. `vercel link` puts a credential in the directory it is about to upload (FIXED)
+
+Found on the first real deploy, 2026-09-20. `vercel link` writes a
+`.env.local` into `site-dist` holding a freshly minted `VERCEL_OIDC_TOKEN`,
+and `vercel deploy` uploads that directory. Everything else in the bundle is
+public by design, which is exactly what makes this easy to miss: the one
+credential that can appear there is one the CLI put there itself, on its way
+to being published.
+
+Caught by sweeping the bundle before deploying rather than after. The same
+sweep found a JWT inside `vendor/cesium/Cesium.js`, which turned out to be
+Cesium's own bundled demo token, byte-identical to the copy in node_modules
+and not Don's.
+
+`scripts/build_site.py` now writes a `.vercelignore` covering `.env*`, because
+adding it by hand meant the next build would have dropped it silently while
+the token sat on disk. `scripts/site_test.py` asserts that file exists and
+scans every text file in the bundle for token-shaped strings, with a control
+that drops the Cesium allowance so a clean result proves the scan looked.
