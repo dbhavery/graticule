@@ -164,6 +164,14 @@ const NEEDS_PROXY = new Set([
 // request at all. Empty on native, where nothing needs it.
 const PROXY = '/api/proxy?url=';
 
+/* Sent on native requests only -- a browser sets its own and ignores this.
+ * The same token the relay sends (api/proxy.js), so a provider sees one name
+ * for this app however the request reached it. No address in it: this string
+ * goes to every provider from every install, and the identity it would carry
+ * is Don's, not the user's.
+ */
+const UA = 'graticule/1.0';
+
 const nativeHttp = (() => {
   const C = window.Capacitor;
   if (!C || !C.isNativePlatform || !C.isNativePlatform()) return null;
@@ -187,18 +195,34 @@ function hostOf(url) {
  */
 async function gfetch(url, { as = 'json', timeout = 30000 } = {}) {
   if (nativeHttp) {
-    // No CORS, no preflight, no origin. `responseType: 'text'` for everything
-    // keeps the parse here rather than trusting the bridge's content sniffing,
-    // which turns a JSON error page into an object and hides the failure.
+    // No CORS, no preflight, no origin.
+    //
+    // The UA is not optional. OkHttp's default is `Dalvik/2.1.0 (Linux; U;
+    // Android 16; ...)` and api.weather.gov answers that with a 403 Access
+    // Denied page. This never showed up in a browser because a browser sends
+    // its own UA and cannot be told otherwise, so the desktop suites were
+    // measuring a header this build does not send. Measured on the device
+    // 2026-09-20: no UA 403s, `graticule/1.0` 200s.
     const res = await nativeHttp.request({
       url, method: 'GET', readTimeout: timeout, connectTimeout: timeout,
-      responseType: 'text',
+      responseType: 'text', headers: { 'User-Agent': UA },
     });
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`${res.status} ${url}`);
     }
-    const body = typeof res.data === 'string' ? res.data : String(res.data ?? '');
-    return as === 'json' ? JSON.parse(body) : body;
+    // `responseType: 'text'` is a REQUEST, not a guarantee. The bridge sniffs
+    // the response content-type and hands back an already-parsed object or
+    // array whenever it says application/json, ignoring what was asked for.
+    // The previous `String(res.data)` therefore produced the literal
+    // "[object Object]" and every JSON feed died on JSON.parse. Content-type
+    // is also not a reliable signal in the other direction: NWS answers
+    // application/geo+json, which the bridge does not parse, so both
+    // directions have to be handled rather than one assumed.
+    const d = res.data;
+    if (as === 'json') {
+      return typeof d === 'string' ? JSON.parse(d) : d;
+    }
+    return typeof d === 'string' ? d : JSON.stringify(d ?? '');
   }
 
   const host = hostOf(url);
@@ -1063,12 +1087,34 @@ async function runFeed(feed) {
 }
 
 let started = false;
+let nativeMissing = false;
 let flushTimer = null;
 let expireTimer = null;
 
 function start() {
   if (started) return;
   started = true;
+
+  /* The one arrangement that fails silently.
+   *
+   * On a native build there is no relay: seven of the providers send no
+   * Access-Control-Allow-Origin, and the thing that makes them reachable is
+   * CapacitorHttp making the request outside the WebView. If that plugin is
+   * missing, gfetch falls back to a browser fetch, hits CORS, retries against
+   * a /api/proxy that the APK does not serve, and those seven layers are
+   * quietly empty with nothing to point at.
+   *
+   * So say it out loud. The plugin ships in the APK's dex today, and this is
+   * here for the build where somebody strips it.
+   */
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform
+                      && window.Capacitor.isNativePlatform());
+  if (isNative && !nativeHttp) {
+    nativeMissing = true;
+    console.error('[feeds] native build with no CapacitorHttp. The providers '
+                + 'that send no CORS header cannot be reached and their '
+                + 'layers will stay empty.');
+  }
 
   // The opening snapshot, so the app has the same shape it gets from a
   // server: empty layers, no counts, nothing deferred. Everything fills in
@@ -1603,6 +1649,9 @@ window.GraticuleFeeds = {
   }),
   proxied: () => [...NEEDS_PROXY],
   native: !!nativeHttp,
+  // True only in the broken arrangement above: a native build
+  // whose CapacitorHttp is gone, where seven layers cannot fill.
+  nativeMissing: () => nativeMissing,
 };
 
 window.__graticuleFeedsInternals = { store, gfetch, meanCentroid, num, int, str, FEEDS };

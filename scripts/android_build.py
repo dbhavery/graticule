@@ -82,10 +82,15 @@ def stage(api_base: str) -> None:
 
     size = sum(f.stat().st_size for f in DIST.rglob("*") if f.is_file())
     print(f"staged {DIST}  ({size / 1_048_576:.1f} MB uncompressed)")
-    print(f"  API base: {api_base or '(same origin -- wrong for a native build)'}")
-    if not api_base:
-        print("  WARNING: with no base the shell will ask https://localhost for /api "
-              "and get nothing.")
+    # An empty base used to be a mistake worth shouting about: the shell would
+    # ask https://localhost for /api and get nothing. It is now the correct
+    # and intended value. The feeds run in the page (web/feeds.js), so a
+    # native build has no backend to name, and naming one would only send the
+    # app looking for something that does not need to exist.
+    print(f"  API base: {api_base or '(none -- the feeds run on the device)'}")
+    if api_base:
+        print("  NOTE: a base is set, so ?api= can be used to exercise the old "
+              "server path. The shipped build does not need it.")
 
 
 def run(cmd: list[str], **kw) -> None:

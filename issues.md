@@ -2538,3 +2538,76 @@ Move the feed loops and the merge into the client. Then:
 
 Cost: about 1,000 lines of Python feed and merge logic become JavaScript, and
 per-provider rate limits start applying per phone rather than per server.
+
+---
+
+## 85. The native transport never ran under any gate, and it was broken (FIXED)
+
+The APK was attached to for the first time on 2026-09-20, through its own
+WebView debugging socket, after every desktop suite had gone green. Six of the
+seven always-on layers were empty on the device.
+
+Two defects, neither of which any existing gate could see, because every other
+suite runs the same code in desktop Chromium where the native branch of
+`gfetch` is dead code:
+
+**`responseType: 'text'` is a request, not a guarantee.** CapacitorHttp sniffs
+the response content-type and parses anything it reads as `application/json`
+into an object before the page ever sees it, whatever was asked for. The code
+then did `String(res.data)` and handed `JSON.parse` the literal string
+`"[object Object]"`. Every JSON feed died on it. Measured on the device: USGS
+quakes and NHC storms come back as objects, NWS alerts come back as a string
+because its content-type is `application/geo+json`, and a METAR text file
+comes back as a string. Both directions have to be handled; neither can be
+assumed. The fix parses only when handed a string and stringifies only when
+handed an object.
+
+**api.weather.gov 403s the default User-Agent.** OkHttp sends
+`Dalvik/2.1.0 (Linux; U; Android 16; ...)` and NWS answers it with an Access
+Denied page. A browser sends its own UA and will not let a page override it,
+so this could not have shown up in Chromium at any point. Alerts, the most
+important layer in a weather app, could not load. Measured: no UA 403s,
+`graticule/1.0` 200s. The same token the relay sends, with no address in it,
+because that string goes to every provider from every install and the identity
+it would carry is Don's rather than the user's.
+
+**The gate.** `scripts/device_webview_test.py` runs against a real device over
+adb: it forwards the WebView socket, waits for the feeds, and asserts the
+native branch was taken, the layers filled, and all ten ported endpoints
+answered. The UA check has a control that asserts the bare request still 403s,
+so a future build cannot drop the header quietly. It cannot run in CI, which
+has no emulator; it has to be run by hand before a release. 22 checks.
+
+This is the fifth time an outward-facing claim went false while every gate
+stayed green, and the second time the gates were green because they were
+measuring a substitute for the thing being claimed rather than the thing.
+
+## 86. The globe does not draw on the Android emulator (OPEN, instrument suspect)
+
+On `Medium_Phone_API_36.1` with `-gpu swiftshader_indirect`, the app's chrome
+draws correctly -- header, alert card with a live storm in it, radar timeline,
+reflectivity legend, attribution strip, 801 quakes in the ticker -- and the
+globe area is black. An earlier frame in the same session showed the globe's
+limb rasterizing as white horizontal scan lines, so geometry is reaching the
+rasterizer and it is the texturing that fails.
+
+**Not measured on real hardware, and the instrument is the prime suspect.**
+The renderer reports `Android Emulator OpenGL ES Translator (Google
+SwiftShader)`. The same commit draws a correct globe in desktop Chromium,
+where `scripts/offline_test.py` reads pixels back off the GPU and requires
+both lit and dark ones. The imagery is not the cause: the NaturalEarthII tiles
+were fetched from inside the WebView and decoded there, 256x256, real content,
+and all 43 files ship.
+
+Two instrument problems found while chasing it, worth writing down because
+both produce confident wrong answers:
+
+* `readPixels` on the Cesium canvas returns all zeros on this device while a
+  CDP screenshot of the same frame shows content. The drawing buffer is not
+  preserved, so the read lands after the swap.
+* A CDP page screenshot of this WebView returns an all-white frame for GL
+  content much of the time, while `adb exec-out screencap` shows what is
+  really on screen. Neither is reliable alone.
+
+Needs Don's S23 with wireless debugging on. Until then nothing should claim
+the globe draws on a phone, and nothing should claim it does not.
