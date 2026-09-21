@@ -1,0 +1,5 @@
+# Vendored third-party assets are compared byte for byte against node_modules by
+# scripts/static_checks.py. Git's end-of-line conversion rewrites them on a
+# Windows checkout, which made that check fail on a clean clone even though the
+# content was identical. Keep them exactly as published.
+web/vendor/** -text
