@@ -1,7 +1,7 @@
 # Graticule
 
 Personal situational-awareness globe and weather workstation. A physically
-real Earth — real-time sun, moon, day/night and city lights — carrying live
+real Earth, real-time sun, moon, day/night and city lights, carrying live
 radar, satellite, models, observations, warnings, plus planes, ships,
 satellites, quakes, fires and parcels. Local-first, single window, no cloud
 sync.
@@ -18,13 +18,13 @@ a true 15°/hour and matches real UTC:
   sun glow
 - **Real elevation.** The globe used to be a smooth ellipsoid with the Rockies
   painted on it. Terrain comes from Esri's world elevation service, which needs
-  no key — Cesium's own world terrain is an ion asset, and gating the biggest
+  no key. Cesium's own world terrain is an ion asset, and gating the biggest
   realism win in the app behind a signup was the wrong trade. It attaches after
   first paint, so the map is on screen while the mountains arrive underneath
   it, and `?terrain=off` drops back to the ellipsoid for a weak machine.
   Depth-testing against terrain is deliberately left off: a ridge occluding the
   warning pin in the valley behind it is realistic and useless.
-- **Stay centred on North America** — the camera holds the continent while the
+- **Stay centred on North America**: the camera holds the continent while the
   sunlight rotates around it. Returns home only after 90 s with no cursor movement,
   no click and no key, above 3 Mm and past 12° of drift. A moving cursor
   counts as a person: at 12 s, and with mousemove not counted, the camera
@@ -38,8 +38,8 @@ than a fixed altitude, so Cesium solves for the height that fits whatever
 viewport it is given and the composition survives the rail, presentation mode
 and any window size.
 
-While a field is drawn over it, the base map is graded down — brightness 0.58,
-saturation 0.34 — because ESRI imagery over CONUS is bright green and tan and
+While a field is drawn over it, the base map is graded down, brightness 0.58,
+saturation 0.34, because ESRI imagery over CONUS is bright green and tan and
 20 dBZ blue on it is close to unreadable. Switchable in Mapping. With nothing
 over it the base keeps the contrast-forward grade the realistic globe wants.
 
@@ -51,46 +51,46 @@ the division grid, the controls for whichever division is selected, and a
 pinned footer listing every layer currently drawing with the health of the
 feeds behind them. It collapses with `\`.
 
-**DATA** — nine divisions in a 3-across grid
+**DATA**: nine divisions in a 3-across grid
 
-- *Radar* — national mosaic as a scrubable, playable frame loop over past and
+- *Radar*: national mosaic as a scrubable, playable frame loop over past and
   nowcast frames, with both ends of the window labelled and a marker on the
   newest observed frame that reads NOW when a nowcast follows it and LATEST
   when RainViewer is not publishing one; local hi-res single-site NEXRAD
   (30 sites) with six products: super-res and legacy reflectivity, base and
   storm-relative velocity, long-range reflectivity, echo tops. No tilt
-  selector — the keyless tile service publishes the lowest elevation cut only
+  selector: the keyless tile service publishes the lowest elevation cut only
   and every higher tilt answers 503, so selecting 1.5° or 2.4° would need a
   server-side Level II decoder.
-- *Model* — GFS / HRRR / NAM / ECMWF / ICON fields for 2 m temperature,
+- *Model*: GFS / HRRR / NAM / ECMWF / ICON fields for 2 m temperature,
   precipitation, 10 m wind, CAPE, MSLP and the mesoanalysis set, sampled over
   the current view; a 48-hour forecast-hour scrubber that re-renders off a
   cached series rather than refetching, so dragging it costs nothing; single,
   compare-runs and compare-models
-- *Satellite* — GOES-East / GOES-West visible, infrared and water vapour, plus
+- *Satellite*: GOES-East / GOES-West visible, infrared and water vapour, plus
   a global true-colour composite
-- *Observations* — METAR station plots, US AQI, Local Storm Reports, live
+- *Observations*: METAR station plots, US AQI, Local Storm Reports, live
   public cameras, spotter reports
-- *Outlooks* — SPC convective outlooks (days 1-3), tropical, aurora
-- *Mapping* — base imagery, reference lines, parcels, subsea cables, and the
+- *Outlooks*: SPC convective outlooks (days 1-3), tropical, aurora
+- *Mapping*: base imagery, reference lines, parcels, subsea cables, and the
   area-darkening scope that limits the frame to a set of counties
-- *Earth* — quakes (USGS), volcanoes (GVP), wildfires (FIRMS), ships
+- *Earth*: quakes (USGS), volcanoes (GVP), wildfires (FIRMS), ships
   (AISStream worldwide, or keyless Digitraffic in the Baltic), river gauges,
   tide stations, marine buoys
-- *Sky* — planes (community ADS-B), airports, TFRs, airspace, satellites (Celestrak
+- *Sky*: planes (community ADS-B), airports, TFRs, airspace, satellites (Celestrak
   TLE propagated client-side), launches, and the celestial realism switches
-- *World* — live world-population telemetry: running total, today's
+- *World*: live world-population telemetry: running total, today's
   births/deaths/growth, per-continent and top-15 country ranks, next-milestone
   tracker. Projected from UN WPP 2024, and the pane says so.
 
-**NWS ALERTS** — everything in effect right now, coloured with the National
+**NWS ALERTS**: everything in effect right now, coloured with the National
 Weather Service's own published table (111 events, taken verbatim from
 weather.gov/help-map) and ranked by that table's order, which is the
 service's own display priority. Counted by product type at
 the top and listed as cards underneath, scopeable to the current view or to
 warnings only. Reads the feed, so it is current with the polygon layer off.
 
-**BROADCAST** — the graphics that stay up in presentation mode (data readout,
+**BROADCAST**: the graphics that stay up in presentation mode (data readout,
 warning banner, colour scale, station bug) and the scene deck.
 
 ## Dashboards
@@ -99,19 +99,19 @@ Full-frame boards, opened from their division, each re-reading its source on
 open and every 30 s. They read the feed rather than the scene, so a board is
 complete with every layer switched off.
 
-- **Severe weather** — what is in effect by type and by state, the impact
+- **Severe weather**: what is in effect by type and by state, the impact
   products with their hazard parameters and expiry, the SPC Day 1 outlook,
   and storm reports from the past 12 hours
-- **Tropical** — active NHC systems with intensity, pressure and category,
+- **Tropical**: active NHC systems with intensity, pressure and category,
   the Saffir-Simpson scale, marine and coastal products, tropical products in
   effect
-- **Water** — river gauges by flood category with the worst gauges named,
+- **Water**: river gauges by flood category with the worst gauges named,
   buoy sea state ranked by significant wave height, tide-station census
-- **Geophysical** — quake census by magnitude band, largest quakes with depth
+- **Geophysical**: quake census by magnitude band, largest quakes with depth
   and age, hottest fire detections, volcano and EONET counts
-- **Space weather** — planetary Kp against the NOAA G-scale, X-ray flux class,
+- **Space weather**: planetary Kp against the NOAA G-scale, X-ray flux class,
   orbital population, the launch window from T−1 h onward
-- **World population** — the full-frame board behind the World division. The
+- **World population**: the full-frame board behind the World division. The
   rail pane and the board read one dataset and one pair of vital rates, so the
   two never disagree: they were 24 million people apart before that. Rankings
   sort on the projected figure rather than the baked baseline, or a country
@@ -134,24 +134,24 @@ presets and a settings modal.
 git clone https://github.com/<you>/graticule.git
 cd graticule
 uv sync
-uv run python main.py      # no .env, no keys, no signups — see below
+uv run python main.py      # no .env, no keys, no signups - see below
 ```
 
 **Requirements**
 
 - Python 3.13 (3.14 doesn't load pythonnet on Windows; pinned in `.python-version`)
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- Windows / macOS / Linux — pywebview-driven; tested on Windows 11
+- Windows / macOS / Linux: pywebview-driven; tested on Windows 11
 
-The window opens within ~30s. Layers default to off — toggle the ones you
+The window opens within ~30s. Layers default to off. Toggle the ones you
 want from the left rail.
 
-## API keys — you don't need any
+## API keys: you don't need any
 
 Graticule runs on keyless public sources. A fresh clone with no `.env` gets a
 fully populated globe: no accounts, no tokens, no signup wall.
 
-Verify it yourself — this boots with every key forcibly blanked and refuses to
+Verify it yourself. This boots with every key forcibly blanked and refuses to
 start if one leaks back in from a `.env`:
 
 ```bash
@@ -167,7 +167,7 @@ What that covers, measured on 2026-08-05 with no keys present:
 | Wildfires | NASA FIRMS public archive | 174,628 detections |
 | Terrain | Esri world elevation (LERC) | real elevation; Everest sampled at 8,341 m |
 | Imagery | Esri World Imagery, OSM, OpenTopoMap, NASA GIBS | 4 basemaps |
-| Ships | Digitraffic | 1,377 vessels — **Baltic and Finnish waters only** |
+| Ships | Digitraffic | 1,377 vessels, **Baltic and Finnish waters only** |
 
 plus radar, NWS alerts, quakes, volcanoes, hurricanes, tsunamis, satellites,
 TFRs, airports, space weather, aurora, launches and submarine cables, none of
@@ -184,7 +184,7 @@ which ever needed a key.
 
 `OPENSKY_*` is no longer read at all. Its anonymous tier returned `429 Too many
 requests` on a plain state query, and its OAuth2 flow needed an account, so
-aircraft come from the community ADS-B networks instead — more aircraft, no
+aircraft come from the community ADS-B networks instead: more aircraft, no
 key, and registration plus airframe type that OpenSky never carried.
 
 ## Architecture
@@ -198,7 +198,7 @@ pywebview window
 ```
 
 - 16 async feed loops (ADS-B grid polling, AIS, USGS, NOAA, NASA, etc.)
-- Generic StateStore — `replace_layer(name, dict)` triggers `<name>:reset` over WS
+- Generic StateStore: `replace_layer(name, dict)` triggers `<name>:reset` over WS
 - Frontend renders entities via `CustomDataSource`, with per-layer LOD via
   Cesium clustering and per-entity DistanceDisplayCondition
 
@@ -231,7 +231,7 @@ public-API catalog.
 ## License & names
 
 This is a personal project. "Graticule" refers to the network of meridians
-and parallels drawn on a globe — apt for a situational-awareness Earth.
+and parallels drawn on a globe, apt for a situational-awareness Earth.
 
 Cesium World Imagery © Cesium / Microsoft. Parcel data © Regrid (US tiles)
 and Washington State DOR (vector). Other feeds credited per their public
