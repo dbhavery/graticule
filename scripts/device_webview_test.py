@@ -187,6 +187,75 @@ async def main() -> None:
         chk(bool(canvas and canvas["w"] > 100),
             f"and the viewer has a canvas ({canvas})")
 
+        print("\n=== the globe actually draws ===", flush=True)
+        # Read inside postRender, BEFORE the buffer is swapped. Reading after
+        # it returns all zeros on this WebView, which is what made the globe
+        # look black for a whole session when it was drawing correctly. The
+        # renderer is reported because it is the single most useful fact when
+        # this fails: an emulator on SwiftShader draws nothing here, and that
+        # is the emulator rather than the app.
+        SAMPLE = """async () => {
+          const sc = window.__graticule_viewer.scene, cv = sc.canvas;
+          const gl = cv.getContext('webgl2') || cv.getContext('webgl');
+          let renderer = '?';
+          try {
+            const d = gl.getExtension('WEBGL_debug_renderer_info');
+            renderer = d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL)
+                         : gl.getParameter(gl.RENDERER);
+          } catch (e) {}
+          const px = await new Promise((res) => {
+            const off = sc.postRender.addEventListener(() => {
+              const a = new Uint8Array(cv.width * cv.height * 4);
+              gl.readPixels(0, 0, cv.width, cv.height, gl.RGBA,
+                            gl.UNSIGNED_BYTE, a);
+              off(); res(a);
+            });
+            sc.requestRender();
+          });
+          let lit = 0, dark = 0, colour = 0;
+          for (let i = 0; i < px.length; i += 4 * 53) {
+            const r = px[i], g = px[i+1], b = px[i+2];
+            if ((r + g + b) / 3 > 28) lit++; else dark++;
+            if (Math.max(r, g, b) - Math.min(r, g, b) > 18) colour++;
+          }
+          return {renderer, lit, dark, colour, n: lit + dark};
+        }"""
+        # Imagery arrives over the network well after the viewer exists, so a
+        # single sample races the tiles: the first version of this check read
+        # a drawn-but-untextured globe and failed on colour while the app was
+        # fine. Wait for the tiles, bounded, then sample. If they never come
+        # the last sample is asserted on and the failure is a real one.
+        seen = {}
+        for _ in range(30):
+            seen = await pg.evaluate(SAMPLE)
+            loaded = await pg.evaluate(
+                "()=>window.__graticule_viewer.scene.globe.tilesLoaded")
+            if loaded and seen["colour"] > seen["n"] * 0.15:
+                break
+            await asyncio.sleep(2)
+        print(f"  renderer: {seen['renderer']}", flush=True)
+        # A lit globe against space: both must be present, or a white screen
+        # and a black one would each pass. Colour separates imagery from a
+        # flat grey sphere.
+        lit_enough = seen["lit"] > seen["n"] * 0.15
+        dark_enough = seen["dark"] > seen["n"] * 0.10
+        chk(lit_enough and dark_enough and seen["colour"] > seen["n"] * 0.15,
+            f"the globe is lit, has space around it, and carries imagery "
+            f"({seen['lit']} lit / {seen['dark']} dark / {seen['colour']} "
+            f"coloured of {seen['n']})")
+
+        # CONTROL: hide the globe and the same measurement has to collapse.
+        # Without this, a check that only ever runs against a drawn globe
+        # cannot tell anyone whether it is capable of noticing an empty one.
+        await pg.evaluate("()=>{window.__graticule_viewer.scene.globe.show=false;}")
+        await asyncio.sleep(2)
+        gone = await pg.evaluate(SAMPLE)
+        await pg.evaluate("()=>{window.__graticule_viewer.scene.globe.show=true;}")
+        await asyncio.sleep(2)
+        chk(gone["lit"] < seen["lit"] * 0.5,
+            f"CONTROL: with the globe hidden the same read collapses "
+            f"({gone['lit']} lit vs {seen['lit']})")
+
         print("\n=== the feeds, with nothing to talk to but the providers ===",
               flush=True)
         counts = await pg.evaluate("()=>window.GraticuleFeeds.counts()")

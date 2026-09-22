@@ -2582,7 +2582,7 @@ This is the fifth time an outward-facing claim went false while every gate
 stayed green, and the second time the gates were green because they were
 measuring a substitute for the thing being claimed rather than the thing.
 
-## 86. The globe does not draw on the Android emulator (OPEN, instrument suspect)
+## 86. The globe does not draw on the Android emulator (CLOSED: it was the emulator)
 
 On `Medium_Phone_API_36.1` with `-gpu swiftshader_indirect`, the app's chrome
 draws correctly -- header, alert card with a live storm in it, radar timeline,
@@ -2603,14 +2603,39 @@ Two instrument problems found while chasing it, worth writing down because
 both produce confident wrong answers:
 
 * `readPixels` on the Cesium canvas returns all zeros on this device while a
-  CDP screenshot of the same frame shows content. The drawing buffer is not
-  preserved, so the read lands after the swap.
+  CDP screenshot of the same frame shows content. **The first write-up of this
+  blamed the device. It was the read.** The drawing buffer is not preserved,
+  so a read after the frame lands after the swap; reading inside a
+  `scene.postRender` listener, before the swap, returns the real pixels on the
+  same device. That correction is what made the check below possible.
 * A CDP page screenshot of this WebView returns an all-white frame for GL
   content much of the time, while `adb exec-out screencap` shows what is
   really on screen. Neither is reliable alone.
 
-Needs Don's S23 with wireless debugging on. Until then nothing should claim
-the globe draws on a phone, and nothing should claim it does not.
+### Resolved 2026-09-21: it was the emulator's software renderer
+
+Relaunched the same AVD with `-gpu host` instead of `-gpu swiftshader_indirect`
+and the globe draws correctly on the first frame after tiles arrive: Esri
+satellite imagery, the day/night terminator, city lights across the US
+Midwest, state and provincial borders, and live radar reflectivity. Same APK,
+same commit, same emulator image. The renderer string is the whole difference:
+
+    swiftshader: Android Emulator OpenGL ES Translator (Google SwiftShader)  -> black
+    host:        Android Emulator OpenGL ES Translator (NVIDIA ...)          -> draws
+
+Nothing in the app was wrong, and nothing in the app was changed for it.
+
+`scripts/device_webview_test.py` now asserts the globe rather than trusting a
+screenshot: it reads the framebuffer inside `postRender` and requires lit
+pixels, dark pixels around them, and colour, so neither a black screen nor a
+white one nor an untextured grey sphere can pass. The control hides the globe
+and requires the same read to collapse, which it does (about 250 lit against
+3,300). It waits for `globe.tilesLoaded` first, because the first version of
+the check raced the imagery and failed on colour against a perfectly good app.
+
+**Still not measured on real phone hardware**, which is a different renderer
+again. What is now known is that the app draws on a real GPU through an
+Android WebView, and that the black globe was the software rasteriser.
 
 ## 87. `vercel link` puts a credential in the directory it is about to upload (FIXED)
 

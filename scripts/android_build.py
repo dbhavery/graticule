@@ -168,10 +168,17 @@ def main() -> None:
     # would silently drop the page to http://localhost to keep mixed-content
     # blocking off, and that is a development affordance -- shipping it would
     # put every user's radar and location requests on the open wire.
-    if args.release and not args.api_base.startswith("https://"):
+    #
+    # An EMPTY base is not that, and is now the shipping shape: the feeds run
+    # in the page, so there is no backend to be plain-http about. This guard
+    # used to demand an https base on every release, which would have refused
+    # the only build that should ever go to Play. It dates from when a backend
+    # was mandatory and was not revisited when that stopped being true.
+    if args.release and args.api_base and not args.api_base.startswith("https://"):
         raise SystemExit(
             f"refusing to build a release against {args.api_base!r}.\n"
-            "A shipped build requires an https backend. See capacitor.config.js.")
+            "Name an https backend, or leave --api-base empty, which is the\n"
+            "shipped shape: the feeds run on the device. See capacitor.config.js.")
 
     stage(args.api_base)
     if args.stage_only:
