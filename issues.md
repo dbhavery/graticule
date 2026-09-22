@@ -2656,3 +2656,32 @@ adding it by hand meant the next build would have dropped it silently while
 the token sat on disk. `scripts/site_test.py` asserts that file exists and
 scans every text file in the bundle for token-shaped strings, with a control
 that drops the Cesium allowance so a clean result proves the scan looked.
+
+## 88. Country labels collide at continental zoom (OPEN)
+
+Seen while shooting store screenshots on a device, 2026-09-21, looking at
+Europe from about 11,000 km:
+
+    BELGGERMANY      (Belgium and Germany drawn on top of each other)
+    PORTUGALSPAIN    (Portugal and Spain, same)
+
+Cesium places a label per feature and does nothing about overlap, so any two
+small neighbouring countries collide at the zoom where both are still labelled.
+It is worst across western Europe, where the countries are small and close.
+
+Found because a screenshot of it was about to go into a store listing. It was
+dropped from the set. Nothing measures label overlap, and nothing would have.
+
+## 89. A teal disc sits over the Arctic at continental zoom (OPEN)
+
+In the same frame there is a flat teal ellipse north of Canada, roughly where
+the polar backstop cap begins. `initPolarBackstop` clips two NaturalEarthII
+caps to the rectangles above and below Mercator's maximum latitude (issue 81's
+neighbourhood), and at this camera height the cap edge reads as a pasted-on
+disc rather than as ice.
+
+The backstop exists because the alternative is worse: an uncovered cap makes
+Cesium upsample the texels at the Mercator edge into a pinwheel of smeared
+colour radiating from the pole. So this is the lesser of two visible defects,
+not a regression. Recorded because it is visible in ordinary use at a zoom
+people will actually sit at, and because it made a screenshot unusable.
