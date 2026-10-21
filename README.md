@@ -1,238 +1,164 @@
 # Graticule
 
-Personal situational-awareness globe and weather workstation. A physically
-real Earth, real-time sun, moon, day/night and city lights, carrying live
-radar, satellite, models, observations, warnings, plus planes, ships,
-satellites, quakes, fires and parcels. Local-first, single window, no cloud
-sync.
+Live weather, warnings, earthquakes, fires, aircraft, ships and satellites on
+one 3D globe, built on keyless public feeds that run on the device. It runs
+on Android, in a browser and as a desktop window.
 
-## The Earth
+## The problem
 
-The globe runs on the system clock, so the solar terminator sweeps westward at
-a true 15°/hour and matches real UTC:
+Following the weather and other live events means keeping many sites open,
+with radar in one tab, warnings in another and flight or ship trackers in
+others. Most viewers that combine them need an account or an API key before
+they show anything, and some need a paid server.
 
-- Real-time sun lighting with a wide dusk falloff and dynamic ground/sky
-  atmospheric scattering
-- VIIRS city lights composited onto the night hemisphere only
-- Moon at its true ephemeris position and phase; stars; HDR tone mapping;
-  sun glow
-- **Real elevation.** The globe used to be a smooth ellipsoid with the Rockies
-  painted on it. Terrain comes from Esri's world elevation service, which needs
-  no key. Cesium's own world terrain is an ion asset, and gating the biggest
-  realism win in the app behind a signup was the wrong trade. It attaches after
-  first paint, so the map is on screen while the mountains arrive underneath
-  it, and `?terrain=off` drops back to the ellipsoid for a weak machine.
-  Depth-testing against terrain is deliberately left off: a ridge occluding the
-  warning pin in the valley behind it is realistic and useless.
-- **Stay centred on North America**: the camera holds the continent while the
-  sunlight rotates around it. Returns home only after 90 s with no cursor movement,
-  no click and no key, above 3 Mm and past 12° of drift. A moving cursor
-  counts as a person: at 12 s, and with mousemove not counted, the camera
-  flew home while you were reading, which made the globe feel locked.
+## How it solves it
 
-## The opening frame
+Graticule draws every layer on a single 3D globe. Each feed is fetched by the
+app itself, on a timer, from a public source that needs no key, so there is no
+backend to host and no account to create. Small feeds such as quakes and NWS
+alerts run from the start. Large layers, such
+as wildfires and airports, are fetched only while their layer is switched on.
 
-It opens on North America with the national radar mosaic running, boundaries
-drawn and the colour scale up. The frame is a `Rectangle` destination rather
-than a fixed altitude, so Cesium solves for the height that fits whatever
-viewport it is given and the composition survives the rail, presentation mode
-and any window size.
+Some providers do not allow a browser to call them directly. The Android app
+makes those requests in native code, where that rule does not apply. The web
+build sends them through one stateless relay that accepts only https requests
+to a fixed list of hostnames and refuses everything else.
 
-While a field is drawn over it, the base map is graded down, brightness 0.58,
-saturation 0.34, because ESRI imagery over CONUS is bright green and tan and
-20 dBZ blue on it is close to unreadable. Switchable in Mapping. With nothing
-over it the base keeps the contrast-forward grade the realistic globe wants.
+## Who it helps
 
-## The rail
+Weather hobbyists and storm spotters who want radar and warnings in one
+place, people who follow aircraft, ships or satellites, and developers looking
+for an example of a live-data app with no keys and no server to run.
 
-A docked, full-height panel on the left that the map starts to the right of.
-Top to bottom: the division you are driving, three mode tabs, tool icons, then
-the division grid, the controls for whichever division is selected, and a
-pinned footer listing every layer currently drawing with the health of the
-feeds behind them. It collapses with `\`.
+## Technical details
 
-**DATA**: nine divisions in a 3-across grid
+### What it shows
 
-- *Radar*: national mosaic as a scrubable, playable frame loop over past and
-  nowcast frames, with both ends of the window labelled and a marker on the
-  newest observed frame that reads NOW when a nowcast follows it and LATEST
-  when RainViewer is not publishing one; local hi-res single-site NEXRAD
-  (30 sites) with six products: super-res and legacy reflectivity, base and
-  storm-relative velocity, long-range reflectivity, echo tops. No tilt
-  selector: the keyless tile service publishes the lowest elevation cut only
-  and every higher tilt answers 503, so selecting 1.5° or 2.4° would need a
-  server-side Level II decoder.
-- *Model*: GFS / HRRR / NAM / ECMWF / ICON fields for 2 m temperature,
-  precipitation, 10 m wind, CAPE, MSLP and the mesoanalysis set, sampled over
-  the current view; a 48-hour forecast-hour scrubber that re-renders off a
-  cached series rather than refetching, so dragging it costs nothing; single,
-  compare-runs and compare-models
-- *Satellite*: GOES-East / GOES-West visible, infrared and water vapour, plus
-  a global true-colour composite
-- *Observations*: METAR station plots, US AQI, Local Storm Reports, live
-  public cameras, spotter reports
-- *Outlooks*: SPC convective outlooks (days 1-3), tropical, aurora
-- *Mapping*: base imagery, reference lines, parcels, subsea cables, and the
-  area-darkening scope that limits the frame to a set of counties
-- *Earth*: quakes (USGS), volcanoes (GVP), wildfires (FIRMS), ships
-  (AISStream worldwide, or keyless Digitraffic in the Baltic), river gauges,
-  tide stations, marine buoys
-- *Sky*: planes (community ADS-B), airports, TFRs, airspace, satellites (Celestrak
-  TLE propagated client-side), launches, and the celestial realism switches
-- *World*: live world-population telemetry: running total, today's
-  births/deaths/growth, per-continent and top-15 country ranks, next-milestone
-  tracker. Projected from UN WPP 2024, and the pane says so.
+- **Earth:** real-time sun lighting, day and night, city lights on the night
+  side, moon position and phase, and terrain elevation from Esri's keyless
+  elevation service (`?terrain=off` turns it off on a slow machine).
+- **Radar:** the national mosaic as a playable frame loop, plus single-site
+  NEXRAD products.
+- **Models:** GFS, HRRR, NAM, ECMWF and ICON fields with a forecast-hour
+  scrubber.
+- **Satellite:** GOES-East and GOES-West visible, infrared and water vapor.
+- **Observations and outlooks:** METAR stations, air quality, storm reports,
+  public cameras, SPC outlooks, tropical systems and aurora.
+- **Earth and sea:** USGS quakes, volcanoes, NASA FIRMS wildfires, river
+  gauges, tide stations, buoys and ships.
+- **Sky:** aircraft from community ADS-B networks, airports, TFRs, airspace,
+  satellites propagated in the app from Celestrak TLEs, and launches.
+- **NWS alerts:** everything in effect, colored and ranked with the table the
+  National Weather Service publishes.
+- **Dashboards:** full-screen boards for severe weather, tropical, water,
+  geophysical events, space weather and world population.
 
-**NWS ALERTS**: everything in effect right now, coloured with the National
-Weather Service's own published table (111 events, taken verbatim from
-weather.gov/help-map) and ranked by that table's order, which is the
-service's own display priority. Counted by product type at
-the top and listed as cards underneath, scopeable to the current view or to
-warnings only. Reads the feed, so it is current with the polygon layer off.
+Ships without a key cover Baltic and Finnish waters only (Digitraffic). There
+is no keyless live AIS feed with worldwide coverage.
 
-**BROADCAST**: the graphics that stay up in presentation mode (data readout,
-warning banner, colour scale, station bug) and the scene deck.
+### Architecture
 
-## Dashboards
+```
+web/index.html + web/app.js      CesiumJS 1.121 globe, satellite.js, UI
+web/feeds.js                     every feed, run in the page on a timer
+        |
+        |-- Android (Capacitor):  native HTTP, no relay needed
+        |-- Web (Vercel):         api/proxy.js for providers that block browsers
+        '-- Desktop (pywebview):  graticule/server.py serves web/ locally and
+                                  carries the same proxy route
+```
 
-Full-frame boards, opened from their division, each re-reading its source on
-open and every 30 s. They read the feed rather than the scene, so a board is
-complete with every layer switched off.
+`web/feeds.js` produces the same messages the old server sent, so the
+renderers in `web/app.js` do not need to know where the data came from.
 
-- **Severe weather**: what is in effect by type and by state, the impact
-  products with their hazard parameters and expiry, the SPC Day 1 outlook,
-  and storm reports from the past 12 hours
-- **Tropical**: active NHC systems with intensity, pressure and category,
-  the Saffir-Simpson scale, marine and coastal products, tropical products in
-  effect
-- **Water**: river gauges by flood category with the worst gauges named,
-  buoy sea state ranked by significant wave height, tide-station census
-- **Geophysical**: quake census by magnitude band, largest quakes with depth
-  and age, hottest fire detections, volcano and EONET counts
-- **Space weather**: planetary Kp against the NOAA G-scale, X-ray flux class,
-  orbital population, the launch window from T−1 h onward
-- **World population**: the full-frame board behind the World division. The
-  rail pane and the board read one dataset and one pair of vital rates, so the
-  two never disagree: they were 24 million people apart before that. Rankings
-  sort on the projected figure rather than the baked baseline, or a country
-  that has since overtaken its neighbour prints out of order
+`api/proxy.js` is the only server-side code the web build needs. It keeps no
+state between calls and accepts only https URLs whose hostname is on its
+allowlist. `graticule/server.py` carries the same list for the desktop build,
+and `scripts/static_checks.py` fails if the two lists differ.
 
-Every opener sits at the **top** of its division rather than the bottom of a
-scroll, and the rail draws its own top and bottom scroll edges with a `▾ MORE`
-marker. Browser overlay scrollbars do not paint until you are already
-scrolling, which is no help when the question is whether there is anything
-below the fold.
+`graticule/server.py` still contains the older feed loops, which push a merged
+snapshot over a WebSocket. The page uses them only when opened with
+`?data=server`; the default, `?data=device`, runs the feeds in the page.
 
-Plus a telemetry bar (UTC, cursor, altitude, subsolar point, moon phase, Kp,
-X-ray, tracked total), a bottom transport, a standing colour scale on the
-right edge of the map, an alerts panel, live-feed ticker, compass, camera
-presets and a settings modal.
+`deploy/_retired/` holds the Dockerfile, `fly.toml` and the deployment notes
+for an always-on backend. They are not used, and no build or deploy step reads
+them. `scripts/static_checks.py` still compares the Dockerfile's dependency
+list with `pyproject.toml` so the file stays accurate if it is ever revived.
 
-## Quick start
+### Run the desktop app
+
+Requires Python 3.13 (pinned in `.python-version`) and
+[uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/<you>/graticule.git
+git clone https://github.com/dbhavery/graticule.git
 cd graticule
 uv sync
-uv run python main.py      # no .env, no keys, no signups - see below
+uv run python main.py
 ```
 
-**Requirements**
+`main.py` starts the local server on `127.0.0.1:8731` and opens a pywebview
+window on it. No `.env` and no keys are needed. Layers start switched off;
+turn them on from the left panel.
 
-- Python 3.13 (3.14 doesn't load pythonnet on Windows; pinned in `.python-version`)
-- [uv](https://docs.astral.sh/uv/) for dependency management
-- Windows / macOS / Linux: pywebview-driven; tested on Windows 11
-
-The window opens within ~30s. Layers default to off. Toggle the ones you
-want from the left rail.
-
-## API keys: you don't need any
-
-Graticule runs on keyless public sources. A fresh clone with no `.env` gets a
-fully populated globe: no accounts, no tokens, no signup wall.
-
-Verify it yourself. This boots with every key forcibly blanked and refuses to
-start if one leaks back in from a `.env`:
+### Build the web version
 
 ```bash
-uv run python scripts/run_keyless.py 8743   # server with zero keys
-uv run python scripts/keyless_test.py 8743  # 21 checks against it
+py -V:3.13 scripts/build_site.py
+cd site-dist
+vercel deploy --prod --yes
 ```
 
-What that covers, measured on 2026-08-05 with no keys present:
+`build_site.py` copies `web/` into `site-dist/app`, adds the privacy and
+support pages, and places `api/proxy.js` at `/api/proxy`.
 
-| Layer | Keyless source | Measured |
-|---|---|---|
-| Aircraft | adsb.fi → airplanes.live → adsb.lol | 4,106 tracked, with registration + airframe type |
-| Wildfires | NASA FIRMS public archive | 174,628 detections |
-| Terrain | Esri world elevation (LERC) | real elevation; Everest sampled at 8,341 m |
-| Imagery | Esri World Imagery, OSM, OpenTopoMap, NASA GIBS | 4 basemaps |
-| Ships | Digitraffic | 1,377 vessels, **Baltic and Finnish waters only** |
+### Build the Android app
 
-plus radar, NWS alerts, quakes, volcanoes, hurricanes, tsunamis, satellites,
-TFRs, airports, space weather, aurora, launches and submarine cables, none of
-which ever needed a key.
+Requires Node.js and the Android SDK.
 
-### The two things a key still buys
-
-| Key | What it adds | Why there is no keyless option |
-|---|---|---|
-| `AISSTREAM_KEY` | Worldwide ships instead of the Baltic | No free live AIS has global coverage. MarineTraffic, VesselFinder, AISHub and BarentsWatch all gate the stream; the US publishes no live public feed at all. |
-| `CESIUM_ION_TOKEN` | OSM Buildings 3D | OSM Buildings closed its anonymous tile service in April 2024 (`403 requires a registration`). |
-| `GOOGLE_MAPS_API_KEY` | Photorealistic 3D Tiles | Google's mesh has no free equivalent. |
-| `FIRMS_MAP_KEY` | Fire detections a little sooner | Latency only. Coverage is the same: 174,637 keyless rows against 179,107 keyed. |
-
-`OPENSKY_*` is no longer read at all. Its anonymous tier returned `429 Too many
-requests` on a plain state query, and its OAuth2 flow needed an account, so
-aircraft come from the community ADS-B networks instead: more aircraft, no
-key, and registration plus airframe type that OpenSky never carried.
-
-## Architecture
-
-```
-pywebview window
-  └── CesiumJS 1.121 + satellite-js
-       ↓ HTTP + WebSocket /ws
-  FastAPI backend (127.0.0.1:8731)
-       └── async feed loops → in-memory StateStore → WS fan-out
+```bash
+npm install
+npm run android                                   # debug APK
+py -V:3.13 scripts/android_build.py --release --aab   # Play bundle
 ```
 
-- 16 async feed loops (ADS-B grid polling, AIS, USGS, NOAA, NASA, etc.)
-- Generic StateStore: `replace_layer(name, dict)` triggers `<name>:reset` over WS
-- Frontend renders entities via `CustomDataSource`, with per-layer LOD via
-  Cesium clustering and per-entity DistanceDisplayCondition
+`android_build.py` stages `web/` into `dist/`, runs `cap sync android` and
+then Gradle. With no `--api-base`, the app runs its feeds on the device.
 
-See `PLAN.md` and `RESEARCH.md` for the original phased plan and the 60+
-public-API catalog.
+### Optional keys
 
-## Controls
+`.env.example` lists optional keys (worldwide ships through AISStream, Cesium
+ion buildings, Google 3D tiles, faster FIRMS fires). They are read only by the
+Python server, so they apply only in `?data=server` mode. The default device
+mode does not use them, so a key is never placed in the page.
 
-- **`Ctrl` + `K`** → command palette over everything reachable by name: tabs,
-  divisions, dashboards, every layer, radar products, radar sites, base maps,
-  saved views and the actions. Subsequence matching, so `srv` reaches Storm
-  Relative Velocity. The index is rebuilt from the live DOM on each open, so it
-  cannot offer a control that is not there.
-- **Hover** dot for ~500 ms → tooltip (delay configurable in Settings)
-- **Click** → right-side detail panel
-- **Right-click** anywhere → "Center camera here" / "Save as preset"
-- **Header pills** (top-right) → toggle ALERTS panel and LIVE FEED
-- **Gear icon** → Settings (units, hover delay, sound, camera presets)
-- **Mouse wheel** → zoom; below 50 km the plane dot swaps to a 3D model
+### Checks
 
-## Performance notes
+CI (`.github/workflows/ci.yml`) installs the package, imports it, compiles
+every module under `graticule/` and `scripts/`, and runs
+`scripts/static_checks.py`. That script checks things a file read can settle:
+the relay allowlist matches between `api/proxy.js` and `graticule/server.py`,
+the privacy policy, Android permissions, attribution credits and vendored
+library versions. Several checks include a control that proves the check can
+fail.
 
-- All crowded layers (planes / ships / fires / airports / satellites / quakes)
-  are clustered via Cesium's `EntityCluster` so the world view stays readable.
-- Importance-gated visibility per layer (M5+ quakes always show; M2 only at
-  city zoom; large airports always; small airports only when close, etc.)
-- Stationary background fades out under 10 km altitude so parcels and
-  buildings own the close view.
+```bash
+pip install .
+python -m compileall -q graticule scripts
+python scripts/static_checks.py
+```
 
-## License & names
+The other `scripts/*_test.py` suites need a running app, a browser and network
+access, so CI does not run them.
 
-This is a personal project. "Graticule" refers to the network of meridians
-and parallels drawn on a globe, apt for a situational-awareness Earth.
+### Controls
 
-Cesium World Imagery © Cesium / Microsoft. Parcel data © Regrid (US tiles)
-and Washington State DOR (vector). Other feeds credited per their public
-APIs (adsb.fi, USGS, NASA, NOAA, NHC, FAA, Esri, Smithsonian GVP, etc.).
+`Ctrl` + `K` opens a command palette that reaches tabs, layers, radar
+products, base maps and saved views by name. Hovering a point shows a tooltip
+and clicking it opens the detail panel. Right-clicking centers the camera or
+saves a camera preset, and `\` collapses the left panel.
+
+## License
+
+MIT. See `LICENSE`. Map and data credits are shown in the app for each source
+(Esri, NASA, NOAA, USGS, adsb.fi, Smithsonian GVP and others).
