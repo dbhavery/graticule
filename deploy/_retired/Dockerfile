@@ -1,3 +1,6 @@
+# RETIRED, not used. The feeds now run in the app (web/feeds.js), so there is
+# no always-on backend to host. Kept for reference; see the README.
+#
 # The backend, for a host that runs one always-on process.
 #
 # NOT serverless, and the reason is structural rather than a preference. The

@@ -1,3 +1,6 @@
+# RETIRED, not used. The feeds now run in the app (web/feeds.js), so there is
+# no always-on backend to host. Kept for reference; see the README.
+#
 # One machine, always on. See the Dockerfile for why that is structural.
 app = "graticule"
 primary_region = "sea"          # Seattle: nearest to the author, and the NWS,

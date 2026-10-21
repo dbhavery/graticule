@@ -261,6 +261,10 @@ def main() -> None:
 
     # ---- the image installs what the package declares -------------------
     #
+    # RETIRED: the Dockerfile and fly.toml now live in deploy/_retired/. Feeds
+    # run in the app (web/feeds.js) and nothing deploys the container, but the
+    # file is kept, so these checks still hold it to the package it would ship.
+    #
     # The Dockerfile lists its dependencies explicitly instead of running
     # `pip install .`, so that pywebview -- a DESKTOP dependency needing a GUI
     # toolkit -- never enters the image. Its own comment says "keep this list
@@ -270,7 +274,7 @@ def main() -> None:
     # to catch it first.
     print("\n== the container installs exactly what the package needs, minus the desktop ==")
 
-    docker = read(ROOT / "Dockerfile")
+    docker = read(ROOT / "deploy" / "_retired" / "Dockerfile")
     pyproj = read(ROOT / "pyproject.toml")
 
     block = re.search(r"^dependencies = \[(.*?)^\]", pyproj, re.S | re.M)
